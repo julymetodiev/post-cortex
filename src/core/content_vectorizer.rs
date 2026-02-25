@@ -34,7 +34,7 @@ use uuid::Uuid;
 use crate::core::context_update::ContextUpdate;
 use crate::core::embeddings::{EmbeddingConfig, LocalEmbeddingEngine};
 use crate::core::query_cache::{QueryCache, QueryCacheConfig};
-use crate::core::vector_db::{FastVectorDB, VectorDbConfig, VectorMetadata};
+use crate::core::vector_db::{VectorDB, VectorDbConfig, VectorMetadata};
 use crate::session::active_session::ActiveSession;
 
 /// Content types for vectorization
@@ -209,7 +209,7 @@ pub struct SearchOptions {
 /// Main content vectorization pipeline
 pub struct ContentVectorizer {
     embedding_engine: Arc<LocalEmbeddingEngine>,
-    vector_db: Arc<FastVectorDB>,
+    vector_db: Arc<VectorDB>,
     config: ContentVectorizerConfig,
     query_cache: Option<Arc<QueryCache>>,
     /// Optional persistent storage for embeddings (RocksDB/SurrealDB)
@@ -252,7 +252,7 @@ impl ContentVectorizer {
             .await
             .context("Failed to initialize embedding engine")?;
 
-        let vector_db = FastVectorDB::new(config.vector_db_config.clone())
+        let vector_db = VectorDB::new(config.vector_db_config.clone())
             .context("Failed to initialize vector database")?;
 
         let query_cache = if config.enable_query_caching {
@@ -767,7 +767,7 @@ impl ContentVectorizer {
         let query_embedding = if let Some(ref cache) = self.query_cache {
             let query_embedding = self.embedding_engine.encode_text(query).await?;
 
-            if let Some(cached_results) = cache.search(query, &query_embedding, params_hash).await {
+            if let Some(cached_results) = cache.search(query, &query_embedding, params_hash) {
                 debug!("Cache hit for semantic search query: '{}'", query);
                 return Ok(cached_results);
             }
@@ -810,15 +810,13 @@ impl ContentVectorizer {
 
         // Cache the results
         if let Some(ref cache) = self.query_cache
-            && let Err(e) = cache
-                .cache_results(
-                    query.to_string(),
-                    query_embedding,
-                    results.clone(),
-                    params_hash,
-                    session_filter,
-                )
-                .await
+            && let Err(e) = cache.cache_results(
+                query.to_string(),
+                query_embedding,
+                results.clone(),
+                params_hash,
+                session_filter,
+            )
         {
             warn!("Failed to cache search results: {}", e);
         }
@@ -867,7 +865,7 @@ impl ContentVectorizer {
         let query_embedding = if let Some(ref cache) = self.query_cache {
             let query_embedding = self.embedding_engine.encode_text(query).await?;
 
-            if let Some(cached_results) = cache.search(query, &query_embedding, params_hash).await {
+            if let Some(cached_results) = cache.search(query, &query_embedding, params_hash) {
                 debug!("Cache hit for multisession semantic search query: '{}'", query);
                 return Ok(cached_results);
             }
@@ -901,15 +899,13 @@ impl ContentVectorizer {
 
         // Cache the results
         if let Some(ref cache) = self.query_cache
-            && let Err(e) = cache
-                .cache_results(
-                    query.to_string(),
-                    query_embedding,
-                    results.clone(),
-                    params_hash,
-                    None, // No session_filter for multisession
-                )
-                .await
+            && let Err(e) = cache.cache_results(
+                query.to_string(),
+                query_embedding,
+                results.clone(),
+                params_hash,
+                None, // No session_filter for multisession
+            )
         {
             warn!("Failed to cache search results: {}", e);
         }
@@ -1028,17 +1024,17 @@ impl ContentVectorizer {
     }
 
     /// Get query cache statistics
-    pub async fn get_query_cache_stats(&self) -> Option<crate::core::query_cache::QueryCacheStats> {
+    pub fn get_query_cache_stats(&self) -> Option<crate::core::query_cache::QueryCacheStatsSnapshot> {
         match &self.query_cache {
-            Some(cache) => Some(cache.get_stats().await),
+            Some(cache) => Some(cache.get_stats()),
             None => None,
         }
     }
 
     /// Get query cache efficiency metrics
-    pub async fn get_cache_efficiency_metrics(&self) -> Option<HashMap<String, f32>> {
+    pub fn get_cache_efficiency_metrics(&self) -> Option<HashMap<String, f32>> {
         match &self.query_cache {
-            Some(cache) => Some(cache.get_efficiency_metrics().await),
+            Some(cache) => Some(cache.get_efficiency_metrics()),
             None => None,
         }
     }
@@ -1094,7 +1090,7 @@ impl ContentVectorizer {
     /// Returns an error if the cache clearing operation fails
     pub async fn clear_query_cache(&self) -> Result<()> {
         if let Some(ref cache) = self.query_cache {
-            cache.clear().await?;
+            cache.clear()?;
             info!("Query cache cleared successfully");
         }
         Ok(())
@@ -1108,7 +1104,7 @@ impl ContentVectorizer {
     /// Returns an error if the cache invalidation operation fails
     pub async fn invalidate_session_cache(&self, session_id: Uuid) -> Result<()> {
         if let Some(ref cache) = self.query_cache {
-            cache.invalidate_session(session_id).await?;
+            cache.invalidate_session(session_id)?;
             debug!("Invalidated cache entries for session {}", session_id);
         }
         Ok(())

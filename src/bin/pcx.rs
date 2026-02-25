@@ -25,7 +25,7 @@ use post_cortex::storage::{
     preview_export_file, read_export_file, write_export_file,
 };
 use post_cortex::workspace::SessionRole;
-use post_cortex::{LockFreeConversationMemorySystem, SystemConfig};
+use post_cortex::{ConversationMemorySystem, SystemConfig};
 use serde::{Deserialize, Serialize};
 use std::env;
 use tracing::{error, info};
@@ -542,7 +542,7 @@ fn init_config() -> Result<(), String> {
     }
 }
 
-async fn init_admin_system() -> Result<LockFreeConversationMemorySystem, String> {
+async fn init_admin_system() -> Result<ConversationMemorySystem, String> {
     let daemon_config = DaemonConfig::load();
     #[allow(unused_mut)]
     let mut config = SystemConfig {
@@ -565,7 +565,7 @@ async fn init_admin_system() -> Result<LockFreeConversationMemorySystem, String>
         config.surrealdb_database = Some(daemon_config.surrealdb_database);
     }
 
-    LockFreeConversationMemorySystem::new(config).await
+    ConversationMemorySystem::new(config).await
 }
 
 // HTTP API types for CLI
@@ -987,7 +987,7 @@ async fn vectorize_all() -> Result<(), String> {
     #[cfg(not(feature = "surrealdb-storage"))]
     println!("Target: RocksDB at {}", config.data_directory);
 
-    let system = LockFreeConversationMemorySystem::new(config)
+    let system = ConversationMemorySystem::new(config)
         .await
         .map_err(|e| format!("Failed to initialize: {}", e))?;
 
@@ -1316,7 +1316,7 @@ async fn handle_import(
     #[cfg(feature = "surrealdb-storage")]
     let use_surrealdb = daemon_config.storage_backend == "surrealdb";
     #[cfg(not(feature = "surrealdb-storage"))]
-    let _use_surrealdb = false;
+    let use_surrealdb = false;
 
     #[cfg(feature = "surrealdb-storage")]
     if use_surrealdb {

@@ -1,12 +1,12 @@
 use anyhow::Result;
-use post_cortex::core::lockfree_embeddings::{EmbeddingConfig, LockFreeLocalEmbeddingEngine};
+use post_cortex::core::embeddings::{EmbeddingConfig, LocalEmbeddingEngine};
 
 #[tokio::test]
 async fn test_direct_query_encoding_consistency() -> Result<()> {
     // Test that encoding the EXACT same query twice gives >95% similarity
 
     let config = EmbeddingConfig::default();
-    let engine = LockFreeLocalEmbeddingEngine::new(config).await?;
+    let engine = LocalEmbeddingEngine::new(config).await?;
 
     // This is the EXACT query we're using in production
     let query = "How does the lock-free conversation memory system work in Post-Cortex?";

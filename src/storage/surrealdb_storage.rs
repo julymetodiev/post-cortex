@@ -30,7 +30,7 @@
 use crate::core::context_update::{
     ContextUpdate, EntityData, EntityRelationship, EntityType, RelationType,
 };
-use crate::core::lockfree_vector_db::{SearchMatch, VectorMetadata};
+use crate::core::vector_db::{SearchMatch, VectorMetadata};
 use crate::core::structured_context::StructuredContext;
 use crate::graph::entity_graph::{EntityNetwork, SimpleEntityGraph};
 use crate::session::active_session::{ActiveSession, ChangeRecord, CodeReference, UserPreferences};

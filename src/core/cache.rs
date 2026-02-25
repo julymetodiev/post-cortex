@@ -27,9 +27,9 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
 
-/// Completely lock-free LRU-like cache using `DashMap`
+/// LRU-like cache using `DashMap`
 /// Uses atomic counters for LRU approximation and metrics
-pub struct LockFreeCache<K, V> {
+pub struct Cache<K, V> {
     /// Main storage - completely lock-free
     data: DashMap<K, CacheEntry<V>>,
 
@@ -89,7 +89,7 @@ pub enum EvictionEvent<K> {
 
 /// Cache statistics snapshot
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LockFreeCacheStats {
+pub struct CacheStats {
     pub name: String,
     pub current_size: usize,
     pub capacity: usize,
@@ -146,12 +146,12 @@ impl<V> CacheEntry<V> {
     }
 }
 
-impl<K, V> LockFreeCache<K, V>
+impl<K, V> Cache<K, V>
 where
     K: Hash + Eq + Clone + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    /// Creates a new lock-free cache with the specified capacity and name
+    /// Creates a new cache with the specified capacity and name
     ///
     /// # Errors
     /// Returns an error if capacity is 0
@@ -208,7 +208,7 @@ where
             self.hit_rate.store(hit_rate, Ordering::Relaxed);
 
             debug!(
-                "{} LockFree Cache: HIT (access_count: {})",
+                "{} Cache: HIT (access_count: {})",
                 self.name, access_count
             );
             Some(value)
@@ -222,7 +222,7 @@ where
             let hit_rate = hits as f64 / total_requests as f64;
             self.hit_rate.store(hit_rate, Ordering::Relaxed);
 
-            debug!("{} LockFree Cache: MISS", self.name);
+            debug!("{} Cache: MISS", self.name);
             None
         };
 
@@ -313,7 +313,7 @@ where
                     .as_secs(),
             });
 
-            debug!("{} LockFree Cache: Evicted entry", self.name);
+            debug!("{} Cache: Evicted entry", self.name);
         }
     }
 
@@ -339,7 +339,7 @@ where
         self.current_size.store(0, Ordering::Relaxed);
 
         if old_size > 0 {
-            info!("{} LockFree Cache: Cleared {} entries", self.name, old_size);
+            info!("{} Cache: Cleared {} entries", self.name, old_size);
         }
     }
 
@@ -363,7 +363,7 @@ where
     ///
     /// # Panics
     /// Panics if the system time is before `UNIX_EPOCH` (should never happen in practice)
-    pub fn get_stats(&self) -> LockFreeCacheStats {
+    pub fn get_stats(&self) -> CacheStats {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -372,7 +372,7 @@ where
         let current_size = self.current_size.load(Ordering::Relaxed);
         let capacity = self.capacity.load(Ordering::Relaxed);
 
-        LockFreeCacheStats {
+        CacheStats {
             name: self.name.clone(),
             current_size,
             capacity,
@@ -406,7 +406,7 @@ where
         self.hit_rate.store(0.0, Ordering::Relaxed);
         self.avg_lookup_time_ns.store(0, Ordering::Relaxed);
 
-        info!("{} LockFree Cache: Metrics reset", self.name);
+        info!("{} Cache: Metrics reset", self.name);
     }
 
     /// Resize cache capacity - atomic
@@ -431,7 +431,7 @@ where
         }
 
         info!(
-            "{} LockFree Cache: Resized from {} to {} capacity",
+            "{} Cache: Resized from {} to {} capacity",
             self.name, old_capacity, new_capacity
         );
 
@@ -548,11 +548,11 @@ where
 // Use cache.keys() and cache.values() for manual copying if needed
 
 /// Type alias for session cache
-pub type LockFreeSessionCache<K, V> = LockFreeCache<K, V>;
+pub type SessionCache<K, V> = Cache<K, V>;
 
 /// Multi-cache manager using lock-free caches
-pub struct LockFreeCacheManager {
-    caches: DashMap<String, Arc<dyn LockFreeCacheProvider + Send + Sync>>,
+pub struct CacheManager {
+    caches: DashMap<String, Arc<dyn CacheProvider + Send + Sync>>,
     total_requests: AtomicU64,
     total_hits: AtomicU64,
     total_misses: AtomicU64,
@@ -560,19 +560,19 @@ pub struct LockFreeCacheManager {
 }
 
 /// Trait for generic cache operations
-pub trait LockFreeCacheProvider {
-    fn get_stats(&self) -> LockFreeCacheStats;
+pub trait CacheProvider {
+    fn get_stats(&self) -> CacheStats;
     fn reset_metrics(&self);
     fn has_performance_issues(&self) -> bool;
     fn get_recommendations(&self) -> Vec<String>;
 }
 
-impl<K, V> LockFreeCacheProvider for LockFreeCache<K, V>
+impl<K, V> CacheProvider for Cache<K, V>
 where
     K: Hash + Eq + Clone + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    fn get_stats(&self) -> LockFreeCacheStats {
+    fn get_stats(&self) -> CacheStats {
         self.get_stats()
     }
 
@@ -595,7 +595,7 @@ where
     }
 }
 
-impl LockFreeCacheManager {
+impl CacheManager {
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -607,16 +607,16 @@ impl LockFreeCacheManager {
         }
     }
 
-    pub fn register_cache<K, V>(&self, name: &str, cache: LockFreeCache<K, V>)
+    pub fn register_cache<K, V>(&self, name: &str, cache: Cache<K, V>)
     where
         K: Hash + Eq + Clone + Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
     {
         self.caches.insert(name.to_string(), Arc::new(cache));
-        info!("Registered lock-free cache: {}", name);
+        info!("Registered cache: {}", name);
     }
 
-    pub fn get_all_stats(&self) -> Vec<LockFreeCacheStats> {
+    pub fn get_all_stats(&self) -> Vec<CacheStats> {
         self.caches
             .iter()
             .map(|entry| entry.value().get_stats())
@@ -639,11 +639,11 @@ impl LockFreeCacheManager {
         self.total_misses.store(0, Ordering::Relaxed);
         self.total_evictions.store(0, Ordering::Relaxed);
 
-        info!("Reset all lock-free cache metrics");
+        info!("Reset all cache metrics");
     }
 
     pub fn get_summary(&self) -> CacheManagerSummary {
-        let stats: Vec<LockFreeCacheStats> = self.get_all_stats();
+        let stats: Vec<CacheStats> = self.get_all_stats();
         let cache_count = stats.len();
 
         let total_requests: u64 = stats.iter().map(|s| s.total_requests).sum();
@@ -683,7 +683,7 @@ impl LockFreeCacheManager {
     }
 }
 
-impl Default for LockFreeCacheManager {
+impl Default for CacheManager {
     fn default() -> Self {
         Self::new()
     }
@@ -697,25 +697,25 @@ pub struct CacheManagerSummary {
     pub total_evictions: u64,
     pub average_hit_rate: f64,
     pub problematic_caches: Vec<String>,
-    pub individual_stats: Vec<LockFreeCacheStats>,
+    pub individual_stats: Vec<CacheStats>,
 }
 
-// Global lock-free cache manager
-static GLOBAL_LOCKFREE_CACHE_MANAGER: std::sync::OnceLock<LockFreeCacheManager> =
+// Global cache manager
+static GLOBAL_CACHE_MANAGER: std::sync::OnceLock<CacheManager> =
     std::sync::OnceLock::new();
 
-pub fn init_global_lockfree_cache_manager() {
-    let _ = GLOBAL_LOCKFREE_CACHE_MANAGER.set(LockFreeCacheManager::new());
+pub fn init_global_cache_manager() {
+    let _ = GLOBAL_CACHE_MANAGER.set(CacheManager::new());
 }
 
-pub fn get_global_lockfree_cache_manager() -> &'static LockFreeCacheManager {
-    GLOBAL_LOCKFREE_CACHE_MANAGER.get_or_init(LockFreeCacheManager::new)
+pub fn get_global_cache_manager() -> &'static CacheManager {
+    GLOBAL_CACHE_MANAGER.get_or_init(CacheManager::new)
 }
 
-/// Convenience macro for creating lock-free cache
+/// Convenience macro for creating a cache
 #[macro_export]
-macro_rules! lockfree_cache {
+macro_rules! new_cache {
     ($capacity:expr, $name:expr) => {
-        $crate::core::lockfree_cache::LockFreeCache::new($capacity, $name.to_string())
+        $crate::core::cache::Cache::new($capacity, $name.to_string())
     };
 }

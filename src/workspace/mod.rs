@@ -129,7 +129,7 @@ impl Workspace {
 /// Lock-free workspace manager
 ///
 /// Manages all workspaces with zero blocking operations using DashMap.
-pub struct LockFreeWorkspaceManager {
+pub struct WorkspaceManager {
     /// Lock-free workspace cache
     workspaces: Arc<DashMap<Uuid, Arc<ArcSwap<Workspace>>>>,
 
@@ -140,7 +140,7 @@ pub struct LockFreeWorkspaceManager {
     total_workspaces: Arc<AtomicU64>,
 }
 
-impl LockFreeWorkspaceManager {
+impl WorkspaceManager {
     pub fn new() -> Self {
         Self {
             workspaces: Arc::new(DashMap::new()),
@@ -250,7 +250,7 @@ impl LockFreeWorkspaceManager {
     }
 }
 
-impl Default for LockFreeWorkspaceManager {
+impl Default for WorkspaceManager {
     fn default() -> Self {
         Self::new()
     }
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn test_workspace_creation() {
-        let manager = LockFreeWorkspaceManager::new();
+        let manager = WorkspaceManager::new();
 
         let ws_id = manager.create_workspace(
             "Test Workspace".to_string(),
@@ -277,7 +277,7 @@ mod tests {
 
     #[test]
     fn test_session_management() {
-        let manager = LockFreeWorkspaceManager::new();
+        let manager = WorkspaceManager::new();
         let ws_id = manager.create_workspace("Test".to_string(), "".to_string());
 
         let session1 = Uuid::new_v4();
@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn test_workspace_lookup_by_name() {
-        let manager = LockFreeWorkspaceManager::new();
+        let manager = WorkspaceManager::new();
         let ws_id = manager.create_workspace("MyWorkspace".to_string(), "".to_string());
 
         let workspace = manager.get_workspace_by_name("MyWorkspace").unwrap();
@@ -303,7 +303,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_workspace_operations() {
-        let manager = Arc::new(LockFreeWorkspaceManager::new());
+        let manager = Arc::new(WorkspaceManager::new());
 
         // Spawn 50 concurrent tasks creating workspaces
         let tasks: Vec<_> = (0..50)

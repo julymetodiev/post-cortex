@@ -95,7 +95,7 @@ const NER_CACHE_MAX_SIZE: usize = 1000;
 
 #[cfg(feature = "embeddings")]
 /// Lock-free NER engine using DistilBERT
-pub struct LockFreeNEREngine {
+pub struct NEREngine {
     /// DistilBERT model (loaded lazily)
     model: Option<Arc<DistilBertModel>>,
     /// Classification layer weights (loaded lazily)
@@ -115,7 +115,7 @@ pub struct LockFreeNEREngine {
 }
 
 #[cfg(feature = "embeddings")]
-impl LockFreeNEREngine {
+impl NEREngine {
     /// Create new NER engine (lazy loading)
     pub fn new() -> Self {
         Self {
@@ -487,7 +487,7 @@ impl LockFreeNEREngine {
 }
 
 #[cfg(feature = "embeddings")]
-impl Default for LockFreeNEREngine {
+impl Default for NEREngine {
     fn default() -> Self {
         Self::new()
     }
@@ -500,7 +500,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ner_engine_creation() {
-        let engine = LockFreeNEREngine::new();
+        let engine = NEREngine::new();
         assert!(!engine.is_loaded.load(Ordering::Relaxed));
         assert_eq!(engine.cache_size(), 0);
     }
@@ -508,7 +508,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // Requires downloading model from HuggingFace
     async fn test_ner_model_loading() {
-        let mut engine = LockFreeNEREngine::new();
+        let mut engine = NEREngine::new();
         let result = engine.load_model().await;
         assert!(result.is_ok());
         assert!(engine.is_loaded.load(Ordering::Relaxed));
@@ -517,7 +517,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // Requires model to be loaded
     async fn test_entity_extraction() {
-        let mut engine = LockFreeNEREngine::new();
+        let mut engine = NEREngine::new();
 
         println!("Loading DistilBERT-NER model...");
         engine.load_model().await.unwrap();

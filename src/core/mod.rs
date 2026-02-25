@@ -17,20 +17,15 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
+pub mod cache;
 pub mod content_vectorizer;
 pub mod context_update;
 pub mod embeddings;
 pub mod error;
-pub mod embeddings_compat;
-pub mod lockfree_cache;
-pub mod lockfree_embeddings;
-pub mod lockfree_memory_system;
-pub mod lockfree_performance;
-pub mod lockfree_query_cache;
-pub mod lockfree_vector_db;
+pub mod memory_system;
 pub mod ner_engine;
+pub mod performance;
 pub mod query_cache;
-pub mod query_cache_compat;
 pub mod scoring;
 pub mod semantic_query_engine;
 pub mod structured_context;

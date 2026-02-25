@@ -18,8 +18,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 use crate::core::context_update::{ContextUpdate, EntityData, EntityRelationship, RelationType};
-use crate::core::lockfree_vector_db::{
-    LockFreeVectorDB, LockFreeVectorDbConfig, SearchMatch, VectorMetadata,
+use crate::core::vector_db::{
+    VectorDB, VectorDbConfig, SearchMatch, VectorMetadata,
 };
 use crate::core::structured_context::StructuredContext;
 use crate::graph::entity_graph::EntityNetwork;
@@ -146,14 +146,14 @@ impl StoredRelationship {
 ///
 /// Uses a hybrid approach:
 /// - RocksDB for persistent storage on disk
-/// - In-memory LockFreeVectorDB with HNSW index for O(log n) vector search
+/// - In-memory VectorDB with HNSW index for O(log n) vector search
 #[derive(Clone)]
 pub struct RealRocksDBStorage {
     db: Arc<DB>,
     #[allow(dead_code)]
     data_dir: PathBuf,
     /// In-memory HNSW index for fast vector search
-    vector_index: Arc<LockFreeVectorDB>,
+    vector_index: Arc<VectorDB>,
 }
 
 impl RealRocksDBStorage {
@@ -205,14 +205,14 @@ impl RealRocksDBStorage {
         );
 
         // Create in-memory HNSW index for fast vector search
-        let vector_config = LockFreeVectorDbConfig {
+        let vector_config = VectorDbConfig {
             dimension: EMBEDDING_DIMENSION,
             enable_hnsw_index: true,
             max_connections: 16,
             num_layers: 4,
             ..Default::default()
         };
-        let vector_index = Arc::new(LockFreeVectorDB::new(vector_config)?);
+        let vector_index = Arc::new(VectorDB::new(vector_config)?);
 
         let storage = Self {
             db: db.clone(),

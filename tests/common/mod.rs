@@ -21,8 +21,8 @@
 //! Common test utilities and fixtures
 
 use anyhow::Result;
-use post_cortex::core::lockfree_memory_system::{
-    LockFreeConversationMemorySystem, SystemConfig,
+use post_cortex::core::memory_system::{
+    ConversationMemorySystem, SystemConfig,
 };
 use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
@@ -30,7 +30,7 @@ use uuid::Uuid;
 
 /// Test fixture builder pattern for creating test systems with content
 pub struct TestFixture {
-    pub system: Arc<LockFreeConversationMemorySystem>,
+    pub system: Arc<ConversationMemorySystem>,
     pub session_id: Uuid,
     pub _temp_dir: TempDir,
 }
@@ -45,7 +45,7 @@ impl TestFixture {
         config.auto_vectorize_on_update = true;
 
         let system = Arc::new(
-            LockFreeConversationMemorySystem::new(config)
+            ConversationMemorySystem::new(config)
                 .await
                 .map_err(|e| anyhow::anyhow!(e))?,
         );

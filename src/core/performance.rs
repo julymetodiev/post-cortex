@@ -26,14 +26,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
 
-/// Completely lock-free performance monitor using only atomics
+/// Performance monitor using atomic operations
 #[derive(Debug)]
-pub struct LockFreePerformanceMonitor {
-    /// Operation metrics - lock-free concurrent map
-    operations: DashMap<String, Arc<LockFreeOperationMetrics>>,
+pub struct PerformanceMonitor {
+    /// Operation metrics - concurrent map
+    operations: DashMap<String, Arc<OperationMetrics>>,
 
-    /// Cache metrics - lock-free concurrent map
-    caches: DashMap<String, Arc<LockFreeCacheMetrics>>,
+    /// Cache metrics - concurrent map
+    caches: DashMap<String, Arc<CacheMetrics>>,
 
     /// Global counters - all atomic
     total_operations: AtomicU64,
@@ -44,15 +44,15 @@ pub struct LockFreePerformanceMonitor {
     /// Session info - atomic
     session_id: Option<String>,
 
-    /// Metrics collection - lock-free channel
+    /// Metrics collection - channel
     metrics_sender: Sender<MetricsEvent>,
     #[allow(dead_code)]
     metrics_receiver: Receiver<MetricsEvent>,
 }
 
-/// Lock-free operation metrics using only atomics
+/// Operation metrics using atomics
 #[derive(Debug)]
-pub struct LockFreeOperationMetrics {
+pub struct OperationMetrics {
     operation_name: String,
 
     // Basic counters
@@ -76,9 +76,9 @@ pub struct LockFreeOperationMetrics {
     recent_operation_count: AtomicU64, // Count for recent operations (max 100)
 }
 
-/// Lock-free cache metrics using only atomics
+/// Cache metrics using atomics
 #[derive(Debug)]
-pub struct LockFreeCacheMetrics {
+pub struct CacheMetrics {
     cache_name: String,
 
     // Request counters
@@ -101,12 +101,12 @@ pub struct LockFreeCacheMetrics {
     created_timestamp: AtomicU64,
 }
 
-/// Lock-free operation timer
-pub struct LockFreeOperationTimer {
+/// Operation timer
+pub struct OperationTimer {
     #[allow(dead_code)]
     operation_name: String,
     start_time: Instant,
-    monitor: Option<Arc<LockFreePerformanceMonitor>>, // Make monitor optional to avoid unsafe code
+    monitor: Option<Arc<PerformanceMonitor>>, // Make monitor optional to avoid unsafe code
     is_finished: AtomicBool,
 }
 
@@ -149,7 +149,7 @@ enum MetricsEvent {
 
 /// Serializable performance snapshot
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LockFreePerformanceSnapshot {
+pub struct PerformanceSnapshot {
     pub session_id: Option<String>,
     pub started_at_timestamp: u64,
     pub total_operations: u64,
@@ -188,7 +188,7 @@ pub struct CacheSnapshot {
     pub last_updated_timestamp: u64,
 }
 
-impl LockFreePerformanceMonitor {
+impl PerformanceMonitor {
     pub fn new(session_id: Option<String>) -> Self {
         let (sender, receiver) = bounded(10000); // Large buffer for high-throughput
 
@@ -210,11 +210,11 @@ impl LockFreePerformanceMonitor {
         }
     }
 
-    /// Start timing an operation - completely lock-free
-    pub fn start_timer(&self, operation_name: &str) -> LockFreeOperationTimer {
+    /// Start timing an operation
+    pub fn start_timer(&self, operation_name: &str) -> OperationTimer {
         self.active_operations.fetch_add(1, Ordering::Relaxed);
 
-        LockFreeOperationTimer {
+        OperationTimer {
             operation_name: operation_name.to_string(),
             start_time: Instant::now(),
             monitor: None, // Remove unsafe pointer read - timer will work without monitor reference
@@ -222,7 +222,7 @@ impl LockFreePerformanceMonitor {
         }
     }
 
-    /// Record operation completion - lock-free
+    /// Record operation completion
     pub fn record_operation(&self, operation_name: &str, duration: Duration, is_error: bool) {
         let duration_ns = duration.as_nanos() as u64;
         let timestamp = SystemTime::now()
@@ -236,11 +236,11 @@ impl LockFreePerformanceMonitor {
             self.total_errors.fetch_add(1, Ordering::Relaxed);
         }
 
-        // Get or create operation metrics - lock-free
+        // Get or create operation metrics
         let metrics = self
             .operations
             .entry(operation_name.to_string())
-            .or_insert_with(|| Arc::new(LockFreeOperationMetrics::new(operation_name)))
+            .or_insert_with(|| Arc::new(OperationMetrics::new(operation_name)))
             .clone();
 
         // Update metrics atomically
@@ -264,7 +264,7 @@ impl LockFreePerformanceMonitor {
         );
     }
 
-    /// Record cache hit - lock-free
+    /// Record cache hit
     pub fn record_cache_hit(&self, cache_name: &str, lookup_time: Duration) {
         let lookup_time_ns = lookup_time.as_nanos() as u64;
         let timestamp = SystemTime::now()
@@ -275,7 +275,7 @@ impl LockFreePerformanceMonitor {
         let metrics = self
             .caches
             .entry(cache_name.to_string())
-            .or_insert_with(|| Arc::new(LockFreeCacheMetrics::new(cache_name)))
+            .or_insert_with(|| Arc::new(CacheMetrics::new(cache_name)))
             .clone();
 
         metrics.record_hit(lookup_time_ns, timestamp);
@@ -287,7 +287,7 @@ impl LockFreePerformanceMonitor {
         });
     }
 
-    /// Record cache miss - lock-free
+    /// Record cache miss
     pub fn record_cache_miss(&self, cache_name: &str, lookup_time: Duration) {
         let lookup_time_ns = lookup_time.as_nanos() as u64;
         let timestamp = SystemTime::now()
@@ -298,7 +298,7 @@ impl LockFreePerformanceMonitor {
         let metrics = self
             .caches
             .entry(cache_name.to_string())
-            .or_insert_with(|| Arc::new(LockFreeCacheMetrics::new(cache_name)))
+            .or_insert_with(|| Arc::new(CacheMetrics::new(cache_name)))
             .clone();
 
         metrics.record_miss(lookup_time_ns, timestamp);
@@ -310,7 +310,7 @@ impl LockFreePerformanceMonitor {
         });
     }
 
-    /// Record cache eviction - lock-free
+    /// Record cache eviction
     pub fn record_cache_eviction(&self, cache_name: &str) {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -320,7 +320,7 @@ impl LockFreePerformanceMonitor {
         let metrics = self
             .caches
             .entry(cache_name.to_string())
-            .or_insert_with(|| Arc::new(LockFreeCacheMetrics::new(cache_name)))
+            .or_insert_with(|| Arc::new(CacheMetrics::new(cache_name)))
             .clone();
 
         metrics.record_eviction(timestamp);
@@ -331,8 +331,8 @@ impl LockFreePerformanceMonitor {
         });
     }
 
-    /// Get current snapshot - lock-free reads
-    pub fn get_snapshot(&self) -> LockFreePerformanceSnapshot {
+    /// Get current snapshot
+    pub fn get_snapshot(&self) -> PerformanceSnapshot {
         let total_ops = self.total_operations.load(Ordering::Relaxed);
         let total_errors = self.total_errors.load(Ordering::Relaxed);
         let global_error_rate = if total_ops > 0 {
@@ -381,7 +381,7 @@ impl LockFreePerformanceMonitor {
         slow_operations.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         error_prone_operations.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        LockFreePerformanceSnapshot {
+        PerformanceSnapshot {
             session_id: self.session_id.clone(),
             started_at_timestamp: self.started_at_timestamp.load(Ordering::Relaxed),
             total_operations: total_ops,
@@ -396,7 +396,7 @@ impl LockFreePerformanceMonitor {
         }
     }
 
-    /// Check for performance issues - lock-free
+    /// Check for performance issues
     pub fn has_performance_issues(&self) -> bool {
         // Check global error rate
         let total_ops = self.total_operations.load(Ordering::Relaxed);
@@ -425,7 +425,7 @@ impl LockFreePerformanceMonitor {
         false
     }
 
-    /// Reset all metrics - lock-free
+    /// Reset all metrics
     pub fn reset(&self) {
         self.total_operations.store(0, Ordering::Relaxed);
         self.total_errors.store(0, Ordering::Relaxed);
@@ -441,16 +441,16 @@ impl LockFreePerformanceMonitor {
         self.operations.clear();
         self.caches.clear();
 
-        info!("Reset all lock-free performance metrics");
+        info!("Reset all performance metrics");
     }
 
-    /// Get active operation count - lock-free
+    /// Get active operation count
     pub fn active_operations(&self) -> usize {
         self.active_operations.load(Ordering::Relaxed)
     }
 }
 
-impl LockFreeOperationMetrics {
+impl OperationMetrics {
     pub fn new(operation_name: &str) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -569,7 +569,7 @@ impl LockFreeOperationMetrics {
     }
 }
 
-impl LockFreeCacheMetrics {
+impl CacheMetrics {
     pub fn new(cache_name: &str) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -662,7 +662,7 @@ impl LockFreeCacheMetrics {
     }
 }
 
-impl LockFreeOperationTimer {
+impl OperationTimer {
     pub fn finish_with_error(self) {
         if !self.is_finished.load(Ordering::Relaxed) {
             self.is_finished.store(true, Ordering::Relaxed);
@@ -683,7 +683,7 @@ impl LockFreeOperationTimer {
     }
 }
 
-impl Drop for LockFreeOperationTimer {
+impl Drop for OperationTimer {
     fn drop(&mut self) {
         // Only record if not already finished and monitor is available
         if !self.is_finished.load(Ordering::Relaxed) {
@@ -697,28 +697,28 @@ impl Drop for LockFreeOperationTimer {
     }
 }
 
-// Global lock-free monitor
-static GLOBAL_LOCKFREE_MONITOR: std::sync::OnceLock<Arc<LockFreePerformanceMonitor>> =
+// Global performance monitor
+static GLOBAL_MONITOR: std::sync::OnceLock<Arc<PerformanceMonitor>> =
     std::sync::OnceLock::new();
 
-pub fn init_lockfree_monitoring(session_id: Option<String>) {
-    let monitor = Arc::new(LockFreePerformanceMonitor::new(session_id));
-    let _ = GLOBAL_LOCKFREE_MONITOR.set(monitor);
+pub fn init_monitoring(session_id: Option<String>) {
+    let monitor = Arc::new(PerformanceMonitor::new(session_id));
+    let _ = GLOBAL_MONITOR.set(monitor);
 }
 
-pub fn get_lockfree_monitor() -> Option<&'static Arc<LockFreePerformanceMonitor>> {
-    GLOBAL_LOCKFREE_MONITOR.get()
+pub fn get_monitor() -> Option<&'static Arc<PerformanceMonitor>> {
+    GLOBAL_MONITOR.get()
 }
 
-pub fn start_lockfree_timer(operation_name: &str) -> Option<LockFreeOperationTimer> {
-    get_lockfree_monitor().map(|monitor| monitor.start_timer(operation_name))
+pub fn start_timer(operation_name: &str) -> Option<OperationTimer> {
+    get_monitor().map(|monitor| monitor.start_timer(operation_name))
 }
 
-/// Convenience macro for timing operations with lock-free monitor
+/// Convenience macro for timing operations
 #[macro_export]
-macro_rules! time_lockfree_operation {
+macro_rules! time_operation {
     ($operation:expr, $code:block) => {{
-        let _timer = $crate::core::lockfree_performance::start_lockfree_timer($operation);
+        let _timer = $crate::core::performance::start_timer($operation);
         $code
     }};
 }

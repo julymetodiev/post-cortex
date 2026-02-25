@@ -41,7 +41,7 @@ pub struct SseEvent {
 ///
 /// All operations are non-blocking using DashMap for client tracking
 /// and tokio unbounded channels for message passing.
-pub struct LockFreeSSEBroadcaster {
+pub struct SSEBroadcaster {
     /// Lock-free client registry
     clients: Arc<DashMap<Uuid, UnboundedSender<SseEvent>>>,
 
@@ -52,7 +52,7 @@ pub struct LockFreeSSEBroadcaster {
     total_clients: Arc<AtomicU64>,
 }
 
-impl LockFreeSSEBroadcaster {
+impl SSEBroadcaster {
     pub fn new() -> Self {
         Self {
             clients: Arc::new(DashMap::new()),
@@ -107,7 +107,7 @@ impl LockFreeSSEBroadcaster {
     }
 }
 
-impl Default for LockFreeSSEBroadcaster {
+impl Default for SSEBroadcaster {
     fn default() -> Self {
         Self::new()
     }
@@ -119,7 +119,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sse_broadcaster_registration() {
-        let broadcaster = LockFreeSSEBroadcaster::new();
+        let broadcaster = SSEBroadcaster::new();
 
         let client1 = Uuid::new_v4();
         let mut rx1 = broadcaster.register_client(client1);
@@ -147,7 +147,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_sse_operations() {
-        let broadcaster = Arc::new(LockFreeSSEBroadcaster::new());
+        let broadcaster = Arc::new(SSEBroadcaster::new());
 
         // Register 50 clients concurrently
         let mut handles = vec![];

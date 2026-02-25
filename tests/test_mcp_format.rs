@@ -1,6 +1,6 @@
 use anyhow::Result;
 use post_cortex::core::context_update::{ContextUpdate, UpdateContent, UpdateType};
-use post_cortex::core::lockfree_memory_system::{LockFreeConversationMemorySystem, SystemConfig};
+use post_cortex::core::memory_system::{ConversationMemorySystem, SystemConfig};
 use serial_test::serial;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -16,7 +16,7 @@ async fn test_mcp_format_semantic_search() -> Result<()> {
     config.data_directory = temp_dir.path().to_str().unwrap().to_string();
 
     let system = Arc::new(
-        LockFreeConversationMemorySystem::new(config)
+        ConversationMemorySystem::new(config)
             .await
             .map_err(|e| anyhow::anyhow!(e))?,
     );

@@ -28,12 +28,9 @@ pub mod tools;
 pub mod workspace;
 
 pub use core::error::{Result, SystemError};
-pub use core::lockfree_memory_system::LockFreeConversationMemorySystem;
-pub use core::lockfree_memory_system::SystemConfig;
+pub use core::memory_system::ConversationMemorySystem;
+pub use core::memory_system::SystemConfig;
 pub use summary::{StructuredSummaryView, SummaryGenerator};
-
-// Compatibility aliases for existing code
-pub use core::lockfree_memory_system::LockFreeConversationMemorySystem as ConversationMemorySystem;
 
 #[cfg(test)]
 mod tests {

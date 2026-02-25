@@ -18,7 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 use crate::core::context_update::{CodeReference, ContextUpdate, EntityType, UpdateType};
-use crate::core::lockfree_memory_system::{LockFreeConversationMemorySystem, SystemConfig};
+use crate::core::memory_system::{ConversationMemorySystem, SystemConfig};
 use crate::core::structured_context::StructuredContext;
 use crate::core::timeout_utils::{with_mcp_timeout, with_storage_timeout};
 use crate::session::active_session::ActiveSession;
@@ -35,9 +35,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
-
-// Compatibility alias for existing code
-type ConversationMemorySystem = LockFreeConversationMemorySystem;
 
 // Helper function to convert String errors to anyhow::Error
 fn string_to_anyhow(s: String) -> anyhow::Error {

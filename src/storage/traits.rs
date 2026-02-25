@@ -24,7 +24,7 @@
 //! (RocksDB, SurrealDB, etc.) to be used interchangeably.
 
 use crate::core::context_update::{ContextUpdate, EntityData, EntityRelationship, RelationType};
-use crate::core::lockfree_vector_db::{SearchMatch, VectorMetadata};
+use crate::core::vector_db::{SearchMatch, VectorMetadata};
 use crate::graph::entity_graph::EntityNetwork;
 use crate::session::active_session::ActiveSession;
 use crate::storage::rocksdb_storage::{SessionCheckpoint, StoredWorkspace};
@@ -188,7 +188,7 @@ pub trait GraphStorage: Storage {
 ///
 /// This trait can be implemented by:
 /// - SurrealDB (native HNSW)
-/// - LockFreeVectorDB (in-memory)
+/// - VectorDB (in-memory)
 /// - External services (Qdrant, etc.)
 #[async_trait]
 pub trait VectorStorage: Send + Sync {

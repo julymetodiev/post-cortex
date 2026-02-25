@@ -17,11 +17,11 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
-use crate::core::lockfree_cache::{LockFreeCache, LockFreeSessionCache};
-use crate::core::lockfree_performance::LockFreePerformanceMonitor;
+use crate::core::cache::{Cache, SessionCache};
+use crate::core::performance::PerformanceMonitor;
 use crate::session::active_session::ActiveSession;
 use crate::storage::rocksdb_storage::RealRocksDBStorage;
-use crate::workspace::LockFreeWorkspaceManager;
+use crate::workspace::WorkspaceManager;
 use anyhow;
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
@@ -75,19 +75,19 @@ pub struct EmbeddingConfigHolder {
     pub last_init_error: parking_lot::RwLock<Option<String>>,
 }
 
-/// Completely lock-free conversation memory system using actors and channels
-pub struct LockFreeConversationMemorySystem {
-    /// Session management - lock-free
-    pub session_manager: LockFreeSessionManager,
+/// Conversation memory system using actors and channels
+pub struct ConversationMemorySystem {
+    /// Session management
+    pub session_manager: SessionManager,
 
-    /// Context processing - lock-free
-    pub context_processor: LockFreeIncrementalContextProcessor,
+    /// Context processing
+    pub context_processor: IncrementalContextProcessor,
 
-    /// Graph management - lock-free
-    pub graph_manager: LockFreeSimpleGraphManager,
+    /// Graph management
+    pub graph_manager: SimpleGraphManager,
 
-    /// Workspace management - lock-free
-    pub workspace_manager: Arc<LockFreeWorkspaceManager>,
+    /// Workspace management
+    pub workspace_manager: Arc<WorkspaceManager>,
 
     /// Storage actor handle
     pub storage_actor: StorageActorHandle,
@@ -98,14 +98,14 @@ pub struct LockFreeConversationMemorySystem {
     /// System configuration - immutable after creation
     pub config: SystemConfig,
 
-    /// Performance monitoring - lock-free
-    pub performance_monitor: Arc<LockFreePerformanceMonitor>,
+    /// Performance monitoring
+    pub performance_monitor: Arc<PerformanceMonitor>,
 
     /// Circuit breaker state - all atomic
-    pub circuit_breaker: Arc<LockFreeCircuitBreaker>,
+    pub circuit_breaker: Arc<CircuitBreaker>,
 
     /// Global system metrics - atomic
-    pub system_metrics: Arc<LockFreeSystemMetrics>,
+    pub system_metrics: Arc<SystemMetrics>,
 
     /// Embeddings and semantic search components (optional, lazy-initialized)
     #[cfg(feature = "embeddings")]
@@ -120,10 +120,10 @@ pub struct LockFreeConversationMemorySystem {
     pub embedding_config_holder: Arc<EmbeddingConfigHolder>,
 }
 
-/// Lock-free session manager using `DashMap` and atomic operations
-pub struct LockFreeSessionManager {
-    /// Session cache - completely lock-free
-    pub sessions: LockFreeSessionCache<Uuid, Arc<ArcSwap<ActiveSession>>>,
+/// Session manager using `DashMap` and atomic operations
+pub struct SessionManager {
+    /// Session cache
+    pub sessions: SessionCache<Uuid, Arc<ArcSwap<ActiveSession>>>,
 
     /// Storage communication
     storage_actor: StorageActorHandle,
@@ -133,7 +133,7 @@ pub struct LockFreeSessionManager {
     config: SystemConfig,
 
     /// Performance monitoring
-    performance_monitor: Arc<LockFreePerformanceMonitor>,
+    performance_monitor: Arc<PerformanceMonitor>,
 
     /// Session metrics - all atomic
     pub session_count: Arc<AtomicUsize>,
@@ -143,12 +143,12 @@ pub struct LockFreeSessionManager {
     pub active_sessions: DashMap<Uuid, Arc<AtomicU64>>, // last_access_timestamp
 }
 
-/// Lock-free incremental context processor
-pub struct LockFreeIncrementalContextProcessor {
+/// Incremental context processor
+pub struct IncrementalContextProcessor {
     #[allow(dead_code)]
     config: SystemConfig,
     #[allow(dead_code)]
-    performance_monitor: Arc<LockFreePerformanceMonitor>,
+    performance_monitor: Arc<PerformanceMonitor>,
 
     /// Processing metrics - atomic
     pub contexts_processed: Arc<AtomicU64>,
@@ -157,12 +157,12 @@ pub struct LockFreeIncrementalContextProcessor {
     pub avg_processing_time_ns: Arc<AtomicU64>,
 }
 
-/// Lock-free graph manager
-pub struct LockFreeSimpleGraphManager {
+/// Graph manager
+pub struct SimpleGraphManager {
     #[allow(dead_code)]
     config: SystemConfig,
     #[allow(dead_code)]
-    performance_monitor: Arc<LockFreePerformanceMonitor>,
+    performance_monitor: Arc<PerformanceMonitor>,
 
     /// Graph metrics - atomic
     pub entities_count: Arc<AtomicUsize>,
@@ -171,9 +171,9 @@ pub struct LockFreeSimpleGraphManager {
     pub graph_updates: Arc<AtomicU64>,
 }
 
-/// Lock-free circuit breaker using only atomics
+/// Circuit breaker using atomics
 #[derive(Debug)]
-pub struct LockFreeCircuitBreaker {
+pub struct CircuitBreaker {
     pub is_open: AtomicBool,
     pub failure_count: AtomicU64,
     pub last_failure_timestamp: AtomicU64,
@@ -187,7 +187,7 @@ pub struct LockFreeCircuitBreaker {
 
 /// Global system metrics - all atomic
 #[derive(Debug)]
-pub struct LockFreeSystemMetrics {
+pub struct SystemMetrics {
     pub total_requests: AtomicU64,
     pub successful_requests: AtomicU64,
     pub failed_requests: AtomicU64,
@@ -201,7 +201,7 @@ pub struct LockFreeSystemMetrics {
 pub struct StorageActor {
     storage: Arc<dyn crate::storage::traits::Storage>,
     receiver: UnboundedReceiver<StorageMessage>,
-    performance_monitor: Arc<LockFreePerformanceMonitor>,
+    performance_monitor: Arc<PerformanceMonitor>,
     operation_count: AtomicU64,
     load_count: AtomicU64,
     save_count: AtomicU64,
@@ -436,7 +436,7 @@ fn safe_truncate_len(s: &str, max_bytes: usize) -> usize {
     idx
 }
 
-impl LockFreeConversationMemorySystem {
+impl ConversationMemorySystem {
     /// Create system from config
     ///
     /// # Errors
@@ -504,16 +504,16 @@ impl LockFreeConversationMemorySystem {
         vector_storage: Arc<dyn crate::storage::traits::VectorStorage>,
         config: SystemConfig,
     ) -> Result<Self, String> {
-        let performance_monitor = Arc::new(LockFreePerformanceMonitor::new(None));
+        let performance_monitor = Arc::new(PerformanceMonitor::new(None));
 
         // Create storage actor with trait object
         let storage_actor = StorageActor::spawn(storage, Arc::clone(&performance_monitor)).await?;
 
         // Create session cache
-        let session_cache = LockFreeCache::new(config.cache_capacity, "session_cache".to_string())
+        let session_cache = Cache::new(config.cache_capacity, "session_cache".to_string())
             .map_err(|e| format!("Failed to create session cache: {e}"))?;
 
-        let session_manager = LockFreeSessionManager {
+        let session_manager = SessionManager {
             sessions: session_cache,
             storage_actor: storage_actor.clone(),
             config: config.clone(),
@@ -525,7 +525,7 @@ impl LockFreeConversationMemorySystem {
             active_sessions: DashMap::new(),
         };
 
-        let context_processor = LockFreeIncrementalContextProcessor {
+        let context_processor = IncrementalContextProcessor {
             config: config.clone(),
             performance_monitor: Arc::clone(&performance_monitor),
             contexts_processed: Arc::new(AtomicU64::new(0)),
@@ -534,7 +534,7 @@ impl LockFreeConversationMemorySystem {
             avg_processing_time_ns: Arc::new(AtomicU64::new(0)),
         };
 
-        let graph_manager = LockFreeSimpleGraphManager {
+        let graph_manager = SimpleGraphManager {
             config: config.clone(),
             performance_monitor: Arc::clone(&performance_monitor),
             entities_count: Arc::new(AtomicUsize::new(0)),
@@ -543,15 +543,15 @@ impl LockFreeConversationMemorySystem {
             graph_updates: Arc::new(AtomicU64::new(0)),
         };
 
-        let circuit_breaker = Arc::new(LockFreeCircuitBreaker::new(
+        let circuit_breaker = Arc::new(CircuitBreaker::new(
             config.circuit_breaker_failure_threshold,
             config.circuit_breaker_timeout_seconds,
         ));
 
-        let system_metrics = Arc::new(LockFreeSystemMetrics::new());
+        let system_metrics = Arc::new(SystemMetrics::new());
 
         // Create workspace manager
-        let workspace_manager = Arc::new(LockFreeWorkspaceManager::new());
+        let workspace_manager = Arc::new(WorkspaceManager::new());
 
         // Hydrate workspaces from storage
         match storage_actor.list_all_workspaces().await {
@@ -927,7 +927,7 @@ impl LockFreeConversationMemorySystem {
         }
 
         tracing::info!("Internal: Getting or creating session...");
-        // Get or create session - lock-free
+        // Get or create session
         let session_arc = self
             .session_manager
             .get_or_create_session(session_id)
@@ -1083,7 +1083,7 @@ impl LockFreeConversationMemorySystem {
         }
     }
 
-    /// Get conversation context - lock-free
+    /// Get conversation context
     pub async fn get_conversation_context(&self, session_id: Uuid) -> Result<String, String> {
         let _timer = self
             .performance_monitor
@@ -1092,7 +1092,7 @@ impl LockFreeConversationMemorySystem {
             .total_requests
             .fetch_add(1, Ordering::Relaxed);
 
-        // Try cache first - lock-free
+        // Try cache first
         if let Some(session_arc) = self.session_manager.sessions.get(&session_id) {
             self.session_manager
                 .session_cache_hits
@@ -1161,12 +1161,12 @@ impl LockFreeConversationMemorySystem {
     }
 
     /// Get system health - all atomic reads
-    pub fn get_system_health(&self) -> LockFreeSystemHealth {
+    pub fn get_system_health(&self) -> SystemHealth {
         let _perf_snapshot = self.performance_monitor.get_snapshot();
         let cache_stats = self.session_manager.sessions.get_stats();
         let circuit_breaker_stats = self.circuit_breaker.get_stats();
 
-        LockFreeSystemHealth {
+        SystemHealth {
             total_requests: self.system_metrics.total_requests.load(Ordering::Relaxed),
             successful_requests: self
                 .system_metrics
@@ -1295,8 +1295,8 @@ impl LockFreeConversationMemorySystem {
     }
 }
 
-impl LockFreeSessionManager {
-    /// Get or create session - lock-free with actor communication
+impl SessionManager {
+    /// Get or create session via actor communication
     pub async fn get_or_create_session(
         &self,
         session_id: Uuid,
@@ -1416,10 +1416,10 @@ impl LockFreeSessionManager {
     }
 
     /// Get session metrics - all atomic reads
-    pub fn get_metrics(&self) -> LockFreeSessionManagerMetrics {
+    pub fn get_metrics(&self) -> SessionManagerMetrics {
         let cache_stats = self.sessions.get_stats();
 
-        LockFreeSessionManagerMetrics {
+        SessionManagerMetrics {
             session_count: self.session_count.load(Ordering::Relaxed),
             active_sessions: self.active_sessions.len(),
             total_operations: self.total_session_operations.load(Ordering::Relaxed),
@@ -1432,7 +1432,7 @@ impl LockFreeSessionManager {
     }
 }
 
-impl LockFreeCircuitBreaker {
+impl CircuitBreaker {
     pub fn new(failure_threshold: u64, timeout_seconds: u64) -> Self {
         Self {
             is_open: AtomicBool::new(false),
@@ -1508,13 +1508,13 @@ impl LockFreeCircuitBreaker {
     }
 }
 
-impl Default for LockFreeSystemMetrics {
+impl Default for SystemMetrics {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl LockFreeSystemMetrics {
+impl SystemMetrics {
     pub fn new() -> Self {
         Self {
             total_requests: AtomicU64::new(0),
@@ -1797,7 +1797,7 @@ impl StorageActorHandle {
 impl StorageActor {
     pub async fn spawn(
         storage: Arc<dyn crate::storage::traits::Storage>,
-        performance_monitor: Arc<LockFreePerformanceMonitor>,
+        performance_monitor: Arc<PerformanceMonitor>,
     ) -> Result<StorageActorHandle, String> {
         let (sender, receiver) = unbounded_channel();
 
@@ -2044,7 +2044,7 @@ impl StorageActor {
 
 // Health and metrics structures
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LockFreeSystemHealth {
+pub struct SystemHealth {
     pub total_requests: u64,
     pub successful_requests: u64,
     pub failed_requests: u64,
@@ -2060,7 +2060,7 @@ pub struct LockFreeSystemHealth {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LockFreeSessionManagerMetrics {
+pub struct SessionManagerMetrics {
     pub session_count: usize,
     pub active_sessions: usize,
     pub total_operations: u64,
@@ -2080,8 +2080,8 @@ pub struct CircuitBreakerStats {
     pub last_success_timestamp: u64,
 }
 
-/// Extensions for ActiveSession to work with lock-free system
-impl LockFreeConversationMemorySystem {
+/// Extensions for ActiveSession to work with the memory system
+impl ConversationMemorySystem {
     async fn add_context_update_to_session(
         session: &mut ActiveSession,
         description: String,
@@ -3002,7 +3002,7 @@ where
 
 /// Update get_session to return RwLock-compatible wrapper
 /// Comprehensive API compatibility layer for MCP tools
-impl LockFreeConversationMemorySystem {
+impl ConversationMemorySystem {
     /// Storage compatibility - returns a wrapper that behaves like Arc<RwLock<Storage>>
     pub fn storage(&self) -> StorageCompatibilityWrapper<'_> {
         StorageCompatibilityWrapper {
@@ -3193,9 +3193,9 @@ impl SessionWriteGuard {
     }
 }
 
-/// Convenience macro for timing lock-free operations
+/// Convenience macro for timing memory operations
 #[macro_export]
-macro_rules! time_lockfree_memory_operation {
+macro_rules! time_memory_operation {
     ($system:expr, $operation:expr, $code:block) => {{
         let _timer = $system.performance_monitor.start_timer($operation);
         $code

@@ -36,11 +36,11 @@ use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
 #[cfg(feature = "embeddings")]
-use crate::core::ner_engine::LockFreeNEREngine;
+use crate::core::ner_engine::NEREngine;
 
 // Global shared NER engine (lazy loaded on first use)
 #[cfg(feature = "embeddings")]
-static GLOBAL_NER_ENGINE: OnceLock<Arc<LockFreeNEREngine>> = OnceLock::new();
+static GLOBAL_NER_ENGINE: OnceLock<Arc<NEREngine>> = OnceLock::new();
 
 // Global stop word sets for O(1) lookup (lazy initialized)
 static ENGLISH_STOP_WORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
@@ -374,7 +374,7 @@ pub async fn preload_ner_engine() -> bool {
 
 /// Get or initialize the global NER engine (lazy loading)
 #[cfg(feature = "embeddings")]
-async fn get_ner_engine() -> Option<Arc<LockFreeNEREngine>> {
+async fn get_ner_engine() -> Option<Arc<NEREngine>> {
     // Fast path - engine already loaded
     if let Some(engine) = GLOBAL_NER_ENGINE.get() {
         return Some(engine.clone());
@@ -382,7 +382,7 @@ async fn get_ner_engine() -> Option<Arc<LockFreeNEREngine>> {
 
     // Slow path - load engine (first call only)
     info!("Loading global NER engine for first time...");
-    let mut engine = LockFreeNEREngine::new();
+    let mut engine = NEREngine::new();
     match engine.load_model().await {
         Ok(_) => {
             info!("Global NER engine loaded successfully");

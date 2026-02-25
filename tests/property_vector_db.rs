@@ -11,7 +11,7 @@
 //
 // NOTE: All tests in this file should run serially due to shared VectorDB resources
 
-use post_cortex::core::vector_db::{FastVectorDB, VectorDbConfig, VectorMetadata};
+use post_cortex::core::vector_db::{VectorDB, VectorDbConfig, VectorMetadata};
 use proptest::prelude::*;
 use serial_test::serial;
 
@@ -64,7 +64,7 @@ proptest! {
             enable_hnsw_index: false,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         // Correct dimension should succeed
         let correct_vector = vec![0.5f32; dim];
@@ -102,7 +102,7 @@ proptest! {
             enable_hnsw_index: false,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         // Add vectors
         for i in 0..num_vectors {
@@ -141,7 +141,7 @@ proptest! {
             enable_hnsw_index: false,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         // Add vectors (only if dimension matches)
         if dim == 384 {
@@ -180,7 +180,7 @@ proptest! {
             enable_hnsw_index: false,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         // Add vectors multiple times
         for _ in 0..num_vectors {
@@ -207,7 +207,7 @@ proptest! {
             enable_hnsw_index: false,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         // Add vectors and track IDs
         let mut vector_ids = Vec::new();
@@ -255,7 +255,7 @@ proptest! {
             enable_hnsw_index: false,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         // Add vectors
         let mut vector_ids = Vec::new();
@@ -293,7 +293,7 @@ proptest! {
             enable_hnsw_index: false,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         // Add vectors
         for i in 0..num_vectors {
@@ -330,7 +330,7 @@ proptest! {
             enable_hnsw_index: false,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         // Add vectors with different similarities to query
         for i in 0..num_vectors {
@@ -368,7 +368,7 @@ proptest! {
             enable_hnsw_index: false,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         // Add vector
         let metadata = VectorMetadata::new(
@@ -404,7 +404,7 @@ mod pq_tests {
             pq_bits: 8,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         // Add a vector
         let vector = vec![0.5f32; dim];
@@ -437,7 +437,7 @@ mod pq_tests {
             enable_product_quantization: false,
             ..Default::default()
         };
-        let db_no_pq = FastVectorDB::new(config_no_pq).unwrap();
+        let db_no_pq = VectorDB::new(config_no_pq).unwrap();
 
         // Database with PQ
         let config_pq = VectorDbConfig {
@@ -449,7 +449,7 @@ mod pq_tests {
             pq_bits: 8,
             ..Default::default()
         };
-        let db_pq = FastVectorDB::new(config_pq).unwrap();
+        let db_pq = VectorDB::new(config_pq).unwrap();
 
         // Add same vectors to both
         for i in 0..100 {
@@ -490,7 +490,7 @@ mod pq_tests {
             pq_bits: 8,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         // Add diverse vectors
         for i in 0..50 {
@@ -540,7 +540,7 @@ mod concurrent_tests {
             enable_hnsw_index: false,
             ..Default::default()
         };
-        let db = Arc::new(FastVectorDB::new(config).unwrap());
+        let db = Arc::new(VectorDB::new(config).unwrap());
 
         let num_threads = 10;
         let vectors_per_thread = 10;
@@ -581,7 +581,7 @@ mod concurrent_tests {
             enable_hnsw_index: false,
             ..Default::default()
         };
-        let db = Arc::new(FastVectorDB::new(config).unwrap());
+        let db = Arc::new(VectorDB::new(config).unwrap());
 
         // Add some vectors first
         for i in 0..20 {
@@ -630,7 +630,7 @@ mod concurrent_tests {
             enable_hnsw_index: false,
             ..Default::default()
         };
-        let db = Arc::new(FastVectorDB::new(config).unwrap());
+        let db = Arc::new(VectorDB::new(config).unwrap());
 
         let num_threads = 10;
         let operations_per_thread = 10;
@@ -673,9 +673,9 @@ mod concurrent_tests {
     }
 }
 
-/// Tests for lockfree_vector_db.rs fixes
+/// Tests for vector_db.rs fixes
 #[cfg(test)]
-mod lockfree_fix_tests {
+mod vector_db_fix_tests {
     use super::*;
     use std::sync::Arc;
     use std::thread;
@@ -692,7 +692,7 @@ mod lockfree_fix_tests {
             max_connections: 16,
             ..Default::default()
         };
-        let db = Arc::new(FastVectorDB::new(config).unwrap());
+        let db = Arc::new(VectorDB::new(config).unwrap());
 
         let num_threads = 20;
         let vectors_per_thread = 50;
@@ -753,7 +753,7 @@ mod lockfree_fix_tests {
             ef_construction: 200,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         // Add a cluster of similar vectors
         let cluster_center = vec![0.8f32; dim];
@@ -819,7 +819,7 @@ mod lockfree_fix_tests {
             enable_hnsw_index: false,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         // Add a vector
         let vector = vec![0.5f32; dim];
@@ -871,7 +871,7 @@ mod lockfree_fix_tests {
             pq_bits: 8,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         let initial_memory = db.get_stats().memory_usage_bytes;
 
@@ -921,7 +921,7 @@ mod lockfree_fix_tests {
             max_connections: 8,
             ..Default::default()
         };
-        let db = Arc::new(FastVectorDB::new(config).unwrap());
+        let db = Arc::new(VectorDB::new(config).unwrap());
 
         // Add initial vectors
         for i in 0..20 {
@@ -982,7 +982,7 @@ mod search_mode_tests {
             ef_construction: 200,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         // Add vectors
         for i in 0..50 {
@@ -1041,7 +1041,7 @@ mod search_mode_tests {
             ef_construction: 200,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         // Add vectors
         for i in 0..100 {
@@ -1093,7 +1093,7 @@ mod search_mode_tests {
             enable_hnsw_index: true,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         // Add vectors
         for i in 0..20 {
@@ -1136,7 +1136,7 @@ mod search_mode_tests {
             ef_construction: 200,
             ..Default::default()
         };
-        let db = FastVectorDB::new(config).unwrap();
+        let db = VectorDB::new(config).unwrap();
 
         // Add many vectors to see performance difference
         for i in 0..500 {

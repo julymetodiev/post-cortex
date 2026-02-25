@@ -36,6 +36,6 @@ pub mod validate;
 pub use config::DaemonConfig;
 pub use mcp_service::PostCortexService;
 pub use rmcp_server::start_rmcp_daemon;
-pub use server::LockFreeDaemonServer;
-pub use sse::LockFreeSSEBroadcaster;
+pub use server::DaemonServer;
+pub use sse::SSEBroadcaster;
 pub use stdio_proxy::{ensure_daemon_running, is_daemon_running, run_stdio_proxy};

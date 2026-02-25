@@ -1,5 +1,5 @@
 use anyhow::Result;
-use post_cortex::core::lockfree_embeddings::{EmbeddingConfig, LockFreeLocalEmbeddingEngine};
+use post_cortex::core::embeddings::{EmbeddingConfig, LocalEmbeddingEngine};
 use serial_test::serial;
 
 #[serial]
@@ -8,7 +8,7 @@ async fn test_identical_text_similarity() -> Result<()> {
     // Test that identical texts produce highly similar embeddings (>95%)
 
     let config = EmbeddingConfig::default();
-    let engine = LockFreeLocalEmbeddingEngine::new(config).await?;
+    let engine = LocalEmbeddingEngine::new(config).await?;
 
     let text = "How does vectorization work with BERT embeddings?";
 
@@ -65,7 +65,7 @@ async fn test_similar_text_similarity() -> Result<()> {
     // Test that similar texts produce reasonable similarity scores
 
     let config = EmbeddingConfig::default();
-    let engine = LockFreeLocalEmbeddingEngine::new(config).await?;
+    let engine = LocalEmbeddingEngine::new(config).await?;
 
     let text1 = "How does vectorization work with BERT embeddings?";
     let text2 = "How does vectorization work with BERT embeddings? Post-Cortex uses local models.";
@@ -110,7 +110,7 @@ async fn test_problematic_text_similarity() -> Result<()> {
     // Test the problematic text that gives 11% similarity in daemon
 
     let config = EmbeddingConfig::default();
-    let engine = LockFreeLocalEmbeddingEngine::new(config).await?;
+    let engine = LocalEmbeddingEngine::new(config).await?;
 
     let query = "How does the lock-free conversation memory system work in Post-Cortex?";
     let answer = "The lock-free conversation memory system in Post-Cortex is built using Rust's advanced concurrency primitives to achieve zero-deadlock guarantees. It uses DashMap for concurrent hash maps, AtomicU64 for counters, ArcSwap for atomic pointer swapping, and an actor pattern for asynchronous RocksDB storage operations. The system implements a three-tier memory hierarchy with hot cache for 50 most recent items, warm cache for 200 items, and cold storage in RocksDB for everything else. Entity relationships are tracked using Petgraph, and semantic search is powered by local BERT models generating 384-dimensional L2-normalized embeddings stored in an HNSW index for fast nearest neighbor search. The entire architecture is designed to be production-grade with high throughput and low latency even under heavy concurrent load.";
@@ -149,8 +149,8 @@ async fn test_end_to_end_semantic_search_pipeline() -> Result<()> {
     // End-to-end test: Create session, add QA update, search semantically
     // This tests the FULL pipeline including text extraction and vectorization
 
-    use post_cortex::core::lockfree_memory_system::{
-        LockFreeConversationMemorySystem, SystemConfig,
+    use post_cortex::core::memory_system::{
+        ConversationMemorySystem, SystemConfig,
     };
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -163,7 +163,7 @@ async fn test_end_to_end_semantic_search_pipeline() -> Result<()> {
 
     // Initialize memory system
     let system = Arc::new(
-        LockFreeConversationMemorySystem::new(config)
+        ConversationMemorySystem::new(config)
             .await
             .map_err(|e| anyhow::anyhow!(e))?,
     );
@@ -238,7 +238,7 @@ async fn test_end_to_end_semantic_search_pipeline() -> Result<()> {
 async fn test_unrelated_text_should_have_low_similarity() -> Result<()> {
     // Test that COMPLETELY unrelated texts have LOW similarity
     let config = EmbeddingConfig::default();
-    let engine = LockFreeLocalEmbeddingEngine::new(config).await?;
+    let engine = LocalEmbeddingEngine::new(config).await?;
 
     let text1 = "How does BERT work for text embeddings? BERT uses transformer architecture with bidirectional attention to create contextual embeddings. Each word's representation depends on all other words in the sentence, capturing semantic meaning.";
     let text2 = "What is the best recipe for banana bread? Mix 3 ripe bananas with sugar, butter, eggs, and flour. Add baking soda and vanilla. Bake at 350F for 60 minutes until golden brown.";

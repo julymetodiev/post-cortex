@@ -21,8 +21,8 @@
 //! Tests for temporal decay (recency bias) in semantic search
 
 use anyhow::Result;
-use post_cortex::core::lockfree_memory_system::{
-    LockFreeConversationMemorySystem, SystemConfig,
+use post_cortex::core::memory_system::{
+    ConversationMemorySystem, SystemConfig,
 };
 use serial_test::serial;
 use std::sync::Arc;
@@ -32,7 +32,7 @@ mod common;
 use common::TestFixture;
 
 /// Helper to create test system
-async fn create_test_system() -> Result<(Arc<LockFreeConversationMemorySystem>, tempfile::TempDir)> {
+async fn create_test_system() -> Result<(Arc<ConversationMemorySystem>, tempfile::TempDir)> {
     let temp_dir = tempdir()?;
     let mut config = SystemConfig::default();
     config.data_directory = temp_dir.path().to_str().unwrap().to_string();
@@ -40,7 +40,7 @@ async fn create_test_system() -> Result<(Arc<LockFreeConversationMemorySystem>, 
     config.auto_vectorize_on_update = true;
 
     let system = Arc::new(
-        LockFreeConversationMemorySystem::new(config)
+        ConversationMemorySystem::new(config)
             .await
             .map_err(|e| anyhow::anyhow!(e))?,
     );

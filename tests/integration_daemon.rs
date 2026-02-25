@@ -4,7 +4,7 @@ mod helpers;
 
 use helpers::TestApp;
 use hyper::StatusCode;
-use post_cortex::daemon::{DaemonConfig, LockFreeDaemonServer};
+use post_cortex::daemon::{DaemonConfig, DaemonServer};
 use serde_json::json;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -29,7 +29,7 @@ async fn setup_test_app() -> (TestApp, TempDir) {
         surrealdb_database: "main".to_string(),
     };
 
-    let server = LockFreeDaemonServer::new(config).await.unwrap();
+    let server = DaemonServer::new(config).await.unwrap();
     let router = server.build_router();
     let app = TestApp::new(router);
 
@@ -57,7 +57,7 @@ async fn start_real_daemon() -> (u16, TempDir) {
         surrealdb_database: "main".to_string(),
     };
 
-    let server = LockFreeDaemonServer::new(config).await.unwrap();
+    let server = DaemonServer::new(config).await.unwrap();
 
     // Start server in background
     tokio::spawn(async move {

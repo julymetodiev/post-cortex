@@ -23,7 +23,7 @@
 //! Provides HTTP/JSON-RPC endpoint for MCP protocol with zero blocking operations.
 
 use crate::ConversationMemorySystem;
-use crate::daemon::sse::LockFreeSSEBroadcaster;
+use crate::daemon::sse::SSEBroadcaster;
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -59,7 +59,7 @@ struct ConnectionInfo {
 }
 
 /// Lock-free daemon server
-pub struct LockFreeDaemonServer {
+pub struct DaemonServer {
     /// Core memory system (already lock-free)
     memory_system: Arc<ConversationMemorySystem>,
 
@@ -67,7 +67,7 @@ pub struct LockFreeDaemonServer {
     active_connections: Arc<DashMap<Uuid, ConnectionInfo>>,
 
     /// Lock-free SSE broadcaster
-    sse_broadcaster: Arc<LockFreeSSEBroadcaster>,
+    sse_broadcaster: Arc<SSEBroadcaster>,
 
     /// Map session IDs to SSE client IDs for routing responses
     session_to_client: Arc<DashMap<String, Uuid>>,
@@ -78,7 +78,7 @@ pub struct LockFreeDaemonServer {
     config: DaemonConfig,
 }
 
-impl LockFreeDaemonServer {
+impl DaemonServer {
     pub async fn new(config: DaemonConfig) -> Result<Self, String> {
         info!(
             "Initializing lock-free daemon server on {}:{}",
@@ -134,7 +134,7 @@ impl LockFreeDaemonServer {
         Ok(Self {
             memory_system,
             active_connections: Arc::new(DashMap::new()),
-            sse_broadcaster: Arc::new(LockFreeSSEBroadcaster::new()),
+            sse_broadcaster: Arc::new(SSEBroadcaster::new()),
             session_to_client: Arc::new(DashMap::new()),
             connection_counter: Arc::new(AtomicU64::new(0)),
             total_requests: Arc::new(AtomicU64::new(0)),
@@ -247,12 +247,12 @@ async fn health_check() -> impl IntoResponse {
 }
 
 /// Statistics endpoint
-async fn get_stats(State(server): State<Arc<LockFreeDaemonServer>>) -> impl IntoResponse {
+async fn get_stats(State(server): State<Arc<DaemonServer>>) -> impl IntoResponse {
     Json(server.get_statistics())
 }
 
 /// SSE stream endpoint for Streamable HTTP transport
-async fn handle_sse_stream(State(server): State<Arc<LockFreeDaemonServer>>) -> impl IntoResponse {
+async fn handle_sse_stream(State(server): State<Arc<DaemonServer>>) -> impl IntoResponse {
     use axum::http::header::{HeaderMap, HeaderName, HeaderValue};
 
     let client_id = Uuid::new_v4();
@@ -324,7 +324,7 @@ async fn handle_sse_stream(State(server): State<Arc<LockFreeDaemonServer>>) -> i
 /// MCP request handler - Streamable HTTP transport (2025-03-26)
 /// Returns response directly as JSON (not via SSE)
 async fn handle_mcp_request(
-    State(server): State<Arc<LockFreeDaemonServer>>,
+    State(server): State<Arc<DaemonServer>>,
     Json(request): Json<MCPRequest>,
 ) -> impl IntoResponse {
     debug!("Handling MCP request: {}", request.method);
@@ -371,7 +371,7 @@ fn handle_initialize() -> Result<serde_json::Value, String> {
     }))
 }
 
-fn handle_tools_list(_server: &Arc<LockFreeDaemonServer>) -> Result<serde_json::Value, String> {
+fn handle_tools_list(_server: &Arc<DaemonServer>) -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({
         "tools": [
             {
@@ -403,7 +403,7 @@ fn handle_tools_list(_server: &Arc<LockFreeDaemonServer>) -> Result<serde_json::
 }
 
 async fn handle_tool_call(
-    server: &Arc<LockFreeDaemonServer>,
+    server: &Arc<DaemonServer>,
     request: &MCPRequest,
 ) -> Result<serde_json::Value, String> {
     let params = request
@@ -464,7 +464,7 @@ async fn handle_tool_call(
 }
 
 async fn handle_create_session(
-    server: &Arc<LockFreeDaemonServer>,
+    server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let name = arguments["name"].as_str().map(|s| s.to_string());
@@ -485,7 +485,7 @@ async fn handle_create_session(
 }
 
 async fn handle_load_session(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::load_session;
@@ -510,7 +510,7 @@ async fn handle_load_session(
 }
 
 async fn handle_update_context(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::core::context_update::CodeReference;
@@ -559,7 +559,7 @@ async fn handle_update_context(
 }
 
 async fn handle_semantic_search(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::semantic_search_session;
@@ -622,7 +622,7 @@ async fn handle_semantic_search(
 }
 
 async fn handle_list_sessions(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::list_sessions;
 
@@ -639,7 +639,7 @@ async fn handle_list_sessions(
 }
 
 async fn handle_query_context(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::query_conversation_context;
@@ -682,7 +682,7 @@ async fn handle_query_context(
 }
 
 async fn handle_bulk_update_context(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::{ContextUpdateItem, bulk_update_conversation_context};
@@ -719,7 +719,7 @@ async fn handle_bulk_update_context(
 }
 
 async fn handle_semantic_search_global(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::semantic_search_global;
@@ -768,7 +768,7 @@ async fn handle_semantic_search_global(
 }
 
 async fn handle_find_related_content(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::find_related_content;
@@ -802,7 +802,7 @@ async fn handle_find_related_content(
 }
 
 async fn handle_search_sessions(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::search_sessions;
@@ -825,7 +825,7 @@ async fn handle_search_sessions(
 }
 
 async fn handle_update_session_metadata(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::update_session_metadata;
@@ -858,7 +858,7 @@ async fn handle_update_session_metadata(
 }
 
 async fn handle_create_checkpoint(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::create_session_checkpoint;
@@ -882,7 +882,7 @@ async fn handle_create_checkpoint(
 }
 
 async fn handle_get_key_decisions(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::get_key_decisions;
@@ -905,7 +905,7 @@ async fn handle_get_key_decisions(
 }
 
 async fn handle_get_key_insights(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::get_key_insights;
@@ -933,7 +933,7 @@ async fn handle_get_key_insights(
 }
 
 async fn handle_get_entity_importance(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::get_entity_importance_analysis;
@@ -965,7 +965,7 @@ async fn handle_get_entity_importance(
 }
 
 async fn handle_get_entity_network(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::get_entity_network_view;
@@ -1002,7 +1002,7 @@ async fn handle_get_entity_network(
 }
 
 async fn handle_get_session_statistics(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::get_session_statistics;
@@ -1025,7 +1025,7 @@ async fn handle_get_session_statistics(
 }
 
 async fn handle_vectorize_session(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::vectorize_session;
@@ -1049,7 +1049,7 @@ async fn handle_vectorize_session(
 }
 
 async fn handle_get_vectorization_stats(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::get_vectorization_stats;
 
@@ -1066,7 +1066,7 @@ async fn handle_get_vectorization_stats(
 }
 
 async fn handle_get_tool_catalog(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::get_tool_catalog;
 
@@ -1083,7 +1083,7 @@ async fn handle_get_tool_catalog(
 }
 
 async fn handle_get_summary(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::get_structured_summary;
@@ -1140,7 +1140,7 @@ async fn handle_get_summary(
 // ============================================================================
 
 async fn handle_create_workspace(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::create_workspace;
@@ -1168,7 +1168,7 @@ async fn handle_create_workspace(
 }
 
 async fn handle_get_workspace(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::get_workspace;
@@ -1192,7 +1192,7 @@ async fn handle_get_workspace(
 }
 
 async fn handle_list_workspaces(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::list_workspaces;
 
@@ -1209,7 +1209,7 @@ async fn handle_list_workspaces(
 }
 
 async fn handle_delete_workspace(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::delete_workspace;
@@ -1233,7 +1233,7 @@ async fn handle_delete_workspace(
 }
 
 async fn handle_add_session_to_workspace(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::add_session_to_workspace;
@@ -1268,7 +1268,7 @@ async fn handle_add_session_to_workspace(
 }
 
 async fn handle_remove_session_from_workspace(
-    _server: &Arc<LockFreeDaemonServer>,
+    _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::remove_session_from_workspace;
@@ -1361,7 +1361,7 @@ struct AttachSessionRequest {
 
 /// List all sessions
 async fn api_list_sessions(
-    State(server): State<Arc<LockFreeDaemonServer>>,
+    State(server): State<Arc<DaemonServer>>,
 ) -> Result<Json<Vec<SessionInfo>>, (StatusCode, String)> {
     let ids = server
         .memory_system
@@ -1400,7 +1400,7 @@ async fn api_list_sessions(
 
 /// Create a new session
 async fn api_create_session(
-    State(server): State<Arc<LockFreeDaemonServer>>,
+    State(server): State<Arc<DaemonServer>>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<Json<SessionInfo>, (StatusCode, String)> {
     let id = server
@@ -1418,7 +1418,7 @@ async fn api_create_session(
 
 /// Delete a session
 async fn api_delete_session(
-    State(server): State<Arc<LockFreeDaemonServer>>,
+    State(server): State<Arc<DaemonServer>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id).map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid UUID: {}", e)))?;
@@ -1435,7 +1435,7 @@ async fn api_delete_session(
 
 /// List all workspaces
 async fn api_list_workspaces(
-    State(server): State<Arc<LockFreeDaemonServer>>,
+    State(server): State<Arc<DaemonServer>>,
 ) -> Result<Json<Vec<WorkspaceInfo>>, (StatusCode, String)> {
     let workspaces = server
         .memory_system
@@ -1459,7 +1459,7 @@ async fn api_list_workspaces(
 
 /// Create a new workspace
 async fn api_create_workspace(
-    State(server): State<Arc<LockFreeDaemonServer>>,
+    State(server): State<Arc<DaemonServer>>,
     Json(req): Json<CreateWorkspaceRequest>,
 ) -> Result<Json<WorkspaceInfo>, (StatusCode, String)> {
     let id = Uuid::new_v4();
@@ -1482,7 +1482,7 @@ async fn api_create_workspace(
 
 /// Delete a workspace
 async fn api_delete_workspace(
-    State(server): State<Arc<LockFreeDaemonServer>>,
+    State(server): State<Arc<DaemonServer>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let uuid = Uuid::parse_str(&id).map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid UUID: {}", e)))?;
@@ -1499,7 +1499,7 @@ async fn api_delete_workspace(
 
 /// Attach session to workspace
 async fn api_attach_session(
-    State(server): State<Arc<LockFreeDaemonServer>>,
+    State(server): State<Arc<DaemonServer>>,
     Path((workspace_id, session_id)): Path<(String, String)>,
     Json(req): Json<AttachSessionRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
@@ -1549,7 +1549,7 @@ mod tests {
             surrealdb_database: "main".to_string(),
         };
 
-        let server = LockFreeDaemonServer::new(config).await;
+        let server = DaemonServer::new(config).await;
         assert!(server.is_ok());
 
         let server = server.unwrap();
@@ -1576,7 +1576,7 @@ mod tests {
             surrealdb_database: "main".to_string(),
         };
 
-        let server = LockFreeDaemonServer::new(config).await.unwrap();
+        let server = DaemonServer::new(config).await.unwrap();
 
         let stats = server.get_statistics();
         assert_eq!(stats.active_connections, 0);

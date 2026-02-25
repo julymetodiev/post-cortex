@@ -175,7 +175,7 @@ impl HotContext {
 /// Replaces SimpleEntityGraph with lock-free concurrent access.
 /// Entity nodes use atomic counters for mention tracking.
 /// Relationships use DashMap with sequential IDs for lock-free access.
-pub struct LockFreeEntityGraph {
+pub struct EntityGraph {
     pub entities: DashMap<String, EntityNode>, // Public for len() access
     relationships: DashMap<u64, crate::core::context_update::EntityRelationship>,
     next_rel_id: Arc<AtomicU64>,
@@ -195,7 +195,7 @@ pub struct EntityNode {
 // Note: Using EntityRelationship from core::context_update instead of defining our own
 // pub use crate::core::context_update::EntityRelationship;
 
-impl LockFreeEntityGraph {
+impl EntityGraph {
     /// Create new empty entity graph (lock-free)
     pub fn new() -> Self {
         Self {
@@ -298,7 +298,7 @@ impl LockFreeEntityGraph {
     }
 }
 
-impl Default for LockFreeEntityGraph {
+impl Default for EntityGraph {
     fn default() -> Self {
         Self::new()
     }
@@ -379,7 +379,7 @@ mod tests {
     fn test_entity_graph() {
         use crate::core::context_update::EntityRelationship;
 
-        let graph = LockFreeEntityGraph::new();
+        let graph = EntityGraph::new();
         assert_eq!(graph.entity_count(), 0);
 
         // Add entities
