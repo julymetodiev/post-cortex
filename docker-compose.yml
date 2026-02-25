@@ -1,0 +1,21 @@
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:v3.0.0
+    container_name: surrealdb
+    user: "0:0"
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - surrealdb-data:/data
+    command: start --user root --pass root --bind 0.0.0.0:8000 rocksdb:/data/database.db
+
+  surrealist:
+    image: surrealdb/surrealist:latest
+    container_name: surrealist
+    restart: unless-stopped
+    ports:
+      - "8090:8080"
+
+volumes:
+  surrealdb-data:
