@@ -24,9 +24,17 @@ Project instructions for AI assistants working with Post-Cortex.
 
 **BEFORE answering ANY question about code, architecture, or past decisions:**
 
-1. Call `search-specialist` agent with the question
+1. Call `semantic_search` directly (session → workspace → global)
 2. Check results
 3. Then formulate answer
+
+```
+mcp__post-cortex__semantic_search(
+  query: "your question",
+  scope: "session",
+  scope_id: "bf52f62e-8e26-4e9e-8501-c42753d9a9ee"
+)
+```
 
 **NO EXCEPTIONS.**
 
@@ -34,9 +42,17 @@ Project instructions for AI assistants working with Post-Cortex.
 
 **AFTER discovering anything new, making decisions, or changing code:**
 
-1. Call `context-builder` agent IMMEDIATELY
+1. Call `update_conversation_context` directly
 2. Log what you discovered/decided/solved
-3. Do this BEFORE responding to user
+3. Can run in background to not block response
+
+```
+mcp__post-cortex__update_conversation_context(
+  session_id: "bf52f62e-8e26-4e9e-8501-c42753d9a9ee",
+  interaction_type: "decision_made",
+  content: { "decision": "...", "rationale": "..." }
+)
+```
 
 | Situation | Type |
 |-----------|------|
@@ -47,70 +63,98 @@ Project instructions for AI assistants working with Post-Cortex.
 | New requirement | `requirement_added` |
 | Concept explained | `concept_defined` |
 
-### RULE 3: Self-Check
+### RULE 3: Self-Check (enforced by Stop hook)
 
-After EVERY response, verify:
+The `Stop` hook automatically verifies after EVERY response:
 - Did I search before answering a codebase question?
 - Did I log any new discoveries?
 
-If NO → fix immediately.
+If not → Claude is forced to continue and fulfill the missing rule.
 
 ---
 
-## Agent Reference
+## MCP Tools (Direct Calls)
 
-Use **Task tool** with `subagent_type`:
+Use these tools **directly** — do NOT use subagents for search/log operations.
 
-| Agent | subagent_type | When to Use |
-|-------|---------------|-------------|
-| Search | `search-specialist` | Before answering questions |
-| Context | `context-builder` | After discovering/deciding anything |
-| Analyst | `knowledge-analyst` | For summaries and analysis |
-| Curator | `memory-curator` | For session/workspace management |
+| Tool | Purpose | When |
+|------|---------|------|
+| `semantic_search` | Search knowledge | **Before** answering code/arch questions |
+| `update_conversation_context` | Log discoveries | **After** decisions, fixes, changes |
+| `get_structured_summary` | Session summaries | For analysis and reviews |
+| `query_conversation_context` | Entity queries | For entity relationships, keyword search |
+| `session` | Session CRUD | Create/list sessions |
+| `manage_workspace` | Workspace CRUD | Manage workspaces |
 
-### Examples
+### Search Examples
 
-**Search:**
+**Session search:**
 ```
-Task(subagent_type="search-specialist")
-prompt: "Search for: how embeddings work
-         Session ID: bf52f62e-8e26-4e9e-8501-c42753d9a9ee"
+semantic_search(query: "...", scope: "session", scope_id: "bf52f62e-...")
 ```
+
+**Workspace search (cross-session):**
+```
+semantic_search(query: "...", scope: "workspace", scope_id: "c7c6dfa7-...")
+```
+
+**Global search:**
+```
+semantic_search(query: "...", scope: "global")
+```
+
+### Log Examples
 
 **Log decision:**
-```
-Task(subagent_type="context-builder")
-prompt: "Log decision_made:
-         Decision: Using VoyageAI for embeddings
-         Rationale: Better multilingual support
-         Session ID: bf52f62e-8e26-4e9e-8501-c42753d9a9ee"
+```json
+update_conversation_context(
+  session_id: "bf52f62e-...",
+  interaction_type: "decision_made",
+  content: { "decision": "Use X", "rationale": "Because Y", "alternatives": "Z" }
+)
 ```
 
 **Log Q&A:**
+```json
+update_conversation_context(
+  session_id: "bf52f62e-...",
+  interaction_type: "qa",
+  content: { "question": "How does X work?", "answer": "X works by..." }
+)
 ```
-Task(subagent_type="context-builder")
-prompt: "Log qa:
-         Question: How does semantic search work?
-         Answer: Uses MiniLM embeddings with cosine similarity
-         Session ID: bf52f62e-8e26-4e9e-8501-c42753d9a9ee"
+
+**Bulk log:**
+```json
+update_conversation_context(
+  session_id: "bf52f62e-...",
+  updates: [
+    { interaction_type: "qa", content: { "question": "...", "answer": "..." } },
+    { interaction_type: "decision_made", content: { "decision": "...", "rationale": "..." } }
+  ]
+)
 ```
 
 > **Tip:** Use `recency_bias` for time-sensitive searches (e.g., recent bugs). See [USAGE_GUIDE.md](docs/USAGE_GUIDE.md#handling-knowledge-obsolescence) for recommended values.
 
 ---
 
-## MCP Tools (6 Consolidated)
+## Subagents (Complex Analysis Only)
 
-<details>
-<summary>Reference for agent authors</summary>
+Use subagents **only** for multi-step analysis that requires multiple tool calls:
 
-| Tool | Purpose |
-|------|---------|
-| `session` | Create/list sessions |
-| `update_conversation_context` | Add context (single or bulk) |
-| `semantic_search` | Universal search with scope |
-| `get_structured_summary` | Session summaries |
-| `query_conversation_context` | Entity analysis, queries |
-| `manage_workspace` | Workspace CRUD |
+| Agent | subagent_type | When to Use |
+|-------|---------------|-------------|
+| Analyst | `knowledge-analyst` | Multi-step summaries, cross-session analysis |
+| Curator | `memory-curator` | Complex workspace reorganization |
 
-</details>
+> **Do NOT use** `search-specialist` or `context-builder` subagents. Call MCP tools directly instead.
+
+---
+
+## Hooks (Automatic Enforcement)
+
+| Hook | Event | Purpose |
+|------|-------|---------|
+| PCX Reminder | `UserPromptSubmit` | Injects session ID + rules before every prompt |
+| Stop Check | `Stop` (prompt) | Verifies Rule 1 & 2 compliance before stopping |
+| Compact Reinject | `SessionStart` (compact) | Re-injects PCX context after compaction |
