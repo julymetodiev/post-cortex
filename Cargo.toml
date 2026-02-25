@@ -48,8 +48,8 @@ async-trait = "0.1"
 
 # SurrealDB storage backend (optional) - using kv-mem for local tests, protocol-ws for remote
 # NOTE: kv-rocksdb conflicts with our direct rocksdb dependency, so we use kv-mem or remote only
-surrealdb = { version = "3.0.0-beta", optional = true, features = ["kv-mem", "protocol-ws"] }
-surrealdb-types = { version = "3.0.0-beta", optional = true }
+surrealdb = { version = "3.0.0", optional = true, features = ["kv-mem", "protocol-ws"] }
+surrealdb-types = { version = "3.0.0", optional = true }
 
 # HTTP daemon and MCP dependencies
 axum = "0.8"
