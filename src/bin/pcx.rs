@@ -1135,7 +1135,7 @@ async fn handle_export(
     #[cfg(feature = "surrealdb-storage")]
     let use_surrealdb = daemon_config.storage_backend == "surrealdb";
     #[cfg(not(feature = "surrealdb-storage"))]
-    let use_surrealdb = false;
+    let _use_surrealdb = false;
 
     // Perform export based on storage backend
     #[cfg(feature = "surrealdb-storage")]
@@ -1316,7 +1316,7 @@ async fn handle_import(
     #[cfg(feature = "surrealdb-storage")]
     let use_surrealdb = daemon_config.storage_backend == "surrealdb";
     #[cfg(not(feature = "surrealdb-storage"))]
-    let use_surrealdb = false;
+    let _use_surrealdb = false;
 
     #[cfg(feature = "surrealdb-storage")]
     if use_surrealdb {
