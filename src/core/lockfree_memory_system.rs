@@ -203,6 +203,9 @@ pub struct StorageActor {
     receiver: UnboundedReceiver<StorageMessage>,
     performance_monitor: Arc<LockFreePerformanceMonitor>,
     operation_count: AtomicU64,
+    load_count: AtomicU64,
+    save_count: AtomicU64,
+    delete_count: AtomicU64,
 }
 
 /// Operation types for dynamic timeout configuration
@@ -795,29 +798,34 @@ impl LockFreeConversationMemorySystem {
         &self,
         query: &str,
     ) -> Result<Vec<Uuid>, String> {
-        // Simple implementation - get all sessions and filter
         let session_ids = self.list_sessions().await?;
+        let query_lower = query.to_lowercase();
         let mut matching_sessions = Vec::new();
 
-        for session_id in session_ids {
-            if let Ok(session_arc) = self.get_session(session_id).await {
-                let session = session_arc.load();
+        for session_id in &session_ids {
+            // Try in-memory cache first, then fall back to storage
+            let session_arc = if let Some(cached) = self.session_manager.sessions.get(session_id) {
+                cached
+            } else if let Ok(loaded) = self.get_session(*session_id).await {
+                loaded
+            } else {
+                continue;
+            };
 
-                let name_match = session
-                    .name()
-                    .as_ref()
-                    .map(|n| n.to_lowercase().contains(&query.to_lowercase()))
-                    .unwrap_or(false);
+            let session = session_arc.load();
 
-                let desc_match = session
-                    .description()
-                    .as_ref()
-                    .map(|d| d.to_lowercase().contains(&query.to_lowercase()))
-                    .unwrap_or(false);
+            let name_match = session
+                .name()
+                .as_ref()
+                .is_some_and(|n| n.to_lowercase().contains(&query_lower));
 
-                if name_match || desc_match {
-                    matching_sessions.push(session_id);
-                }
+            let desc_match = session
+                .description()
+                .as_ref()
+                .is_some_and(|d| d.to_lowercase().contains(&query_lower));
+
+            if name_match || desc_match {
+                matching_sessions.push(*session_id);
             }
         }
 
@@ -929,19 +937,23 @@ impl LockFreeConversationMemorySystem {
         // Update session atomically using CAS loop to prevent race conditions
         let update_result = {
             let start = std::time::Instant::now();
+            const MAX_CAS_ATTEMPTS: u32 = 20;
             let mut attempts = 0;
 
             let result_holder = loop {
                 attempts += 1;
-                if attempts > 100 {
-                    break Err("Failed to update session: high contention (CAS loop exhausted)".to_string());
+                if attempts > MAX_CAS_ATTEMPTS {
+                    break Err(format!(
+                        "Failed to update session: high contention ({} CAS attempts exhausted)",
+                        MAX_CAS_ATTEMPTS
+                    ));
                 }
 
-                // Load current session
+                // Load current session and clone for mutation
                 let current_arc = session_arc.load();
                 let mut new_session = (**current_arc).clone();
 
-                // Add context update (async)
+                // Add context update
                 let result = Self::add_context_update_to_session(
                     &mut new_session,
                     description.clone(),
@@ -956,13 +968,19 @@ impl LockFreeConversationMemorySystem {
 
                         // Check if swap was successful (pointer equality)
                         if Arc::ptr_eq(&prev_arc, &current_arc) {
-                            // Success
+                            if attempts > 1 {
+                                debug!("CAS succeeded after {} attempts for session {}", attempts, session_id);
+                            }
                             break Ok((uid, update));
                         }
-                        
-                        // CAS failed, retry
+
+                        // CAS failed, retry with exponential backoff
                         tracing::debug!("CAS failed for session {}, retrying (attempt {})", session_id, attempts);
-                        tokio::task::yield_now().await;
+                        if attempts > 3 {
+                            tokio::time::sleep(std::time::Duration::from_micros(100 * (1 << (attempts - 3).min(5)))).await;
+                        } else {
+                            tokio::task::yield_now().await;
+                        }
                     },
                     Err(e) => {
                         // Logic error, not contention
@@ -1788,6 +1806,9 @@ impl StorageActor {
             receiver,
             performance_monitor,
             operation_count: AtomicU64::new(0),
+            load_count: AtomicU64::new(0),
+            save_count: AtomicU64::new(0),
+            delete_count: AtomicU64::new(0),
         };
 
         // Create confirmation channel for startup synchronization
@@ -1837,7 +1858,8 @@ impl StorageActor {
                 session_id,
                 response_tx,
             } => {
-                tracing::info!("StorageActor: Loading session {}", session_id);
+                self.load_count.fetch_add(1, Ordering::Relaxed);
+                debug!("StorageActor: Loading session {}", session_id);
                 let result = match self.storage.load_session(session_id).await {
                     Ok(session) => Ok(Some(session)),
                     Err(_) => Ok(None), // Session not found is OK, not an error
@@ -1848,6 +1870,7 @@ impl StorageActor {
                 session,
                 response_tx,
             } => {
+                self.save_count.fetch_add(1, Ordering::Relaxed);
                 let result = self
                     .storage
                     .save_session(&session)
@@ -1859,6 +1882,7 @@ impl StorageActor {
                 session_id,
                 response_tx,
             } => {
+                self.delete_count.fetch_add(1, Ordering::Relaxed);
                 let result = self
                     .storage
                     .delete_session(session_id)
@@ -1868,6 +1892,7 @@ impl StorageActor {
                 let _ = response_tx.send(result).await;
             }
             StorageMessage::ListSessions { response_tx } => {
+                self.load_count.fetch_add(1, Ordering::Relaxed);
                 let result = self
                     .storage
                     .list_sessions()
@@ -1878,9 +1903,9 @@ impl StorageActor {
             StorageMessage::GetStats { response_tx } => {
                 let stats = StorageStats {
                     total_operations: self.operation_count.load(Ordering::Relaxed),
-                    load_operations: 0, // TODO: implement detailed counters
-                    save_operations: 0,
-                    delete_operations: 0,
+                    load_operations: self.load_count.load(Ordering::Relaxed),
+                    save_operations: self.save_count.load(Ordering::Relaxed),
+                    delete_operations: self.delete_count.load(Ordering::Relaxed),
                     avg_operation_time_ns: 0,
                     last_operation_timestamp: SystemTime::now()
                         .duration_since(UNIX_EPOCH)

@@ -494,7 +494,7 @@ pub async fn query_conversation_context_with_system(
             }
         };
         let session = session_arc.load();
-        eprintln!("DEBUG: query_conversation_context_with_system - Session loaded");
+        debug!("query_conversation_context: session {} loaded", session_id);
 
         let query = match query_type.as_str() {
             "recent_changes" => {
@@ -1514,12 +1514,10 @@ pub async fn semantic_search(
                     .await
                     .map_err(|e| anyhow::anyhow!(e))
             }
-            "global" => {
-                system
-                    .semantic_search_global(&query, None, None, None)
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e))
-            }
+            "global" => system
+                .semantic_search_global(&query, None, None, None)
+                .await
+                .map_err(|e| anyhow::anyhow!(e)),
             _ => {
                 return Ok(MCPToolResult::error(format!(
                     "Invalid search scope type: {}",

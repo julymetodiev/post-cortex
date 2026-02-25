@@ -505,9 +505,21 @@ impl SimpleEntityGraph {
         entities.into_iter().take(limit).collect()
     }
 
-    /// Search entities - unchanged from original
+    /// Search entities by name or description (case-insensitive)
     pub fn search_entities(&self, query: &str) -> Vec<&EntityData> {
         let query_lower = query.to_lowercase();
+
+        // Fast path: exact key lookup
+        if let Some(entity) = self.entities.get(query) {
+            return vec![entity];
+        }
+
+        // Case-insensitive key lookup
+        if let Some(entity) = self.entities.get(&query_lower) {
+            return vec![entity];
+        }
+
+        // Fallback: substring search
         self.entities
             .values()
             .filter(|entity| {

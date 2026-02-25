@@ -800,7 +800,7 @@ impl ActiveSession {
         debug!("ActiveSession: update_entity_graph completed");
 
         // Add code reference if present with timeout
-        debug!("DEBUG: About to check limited_update.related_code");
+        debug!("ActiveSession: checking related_code reference");
         if let Some(code_ref) = &limited_update.related_code {
             debug!("ActiveSession: Code reference found, processing...");
             let code_ref_clone = CodeReference {
@@ -1066,17 +1066,11 @@ impl ActiveSession {
         );
 
         // Extract entities from update content if not explicitly provided
-        info!("DEBUG: About to clone creates_entities");
         let mut extracted_entities = update.creates_entities.clone();
-        info!(
-            "DEBUG: Cloned creates_entities, length={}",
-            extracted_entities.len()
-        );
-
-        info!("DEBUG: About to clone references_entities");
         let mut referenced_entities = update.references_entities.clone();
-        info!(
-            "DEBUG: Cloned references_entities, length={}",
+        debug!(
+            "update_entity_graph: {} created entities, {} referenced entities",
+            extracted_entities.len(),
             referenced_entities.len()
         );
 
@@ -1198,11 +1192,11 @@ impl ActiveSession {
                 &format!("Extracted from: {}", update.content.title),
             );
         }
-        info!("DEBUG: Extracted entities added successfully");
+        debug!("update_entity_graph: extracted entities added");
 
         // Update referenced entities
-        info!(
-            "DEBUG: Updating {} referenced entities",
+        debug!(
+            "update_entity_graph: updating {} referenced entities",
             referenced_entities.len()
         );
         for name in &referenced_entities {
@@ -1220,28 +1214,24 @@ impl ActiveSession {
                 );
             }
         }
-        info!("DEBUG: Entity references added successfully");
+        debug!("update_entity_graph: entity references added");
 
         // Create explicit relationships
-        info!(
-            "DEBUG: Creating {} explicit relationships",
+        debug!(
+            "update_entity_graph: creating {} explicit relationships",
             update.creates_relationships.len()
         );
         for relationship in &update.creates_relationships {
             entity_graph.add_relationship(relationship.clone());
         }
-        info!("DEBUG: Explicit relationships created successfully");
+        debug!("update_entity_graph: explicit relationships created");
 
         // Add heuristically extracted relationships
-        info!(
-            "DEBUG: Heuristically extracted {} relationships from text",
+        debug!(
+            "update_entity_graph: adding {} heuristic relationships",
             extracted_rels.len()
         );
         for rel in extracted_rels {
-            info!(
-                "DEBUG: Adding extracted relationship: {} -> {} ({:?})",
-                rel.from_entity, rel.to_entity, rel.relation_type
-            );
             entity_graph.add_relationship(rel);
         }
 
@@ -1250,7 +1240,7 @@ impl ActiveSession {
         // from the same update. Only explicit relationships from text analysis
         // (extracted_rels above) are now added.
 
-        info!("DEBUG: add_incremental_update completed successfully, returning Ok");
+        debug!("update_entity_graph: completed successfully");
         Ok(())
     }
 

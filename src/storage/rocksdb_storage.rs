@@ -35,7 +35,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::info;
+use tracing::{debug, info};
 
 use uuid::Uuid;
 
@@ -226,7 +226,7 @@ impl RealRocksDBStorage {
         Ok(storage)
     }
 
-    /// Rebuild the in-memory HNSW index from RocksDB embeddings
+    /// Rebuild the in-memory HNSW index from RocksDB embeddings using batch insertion
     async fn rebuild_hnsw_index(&self) -> Result<()> {
         let embeddings = self.load_all_embeddings().await?;
         let count = embeddings.len();
@@ -241,21 +241,36 @@ impl RealRocksDBStorage {
             count
         );
 
-        for embedding in embeddings {
-            let metadata = embedding.to_metadata();
-            // Add to in-memory index (ignore errors for individual vectors)
-            if let Err(e) = self.vector_index.add_vector(embedding.vector, metadata) {
-                tracing::warn!(
-                    "Failed to add embedding {} to HNSW index: {}",
-                    embedding.content_id,
-                    e
+        let start = std::time::Instant::now();
+        const BATCH_SIZE: usize = 100;
+        let mut loaded = 0;
+
+        for chunk in embeddings.chunks(BATCH_SIZE) {
+            let batch: Vec<(Vec<f32>, _)> = chunk
+                .iter()
+                .map(|e| (e.vector.clone(), e.to_metadata()))
+                .collect();
+
+            match self.vector_index.add_vectors_batch(batch) {
+                Ok(ids) => loaded += ids.len(),
+                Err(e) => {
+                    tracing::warn!("Failed to add embedding batch to HNSW index: {}", e);
+                }
+            }
+
+            if loaded % 500 == 0 && loaded > 0 {
+                debug!(
+                    "RealRocksDBStorage: HNSW rebuild progress: {}/{} vectors",
+                    loaded, count
                 );
             }
         }
 
+        let elapsed = start.elapsed();
         info!(
-            "RealRocksDBStorage: HNSW index ready with {} vectors",
-            self.vector_index.len()
+            "RealRocksDBStorage: HNSW index ready with {} vectors (rebuilt in {:.1}ms)",
+            self.vector_index.len(),
+            elapsed.as_secs_f64() * 1000.0
         );
 
         Ok(())
