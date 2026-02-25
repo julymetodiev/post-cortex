@@ -1461,6 +1461,94 @@ impl RealRocksDBStorage {
         Ok(())
     }
 
+    /// Batch save entities and relationships in a single RocksDB WriteBatch.
+    /// This is significantly more efficient than individual saves when updating
+    /// multiple entities/relationships at once (1 spawn_blocking vs N).
+    pub async fn batch_save_graph_data(
+        &self,
+        entities: &[StoredEntity],
+        relationships: &[StoredRelationship],
+    ) -> Result<()> {
+        if entities.is_empty() && relationships.is_empty() {
+            return Ok(());
+        }
+
+        let db = self.db.clone();
+        let entities = entities.to_vec();
+        let relationships = relationships.to_vec();
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut batch = WriteBatch::default();
+
+            for entity in &entities {
+                let key = Self::entity_key(entity.session_id, &entity.name);
+                let data = bincode::serde::encode_to_vec(entity, bincode::config::standard())
+                    .map_err(|e| anyhow::anyhow!("Failed to serialize entity: {}", e))?;
+                batch.put(key.as_bytes(), &data);
+            }
+
+            for rel in &relationships {
+                let rel_type: RelationType = rel
+                    .relation_type
+                    .parse()
+                    .unwrap_or(RelationType::RelatedTo);
+                let key = Self::relationship_key(
+                    rel.session_id,
+                    &rel.from_entity,
+                    &rel.to_entity,
+                    &rel_type,
+                );
+                let data = bincode::serde::encode_to_vec(rel, bincode::config::standard())
+                    .map_err(|e| anyhow::anyhow!("Failed to serialize relationship: {}", e))?;
+                batch.put(key.as_bytes(), &data);
+            }
+
+            db.write(batch)?;
+            debug!(
+                "Batch saved {} entities + {} relationships",
+                entities.len(),
+                relationships.len()
+            );
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))??;
+
+        Ok(())
+    }
+
+    /// Batch save embeddings in a single RocksDB WriteBatch.
+    pub async fn batch_save_embeddings(&self, embeddings: &[StoredEmbedding]) -> Result<()> {
+        if embeddings.is_empty() {
+            return Ok(());
+        }
+
+        let db = self.db.clone();
+        let embeddings = embeddings.to_vec();
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut batch = WriteBatch::default();
+
+            for embedding in &embeddings {
+                let key = format!(
+                    "embedding:{}:{}",
+                    embedding.session_id, embedding.content_id
+                );
+                let data = bincode::serde::encode_to_vec(embedding, bincode::config::standard())
+                    .map_err(|e| anyhow::anyhow!("Failed to serialize embedding: {}", e))?;
+                batch.put(key.as_bytes(), &data);
+            }
+
+            db.write(batch)?;
+            debug!("Batch saved {} embeddings", embeddings.len());
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))??;
+
+        Ok(())
+    }
+
     /// Load all relationships for a session
     async fn load_session_relationships(
         &self,
