@@ -1472,6 +1472,12 @@ async fn api_create_workspace(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
+    // Update in-memory workspace manager
+    server
+        .memory_system
+        .workspace_manager
+        .restore_workspace(id, req.name.clone(), description.clone(), vec![]);
+
     Ok(Json(WorkspaceInfo {
         id: id.to_string(),
         name: req.name,
@@ -1519,9 +1525,15 @@ async fn api_attach_session(
     server
         .memory_system
         .get_storage()
-        .add_session_to_workspace(ws_id, sess_id, role)
+        .add_session_to_workspace(ws_id, sess_id, role.clone())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    // Update in-memory workspace manager
+    let _ = server
+        .memory_system
+        .workspace_manager
+        .add_session_to_workspace(&ws_id, sess_id, role);
 
     Ok(StatusCode::OK)
 }
