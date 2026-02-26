@@ -31,19 +31,17 @@ chmod +x /usr/local/bin/pcx
 
 ## Quick Start
 
-### 1. Configure MCP
+### 1. Configure MCP (once, globally)
 
-Add to your Claude config (`claude_desktop_config.json` or `.mcp.json`):
+```bash
+# HTTP transport (recommended, requires daemon running)
+claude mcp add --scope user --transport http post-cortex http://127.0.0.1:3737/mcp
 
-```json
-{
-  "mcpServers": {
-    "post-cortex": {
-      "command": "pcx"
-    }
-  }
-}
+# Or stdio transport (no daemon needed)
+claude mcp add --scope user --transport stdio post-cortex -- pcx
 ```
+
+This registers Post-Cortex for all projects on your machine.
 
 ### 2. Set Up Your Project
 
