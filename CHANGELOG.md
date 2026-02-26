@@ -5,6 +5,20 @@ All notable changes to Post-Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.19] - 2026-02-26
+
+### Added
+
+- **NER engine pre-loading on daemon startup**: DistilBERT NER model is now loaded eagerly via `tokio::spawn` during daemon init, ensuring entity extraction uses the ML model instead of the regex/pattern-matching fallback
+- **`pcx rebuild-entities` CLI command**: Rebuilds the entity graph for a session (or all sessions with `--all`) by replaying all context updates through the NER engine, replacing noisy pattern-matched entities with precise DistilBERT-extracted ones
+- **`clear_session_entities` on Storage trait**: Deletes all entities and relationships for a session from both RocksDB and SurrealDB before saving the rebuilt graph, preventing stale entities from persisting after rebuild
+
+### Fixed
+
+- **NER engine was never loaded**: `preload_ner_engine()` was defined but never called — all entity extraction silently used the pattern-matching fallback, producing ~4x more noisy entities (e.g., "access", "Arc", "HashMap" stored as entities)
+- **Stop hook not enforcing Rule 2**: Rewrote hook reason message from diagnostic to actionable format so Claude auto-fixes compliance violations
+- **SurrealDB entity cleanup on rebuild**: `save_session` uses UPSERT which doesn't remove old entities — added explicit DELETE of all entity + relationship tables before saving rebuilt graph
+
 ## [0.1.18] - 2026-02-26
 
 ### Changed
