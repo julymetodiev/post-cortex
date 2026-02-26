@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 /// Start RMCP-based SSE server
@@ -96,6 +96,19 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
         error!("Failed to clear query cache on startup: {}", e);
     } else {
         info!("Query cache cleared successfully on daemon startup");
+    }
+
+    // Pre-load NER engine in background (DistilBERT model download + init)
+    #[cfg(feature = "embeddings")]
+    {
+        tokio::spawn(async {
+            use crate::session::active_session::preload_ner_engine;
+            if preload_ner_engine().await {
+                info!("NER engine pre-loaded successfully");
+            } else {
+                warn!("NER engine pre-load failed, entity extraction will use pattern matching fallback");
+            }
+        });
     }
 
     // Create cancellation token for graceful shutdown
