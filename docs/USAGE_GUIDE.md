@@ -31,133 +31,91 @@ manage_workspace(action: "add_session", workspace_id: "...", session_id: "...", 
 
 ### 2. Configure CLAUDE.md
 
-Create a `CLAUDE.md` file in your project root:
+Copy the template from `docs/examples/CLAUDE.md` to your project root and replace the placeholder IDs:
 
 ```markdown
 # CLAUDE.md
 
-## Session Context
+## Session
 
-| Key | Value |
-|-----|-------|
-| **Session ID** | `your-session-uuid-here` |
-| **Workspace ID** | `your-workspace-uuid-here` |
-| **Project** | my-project |
+| Session ID | `<YOUR_SESSION_ID>` |
+|---|---|
+| **Workspace ID** | `<YOUR_WORKSPACE_ID>` |
 
-## Mandatory Rules
+## Rules
 
-### RULE 1: Search Before Answering
-Before answering questions about code or architecture, call `semantic_search` directly.
+1. **Search before answering** — call `semantic_search` (session → workspace → global) BEFORE answering any code/architecture question
+2. **Log after discovery** — call `update_conversation_context` AFTER making decisions, fixing bugs, or changing code
+3. **Self-check** — enforced by Stop hook automatically
 
-### RULE 2: Log After Discovery
-After discovering anything new or making decisions, call `update_conversation_context` directly.
+### Interaction Types
 
-### RULE 3: Self-Check (enforced by Stop hook)
-The Stop hook automatically verifies Rule 1 & 2 compliance after every response.
+`qa` · `decision_made` · `problem_solved` · `code_change` · `requirement_added` · `concept_defined`
 
-## MCP Tools (Direct Calls)
+## MCP Tools
 
-Use these tools **directly** — do NOT use subagents for search/log operations.
+Call directly — do NOT use subagents for simple search/log operations.
 
-| Tool | Purpose | When |
-|------|---------|------|
-| `semantic_search` | Search knowledge | **Before** answering code/arch questions |
-| `update_conversation_context` | Log discoveries | **After** decisions, fixes, changes |
-| `get_structured_summary` | Session summaries | For analysis and reviews |
-| `query_conversation_context` | Entity queries | For entity relationships |
-| `session` | Session CRUD | Create/list sessions |
-| `manage_workspace` | Workspace CRUD | Manage workspaces |
+| Tool | When |
+|------|------|
+| `semantic_search` | Before answering code/arch questions |
+| `update_conversation_context` | After decisions, fixes, changes |
+| `get_structured_summary` | Session analysis and reviews |
+| `query_conversation_context` | Entity relationships, keyword search |
+| `session` | Create/list sessions |
+| `manage_workspace` | Workspace CRUD |
 
-## Subagents (Complex Analysis Only)
+## Hooks
 
-| Agent | subagent_type | When to Use |
-|-------|---------------|-------------|
-| Analyst | `knowledge-analyst` | Multi-step summaries, cross-session analysis |
-| Curator | `memory-curator` | Complex workspace reorganization |
-
-> **Do NOT use** `search-specialist` or `context-builder` subagents. Call MCP tools directly instead.
+| Event | Purpose |
+|-------|---------|
+| `UserPromptSubmit` | Injects session ID + rules |
+| `Stop` (prompt) | Verifies rule compliance |
+| `SessionStart` (compact) | Re-injects PCX context after compaction |
 ```
 
-See [CLAUDE.md](../CLAUDE.md) for a complete working example.
+See [docs/examples/CLAUDE.md](examples/CLAUDE.md) for the full template.
 
 ### 3. Configure Hooks
 
-Hooks enforce the mandatory rules automatically via Claude Code's hook system. Add them to `.claude/settings.json`:
+Copy `docs/examples/settings.json` to `.claude/settings.json` and replace `<YOUR_SESSION_ID>` with your session UUID.
 
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "echo '[PCX] Session: <session-id> | Rules: 1) Search PCX before answering code/arch questions 2) Log discoveries to PCX after'"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "Check if Claude followed PCX rules: 1) Called semantic_search before answering code/arch questions 2) Called update_conversation_context after making changes. If rules were followed or not applicable, respond {\"ok\": true}. If violated, respond {\"ok\": false, \"reason\": \"PCX Rule violated: [which rule]. Session ID: <session-id>\"}."
-          }
-        ]
-      }
-    ],
-    "SessionStart": [
-      {
-        "matcher": "compact",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pcx-compact-reinject.sh"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+Three hooks enforce the rules automatically:
 
 | Hook | Event | Type | Purpose |
 |------|-------|------|---------|
 | **PCX Reminder** | `UserPromptSubmit` | `command` | Injects session ID and rules before every prompt |
-| **Stop Check** | `Stop` | `prompt` | Verifies Rule 1 & 2 compliance; forces continuation if violated |
+| **Stop Check** | `Stop` | `prompt` | JSON-only compliance checker; forces continuation if rules violated |
 | **Compact Reinject** | `SessionStart` (compact) | `command` | Re-injects PCX context after context window compaction |
 
-**How hooks work:**
+**How they work:**
 
-- **`UserPromptSubmit`** (command): Runs before every user message. The echo output is injected as a system reminder, ensuring Claude always knows the session ID and rules.
-- **`Stop`** (prompt): A prompt-type hook that runs when Claude is about to stop responding. A small model evaluates whether the rules were followed. If `{\"ok\": false}`, Claude is forced to continue and fulfill the missing rule.
-- **`SessionStart`** with `matcher: "compact"`: Runs when the context window is compacted (messages compressed). The shell script re-injects session context and optionally fetches a recent summary from the PCX daemon.
+- **`UserPromptSubmit`**: Echo output is injected as a system reminder, ensuring Claude always knows the session ID and rules.
+- **`Stop`**: A prompt-type hook where a small model checks rule compliance. Outputs `{"ok": true}` or `{"ok": false, "reason": "..."}`. If false, Claude is forced to continue.
+- **`SessionStart`** with `matcher: "compact"`: Runs the reinject script when context is compacted. Copy `docs/examples/pcx-compact-reinject.sh` to `.claude/hooks/` and replace the placeholder IDs.
 
-**Compact reinject script** (`.claude/hooks/pcx-compact-reinject.sh`):
-
-The script outputs static PCX context (session ID, workspace ID, rules) and optionally fetches a recent summary from the running PCX daemon via HTTP. This ensures context survives compaction. See [pcx-compact-reinject.sh](../.claude/hooks/pcx-compact-reinject.sh) for the full implementation.
+See [docs/examples/settings.json](examples/settings.json) and [docs/examples/pcx-compact-reinject.sh](examples/pcx-compact-reinject.sh) for templates.
 
 ### 4. (Optional) Add Agent Definitions
 
-For advanced multi-step workflows, add custom agents in `.claude/agents/`:
+For advanced multi-step workflows, copy agents to `~/.claude/agents/` (global) or `.claude/agents/` (per-project):
 
 ```
-.claude/
-├── hooks/
-│   └── pcx-compact-reinject.sh  # Compact reinject script
-├── settings.json                # Hook configuration
-└── agents/
-    └── post-cortex-agents/
-        ├── SKILL.md             # Main skill definition
-        └── agents/
-            ├── knowledge-analyst.md  # Summaries and analysis
-            └── memory-curator.md     # Session/workspace management
+cp -r docs/examples/agents ~/.claude/agents/post-cortex-agents
 ```
 
-> **Note:** The `search-specialist` and `context-builder` agents still exist for backwards compatibility but are **deprecated**. Call MCP tools directly instead — it's faster and avoids unnecessary subagent overhead.
+This adds 4 specialized subagents:
 
-See [.claude/agents/](../.claude/agents/) for working examples.
+| Agent | subagent_type | Model | Purpose |
+|-------|---------------|-------|---------|
+| Context Builder | `context-builder` | Haiku | Log decisions, Q&A, problems, code changes |
+| Search Specialist | `search-specialist` | Sonnet | Find past knowledge, semantic search |
+| Knowledge Analyst | `knowledge-analyst` | Opus | Summaries, analysis, entity mapping |
+| Memory Curator | `memory-curator` | Haiku | Session/workspace management |
+
+> **Note:** For simple search/log operations, call MCP tools directly — it's faster than routing through subagents.
+
+See [docs/examples/agents/](examples/agents/) for all agent definitions.
 
 ## The Workflow
 
@@ -339,8 +297,8 @@ semantic_search(query: "...", date_from: "2024-01-01")
 
 | File | Purpose |
 |------|---------|
-| [CLAUDE.md](../CLAUDE.md) | Working example of project configuration |
-| [.claude/settings.json](../.claude/settings.json) | Hook configuration (enforcement) |
-| [.claude/hooks/](../.claude/hooks/) | Hook scripts (compact reinject) |
-| [.claude/agents/](../.claude/agents/) | Custom agent definitions |
+| [docs/examples/CLAUDE.md](examples/CLAUDE.md) | CLAUDE.md template with placeholders |
+| [docs/examples/settings.json](examples/settings.json) | Hook configuration template |
+| [docs/examples/pcx-compact-reinject.sh](examples/pcx-compact-reinject.sh) | Compact reinject script template |
+| [docs/examples/agents/](examples/agents/) | Agent definitions (copy to `~/.claude/agents/`) |
 | [PROJECT.md](../PROJECT.md) | Development documentation |

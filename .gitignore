@@ -38,7 +38,7 @@ tests/*.py
 tests/*.sh
 tests/test_data_*
 target
-examples
+psx_examples
 scripts
 GEMINI.md
 TODO.md

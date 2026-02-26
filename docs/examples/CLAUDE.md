@@ -1,12 +1,10 @@
 # CLAUDE.md
 
-**Docs:** [PROJECT.md](PROJECT.md) | **No "Co-Authored-By" in commits**
-
 ## Session
 
-| Session ID | `bf52f62e-8e26-4e9e-8501-c42753d9a9ee` |
+| Session ID | `<YOUR_SESSION_ID>` |
 |---|---|
-| **Workspace ID** | `c7c6dfa7-85c6-42b0-9b37-f2034c569a71` |
+| **Workspace ID** | `<YOUR_WORKSPACE_ID>` |
 
 ## Rules
 

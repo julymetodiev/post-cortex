@@ -1,0 +1,35 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pcx-compact-reinject.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "You are a JSON-only compliance checker. Output ONLY valid JSON, no other text.\n\nCheck if Post-Cortex rules were followed:\n1. Code/architecture question asked → was semantic_search called BEFORE answering?\n2. New discovery, decision, bug fix, or code change → was update_conversation_context called AFTER?\n\nIf rules followed OR not applicable (greetings, config, simple confirmations, status checks): {\"ok\": true}\nIf violated: {\"ok\": false, \"reason\": \"ACTION REQUIRED: Call mcp__post-cortex__update_conversation_context with session_id <YOUR_SESSION_ID> to log your discovery before stopping.\"}\n\nRespond with ONLY the JSON object, nothing else."
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '[PCX] Session: <YOUR_SESSION_ID> | Rules: 1) Search PCX before answering code/arch questions 2) Log discoveries to PCX after'"
+          }
+        ]
+      }
+    ]
+  }
+}
