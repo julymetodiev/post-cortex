@@ -5,6 +5,28 @@ All notable changes to Post-Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.20] - 2026-02-26
+
+### Added
+
+- **`pcx setup` interactive wizard**: New command that automates project initialization for Claude Code integration
+  - Creates sessions and workspaces via the running daemon
+  - Generates `.claude/` configuration files (CLAUDE.md, settings.json, hooks)
+  - Supports non-interactive mode with `--defaults` flag
+  - Templates for CLAUDE.md, settings.json, and context re-injection hooks
+  - `dialoguer` dependency for interactive CLI prompts
+
+### Changed
+
+- **Project configuration refactored**: Moved agent definitions and hook scripts to `docs/examples/`
+  - Example configurations now live in `docs/examples/` (CLAUDE.md, settings.json, hooks, agents)
+  - `pcx setup` generates project-specific configs from built-in templates instead of manual copying
+  - Simplified CLAUDE.md and USAGE_GUIDE.md to reference template-based setup
+
+### Fixed
+
+- **Daemon workspace state sync**: In-memory workspace state now syncs after API changes (create/delete), preventing stale data in subsequent requests
+
 ## [0.1.19] - 2026-02-26
 
 ### Added
