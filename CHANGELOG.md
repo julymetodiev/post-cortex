@@ -7,16 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.17] - 2026-02-26
 
+### Added
+
+- **Temporal Decay (Recency Bias) for Semantic Search** (PR #11, thanks to neiromaster):
+  - New `recency_bias` parameter on all semantic search scopes (session, workspace, global)
+  - Exponential decay formula: `base_score * e^(-lambda * days / 365)`
+  - Values: 0.0 (disabled) → 0.1–0.5 (soft bias) → 1.0+ (aggressive bias)
+  - Input validation: range [0.0, 10.0], rejects NaN/Infinity/negative values
+  - Cache key includes `recency_bias` to prevent collisions between different bias values
+  - Date range filtering integrates correctly with recency bias
+  - Works across all three search scopes and both storage backends
+  - Performance metrics: lock-free atomic counters for decay calculation tracking
+  - Criterion microbenchmarks for regression testing (~317 ps per decay calculation)
+
+- **MCP Dry-Run Mode and Error Recovery** (PR #10, thanks to neiromaster):
+  - `dry_run` parameter on `update_conversation_context` to validate without persisting
+  - Detailed preview of what would be stored
+  - `generate_recovery_suggestions()` analyzes error patterns and provides actionable hints
+  - Recovery suggestions automatically included in all MCP error responses
+
+- **ScoreAdjuster trait for pluggable scoring strategies**: New `src/core/scoring.rs` module
+  - `TemporalDecayAdjuster` encapsulates decay logic
+  - `CompositeScoreAdjuster` for composing multiple adjusters (Strategy Pattern)
+  - Easy to extend with custom adjusters (popularity, quality, etc.)
+
+- **Batch write methods for graph data and embeddings**: RocksDB WriteBatch for saving multiple entities, relationships, and embeddings in a single `spawn_blocking` call instead of N individual writes
+
+- **Docker Compose for SurrealDB and Surrealist**: Development environment setup
+
+- **Claude Code hooks and agent configuration**:
+  - Compact reinject hook to restore PCX context after compaction
+  - Stop hook for rule compliance verification
+  - UserPromptSubmit reminder hook
+  - Post-Cortex agent documentation and usage guide
+
+- **Multisession semantic search support**
+
+- **Workspace scope and new interaction types**: `requirement_added` and `concept_defined` for better knowledge capture
+
 ### Changed
 
-- **Removed "LockFree" prefix from all type names**: Consolidated indirection layers by inlining implementations into canonical modules and dropping the "LockFree" naming convention
+- **Removed "LockFree" prefix from all type names**: Consolidated indirection layers by inlining implementations into canonical modules
   - Deleted: `lockfree_embeddings.rs`, `lockfree_query_cache.rs`, `lockfree_vector_db.rs`, `embeddings_compat.rs`, `query_cache_compat.rs`
   - Renamed files: `lockfree_cache.rs` → `cache.rs`, `lockfree_memory_system.rs` → `memory_system.rs`, `lockfree_performance.rs` → `performance.rs`
   - Renamed types: `LockFreeConversationMemorySystem` → `ConversationMemorySystem`, `LockFreeCache` → `Cache`, `LockFreeVectorDB` → `VectorDB`, `LockFreeWorkspaceManager` → `WorkspaceManager`, `LockFreeNEREngine` → `NEREngine`, `LockFreeEntityGraph` → `EntityGraph`, `LockFreeDaemonServer` → `DaemonServer`, `LockFreePerformanceMonitor` → `PerformanceMonitor`
 
-### Added
+- **SearchOptions struct**: Consolidated search parameters to eliminate method proliferation (`_with_recency` wrappers removed, single method per scope)
 
-- **Batch write methods for graph data and embeddings**: RocksDB WriteBatch for saving multiple entities, relationships, and embeddings in a single `spawn_blocking` call instead of N individual writes
+- **Bumped surrealdb** from 3.0.0-beta to 3.0.0 stable
+
+### Fixed
+
+- **O(n²) performance bottleneck in workspace search**: Replaced N sequential vector DB searches with single `search_with_filter()` call (10 sessions: 500ms → 50ms, 100 sessions: 5s → 50ms)
+- **Vectorizer metrics sharing across clones**: Wrapped AtomicU64 metrics in Arc to aggregate across instances
+- **Inconsistent response formats**: All search scopes now return consistent JSON with results array
+- **Date range + recency_bias integration**: Date range parsing now occurs before recency_bias check
+- **Cache key collision**: `recency_bias` included in cache key to prevent stale results
+- **recency_bias CLI parity**: Added parameter extraction in CLI handlers for human users
+- **Dry-run session existence validation**: Extracted `check_session_exists_for_dry_run()` helper
+- **VALID_INTERACTION_TYPES constant**: Extracted for reuse across validation modules
 
 ### Improved
 
@@ -27,6 +76,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fast-path exact key lookup in entity graph search
   - Batch insertion for HNSW index rebuild with progress logging
   - Replaced DEBUG-level `info!`/`eprintln!` with proper `debug!` tracing
+
+- **Code quality refactoring**:
+  - Extracted `format_search_results()` helper (~80 lines deduplication)
+  - Unified search logic to remove conditional branching (~60 lines removed)
+  - Test fixture builder pattern in `tests/common/mod.rs`
+  - `parse_date_range()` helper eliminates ~75 lines of duplicated parsing
 
 ## [0.1.16] - 2026-01-16
 
