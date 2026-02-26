@@ -48,7 +48,7 @@ use surrealdb::Surreal;
 use surrealdb::engine::any::{Any, connect};
 use surrealdb::opt::auth::Root;
 use surrealdb::types::SurrealValue;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 use uuid::Uuid;
 
 /// Embedding dimension (must match the embedding model)
@@ -480,17 +480,19 @@ impl SurrealDBStorage {
 impl Storage for SurrealDBStorage {
     async fn save_session(&self, session: &ActiveSession) -> Result<()> {
         debug!(
-            "SurrealDBStorage: Saving session with ID: {} (normalized)",
+            "SurrealDBStorage: Saving session with ID: {} (normalized, batched)",
             session.id()
         );
 
-        // Get all context updates for normalized storage
+        let session_id = session.id();
         let all_updates: Vec<ContextUpdate> = session.hot_context.iter();
+        let entities = session.entity_graph.get_all_entities();
+        let relationships = session.entity_graph.get_all_relationships();
         let total_updates = all_updates.len() as u32;
 
-        // Save session metadata ONLY (no JSON blobs for context!)
+        // Build session metadata JSON for the transaction
         let record = SessionRecord {
-            session_id: session.id().to_string(),
+            session_id: session_id.to_string(),
             name: session.name().clone(),
             description: session.description().clone(),
             created_at: session.created_at().to_rfc3339(),
@@ -509,42 +511,88 @@ impl Storage for SurrealDBStorage {
             total_updates,
         };
 
-        // Upsert session metadata
-        let _: Option<SessionRecord> = self
-            .db
-            .upsert(("session", session.id().to_string()))
-            .content(record)
-            .await?;
+        // Build a single batched SurrealQL transaction
+        let mut query_parts: Vec<String> = Vec::with_capacity(
+            1 + all_updates.len() + entities.len() + relationships.len(),
+        );
 
-        // Save ALL context updates to normalized table
-        // This is the source of truth - not JSON blobs!
-        if !all_updates.is_empty() {
-            if let Err(e) = self.batch_save_updates(session.id(), all_updates).await {
-                warn!("Failed to save context updates: {}", e);
-            }
+        // 1. Session metadata upsert
+        let session_json = serde_json::to_string(&record)?;
+        query_parts.push(format!(
+            "UPSERT session:`{}` CONTENT {};",
+            session_id, session_json
+        ));
+
+        // 2. Context updates
+        for update in &all_updates {
+            let update_record = ContextUpdateRecord {
+                update_id: update.id.to_string(),
+                session_id: session_id.to_string(),
+                timestamp: update.timestamp.to_rfc3339(),
+                update_type: format!("{:?}", update.update_type),
+                update_data: serde_json::to_value(update)?,
+            };
+            let record_json = serde_json::to_string(&update_record)?;
+            query_parts.push(format!(
+                "UPSERT context_update:`{}` CONTENT {};",
+                update.id, record_json
+            ));
         }
 
-        // Save entities to native graph table
-        for entity in session.entity_graph.get_all_entities() {
-            if let Err(e) = self.upsert_entity(session.id(), &entity).await {
-                warn!("Failed to save entity '{}': {}", entity.name, e);
-            }
+        // 3. Entities
+        for entity in &entities {
+            let entity_id = Self::entity_id(session_id, &entity.name);
+            let entity_record = EntityRecord {
+                session_id: session_id.to_string(),
+                name: entity.name.clone(),
+                entity_type: format!("{:?}", entity.entity_type),
+                first_mentioned: entity.first_mentioned.to_rfc3339(),
+                last_mentioned: entity.last_mentioned.to_rfc3339(),
+                mention_count: entity.mention_count,
+                importance_score: entity.importance_score,
+                description: entity.description.clone(),
+            };
+            let record_json = serde_json::to_string(&entity_record)?;
+            query_parts.push(format!(
+                "UPSERT entity:`{}` CONTENT {};",
+                entity_id, record_json
+            ));
         }
 
-        // Save relationships via native RELATE
-        for rel in session.entity_graph.get_all_relationships() {
-            if let Err(e) = self.create_relationship(session.id(), &rel).await {
-                warn!(
-                    "Failed to save relationship '{}' -> '{}': {}",
-                    rel.from_entity, rel.to_entity, e
-                );
-            }
+        // 4. Relationships
+        for rel in &relationships {
+            let from_id = Self::entity_id(session_id, &rel.from_entity);
+            let to_id = Self::entity_id(session_id, &rel.to_entity);
+            let table = Self::relation_table_name(&rel.relation_type);
+            let rel_id = Self::relation_id(
+                session_id,
+                &rel.from_entity,
+                &rel.to_entity,
+                &rel.relation_type,
+            );
+            let context_json = serde_json::to_string(&rel.context)?;
+            query_parts.push(format!(
+                "UPSERT {}:`{}` SET in = entity:`{}`, out = entity:`{}`, context = {}, session_id = '{}';",
+                table, rel_id, from_id, to_id, context_json, session_id
+            ));
         }
+
+        // Execute all statements in a single transaction (1 network round-trip)
+        let full_query = format!("BEGIN; {} COMMIT;", query_parts.join(" "));
 
         debug!(
-            "SurrealDBStorage: Session saved (normalized) - {} updates, {} entities",
-            total_updates,
-            session.entity_graph.get_all_entities().len()
+            "SurrealDBStorage: Executing batched transaction - {} statements",
+            query_parts.len()
+        );
+
+        let response = self.db.query(&full_query).await?;
+        response.check()?;
+
+        debug!(
+            "SurrealDBStorage: Session saved (batched) - {} updates, {} entities, {} rels",
+            all_updates.len(),
+            entities.len(),
+            relationships.len()
         );
 
         Ok(())
@@ -734,29 +782,42 @@ impl Storage for SurrealDBStorage {
         session_id: Uuid,
         updates: Vec<ContextUpdate>,
     ) -> Result<()> {
+        if updates.is_empty() {
+            return Ok(());
+        }
+
         debug!(
-            "SurrealDBStorage: Batch saving {} updates for session {}",
+            "SurrealDBStorage: Batch saving {} updates for session {} (single transaction)",
             updates.len(),
             session_id
         );
 
-        for update in updates {
+        // Build all upserts into a single transaction
+        let mut query_parts: Vec<String> = Vec::with_capacity(updates.len());
+
+        for update in &updates {
             let record = ContextUpdateRecord {
                 update_id: update.id.to_string(),
                 session_id: session_id.to_string(),
                 timestamp: update.timestamp.to_rfc3339(),
                 update_type: format!("{:?}", update.update_type),
-                update_data: serde_json::to_value(&update)?,
+                update_data: serde_json::to_value(update)?,
             };
-
-            let _: Option<ContextUpdateRecord> = self
-                .db
-                .upsert(("context_update", record.update_id.clone()))
-                .content(record)
-                .await?;
+            let record_json = serde_json::to_string(&record)?;
+            query_parts.push(format!(
+                "UPSERT context_update:`{}` CONTENT {};",
+                update.id, record_json
+            ));
         }
 
-        debug!("SurrealDBStorage: Batch save completed");
+        let full_query = format!("BEGIN; {} COMMIT;", query_parts.join(" "));
+        let response = self.db.query(&full_query).await?;
+        response.check()?;
+
+        debug!(
+            "SurrealDBStorage: Batch save completed - {} updates in 1 transaction",
+            updates.len()
+        );
 
         Ok(())
     }

@@ -1,6 +1,6 @@
 [package]
 name = "post-cortex"
-version = "0.1.17"
+version = "0.1.18"
 edition = "2024"
 authors = ["Julius ML"]
 description = "An intelligent conversation memory system for AI assistants that provides persistent knowledge storage, semantic search, and automatic relationship mapping with lock-free concurrency guarantees"

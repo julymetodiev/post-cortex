@@ -300,6 +300,13 @@ pub enum StorageMessage {
         updates: Vec<crate::core::context_update::ContextUpdate>,
         response_tx: Sender<Result<(), String>>,
     },
+    /// Fire-and-forget: persist session + updates without blocking caller.
+    /// Actor logs errors but sends no response.
+    PersistSessionAndUpdate {
+        session: Box<ActiveSession>,
+        session_id: Uuid,
+        updates: Vec<crate::core::context_update::ContextUpdate>,
+    },
     FindRelatedEntities {
         session_id: Uuid,
         entity_name: String,
@@ -1023,42 +1030,46 @@ impl ConversationMemorySystem {
                     .graph_updates
                     .fetch_add(1, Ordering::Relaxed);
 
-                // Save updated session to storage
+                // Fire-and-forget: enqueue combined session + update persistence
+                // Data is already committed in-memory via ArcSwap CAS
                 let current_session = session_arc.load();
-                if let Err(save_error) = self
-                    .storage_actor
-                    .save_session((**current_session).clone())
-                    .await
-                {
-                    warn!("Failed to persist session {}: {}", session_id, save_error);
-                    // Continue anyway - session is still updated in memory
-                } else {
-                    debug!("Session {} persisted to storage", session_id);
-                }
+                self.storage_actor.persist_session_and_update_nowait(
+                    (**current_session).clone(),
+                    vec![context_update.clone()],
+                );
+                debug!(
+                    "Session {} persistence enqueued (non-blocking)",
+                    session_id
+                );
 
-                // Save context update to normalized storage (for SurrealDB)
-                if let Err(save_error) = self
-                    .storage_actor
-                    .batch_save_updates(session_id, vec![context_update])
-                    .await
-                {
-                    warn!(
-                        "Failed to persist context update to normalized storage: {}",
-                        save_error
-                    );
-                    // Continue anyway - update is already saved in session blob
-                } else {
-                    debug!(
-                        "Context update {} persisted to normalized storage",
-                        update_id
-                    );
-                }
+                // Background entity graph update (non-blocking, non-critical)
+                let session_arc_bg = Arc::clone(&session_arc);
+                let update_for_graph = context_update;
+                tokio::spawn(async move {
+                    let current = session_arc_bg.load();
+                    let mut new_session = (**current).clone();
+
+                    if let Err(e) = new_session
+                        .apply_entity_graph_update(&update_for_graph)
+                        .await
+                    {
+                        warn!("Background entity graph update failed: {}", e);
+                        return;
+                    }
+
+                    // CAS-swap the graph update back. If another update raced,
+                    // this CAS fails silently — the next update will catch up.
+                    let new_arc = Arc::new(new_session);
+                    let prev = session_arc_bg.compare_and_swap(&current, new_arc);
+                    if !Arc::ptr_eq(&prev, &current) {
+                        debug!("Background entity graph CAS failed (concurrent update), skipping");
+                    }
+                });
 
                 // Auto-vectorize if embeddings are enabled
                 #[cfg(feature = "embeddings")]
                 {
                     if let Err(e) = self.auto_vectorize_if_enabled(session_id).await {
-                        // Don't fail the main operation if auto-vectorization fails
                         debug!(
                             "Auto-vectorization warning for session {}: {}",
                             session_id, e
@@ -1595,6 +1606,26 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Enqueue session + updates persistence without blocking.
+    /// Returns immediately after sending the message. Errors are logged by the actor.
+    pub fn persist_session_and_update_nowait(
+        &self,
+        session: ActiveSession,
+        updates: Vec<crate::core::context_update::ContextUpdate>,
+    ) {
+        let session_id = session.id();
+        if let Err(e) = self.sender.send(StorageMessage::PersistSessionAndUpdate {
+            session: Box::new(session),
+            session_id,
+            updates,
+        }) {
+            warn!(
+                "Failed to enqueue background persist for session {}: {}",
+                session_id, e
+            );
+        }
+    }
+
     pub async fn delete_session(&self, session_id: Uuid) -> Result<bool, String> {
         let (response_tx, mut response_rx) = channel::<Result<bool, String>>(1);
 
@@ -2037,6 +2068,25 @@ impl StorageActor {
                 };
                 let _ = response_tx.send(result).await;
             }
+            StorageMessage::PersistSessionAndUpdate {
+                session,
+                session_id,
+                updates,
+            } => {
+                self.save_count.fetch_add(1, Ordering::Relaxed);
+                if let Err(e) = self
+                    .storage
+                    .save_session_with_updates(&session, session_id, updates)
+                    .await
+                {
+                    warn!(
+                        "Background persist failed for session {}: {}",
+                        session_id, e
+                    );
+                } else {
+                    debug!("Background persist completed for session {}", session_id);
+                }
+            }
             StorageMessage::Shutdown => {} // Handled in main loop
         }
     }
@@ -2158,7 +2208,7 @@ impl ConversationMemorySystem {
         tracing::info!("Calling session.add_incremental_update...");
         let update_id = update.id;
         let update_clone = update.clone(); // Clone for returning to caller
-        match session.add_incremental_update(update).await {
+        match session.add_incremental_update_fast(update).await {
             Ok(_) => {
                 tracing::info!(
                     "add_context_update_to_session: Successfully added update {}",

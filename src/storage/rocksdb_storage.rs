@@ -433,6 +433,52 @@ impl RealRocksDBStorage {
         Ok(())
     }
 
+    /// Save session blob and context updates in a single atomic WriteBatch.
+    /// Combines save_session + batch_save_updates into one spawn_blocking call.
+    pub async fn save_session_with_updates(
+        &self,
+        session: &ActiveSession,
+        session_id: Uuid,
+        updates: Vec<ContextUpdate>,
+    ) -> Result<()> {
+        let db = self.db.clone();
+        let session = session.clone();
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut batch = rocksdb::WriteBatch::default();
+
+            // Session blob (serde_json — required due to serde_json::Value fields)
+            let session_key = format!("session:{}", session.id());
+            let session_data = serde_json::to_vec(&session)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize session: {}", e))?;
+            batch.put(session_key.as_bytes(), &session_data);
+
+            // Context update records (bincode)
+            for update in &updates {
+                let update_key = format!("session:{}:update:{}", session_id, update.id);
+                let update_data =
+                    bincode::serde::encode_to_vec(update, bincode::config::standard())
+                        .map_err(|e| anyhow::anyhow!("Failed to serialize update: {}", e))?;
+                batch.put(update_key.as_bytes(), &update_data);
+            }
+
+            db.write(batch)?;
+
+            debug!(
+                "RealRocksDBStorage: Combined save - session {} + {} updates ({} bytes)",
+                session_id,
+                updates.len(),
+                session_data.len()
+            );
+
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))??;
+
+        Ok(())
+    }
+
     /// List all session IDs
     pub async fn list_sessions(&self) -> Result<Vec<Uuid>> {
         let db = self.db.clone();
@@ -939,6 +985,15 @@ impl Storage for RealRocksDBStorage {
         updates: Vec<ContextUpdate>,
     ) -> Result<()> {
         RealRocksDBStorage::batch_save_updates(self, session_id, updates).await
+    }
+
+    async fn save_session_with_updates(
+        &self,
+        session: &ActiveSession,
+        session_id: Uuid,
+        updates: Vec<ContextUpdate>,
+    ) -> Result<()> {
+        RealRocksDBStorage::save_session_with_updates(self, session, session_id, updates).await
     }
 
     async fn load_session_updates(&self, session_id: Uuid) -> Result<Vec<ContextUpdate>> {

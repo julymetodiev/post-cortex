@@ -64,6 +64,22 @@ pub trait Storage: Send + Sync {
     async fn batch_save_updates(&self, session_id: Uuid, updates: Vec<ContextUpdate>)
     -> Result<()>;
 
+    /// Save session and context updates in a single atomic write.
+    /// Default implementation calls save_session then batch_save_updates sequentially.
+    /// Backends can override for a single WriteBatch operation.
+    async fn save_session_with_updates(
+        &self,
+        session: &ActiveSession,
+        session_id: Uuid,
+        updates: Vec<ContextUpdate>,
+    ) -> Result<()> {
+        self.save_session(session).await?;
+        if !updates.is_empty() {
+            self.batch_save_updates(session_id, updates).await?;
+        }
+        Ok(())
+    }
+
     /// Load all updates for a session
     async fn load_session_updates(&self, session_id: Uuid) -> Result<Vec<ContextUpdate>>;
 
@@ -331,6 +347,30 @@ impl Storage for StorageBackend {
             #[cfg(feature = "surrealdb-storage")]
             StorageBackend::SurrealDB(storage) => {
                 storage.batch_save_updates(session_id, updates).await
+            }
+        }
+    }
+
+    async fn save_session_with_updates(
+        &self,
+        session: &ActiveSession,
+        session_id: Uuid,
+        updates: Vec<ContextUpdate>,
+    ) -> Result<()> {
+        match self {
+            StorageBackend::RocksDB(storage) => {
+                storage
+                    .save_session_with_updates(session, session_id, updates)
+                    .await
+            }
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(_) => {
+                // Use default sequential implementation for SurrealDB
+                self.save_session(session).await?;
+                if !updates.is_empty() {
+                    self.batch_save_updates(session_id, updates).await?;
+                }
+                Ok(())
             }
         }
     }

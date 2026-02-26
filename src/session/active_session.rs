@@ -853,6 +853,100 @@ impl ActiveSession {
         Ok(())
     }
 
+    /// Fast path: same as add_incremental_update but skips update_entity_graph.
+    /// Entity graph update should be applied separately via apply_entity_graph_update.
+    pub async fn add_incremental_update_fast(
+        &mut self,
+        update: ContextUpdate,
+    ) -> anyhow::Result<()> {
+        debug!(
+            "ActiveSession: Starting add_incremental_update_fast for update ID: {}",
+            update.id
+        );
+
+        // Limit content size to prevent processing issues
+        let mut limited_update = update.clone();
+        if limited_update.content.description.len() > 2000 {
+            limited_update.content.description.truncate(1800);
+            limited_update
+                .content
+                .description
+                .push_str("... (truncated)");
+            warn!("ActiveSession: Content description truncated to prevent timeout");
+        }
+        if limited_update.content.title.len() > 200 {
+            limited_update.content.title.truncate(190);
+            limited_update.content.title.push_str("...");
+        }
+
+        // Add to hot context (lock-free)
+        self.hot_context.push(limited_update.clone());
+
+        // Update structured state with timeout
+        match timeout(
+            Duration::from_secs(3),
+            self.update_current_state(&limited_update),
+        )
+        .await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                warn!("ActiveSession: update_current_state timed out");
+                return Err(anyhow::anyhow!("Current state update timeout"));
+            }
+        }
+
+        // Add code reference if present with timeout
+        if let Some(code_ref) = &limited_update.related_code {
+            let code_ref_clone = CodeReference {
+                file_path: code_ref.file_path.clone(),
+                start_line: code_ref.start_line,
+                end_line: code_ref.end_line,
+                code_snippet: code_ref.code_snippet.clone(),
+                commit_hash: code_ref.commit_hash.clone(),
+                branch: code_ref.branch.clone(),
+                change_description: code_ref.change_description.clone(),
+            };
+            match timeout(
+                Duration::from_secs(2),
+                self.add_code_reference(&code_ref_clone),
+            )
+            .await
+            {
+                Ok(result) => result?,
+                Err(_) => {
+                    warn!("ActiveSession: add_code_reference timed out");
+                }
+            }
+        }
+
+        // Record change + maintain context (sync, cheap)
+        self.record_change(&limited_update)?;
+        self.maintain_context()?;
+        self.last_updated = Utc::now();
+
+        // Add to incremental updates (CoW)
+        Arc::make_mut(&mut self.incremental_updates).push(limited_update);
+
+        debug!("ActiveSession: add_incremental_update_fast completed successfully");
+
+        Ok(())
+    }
+
+    /// Apply entity graph update only. Used as background task after CAS success.
+    pub async fn apply_entity_graph_update(
+        &mut self,
+        update: &ContextUpdate,
+    ) -> anyhow::Result<()> {
+        match timeout(Duration::from_secs(5), self.update_entity_graph(update)).await {
+            Ok(result) => result?,
+            Err(_) => {
+                warn!("ActiveSession: background update_entity_graph timed out");
+            }
+        }
+        Ok(())
+    }
+
     async fn update_current_state(&mut self, update: &ContextUpdate) -> anyhow::Result<()> {
         // Use Arc::make_mut for CoW semantics on current_state
         // This will only clone if there are other Arc references
