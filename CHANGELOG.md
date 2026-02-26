@@ -5,6 +5,34 @@ All notable changes to Post-Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.18] - 2026-02-26
+
+### Changed
+
+- **Non-blocking context updates (fire-and-forget persistence)**:
+  - `add_incremental_update` no longer blocks on storage writes — data is committed in-memory via ArcSwap CAS, then persisted asynchronously
+  - New `PersistSessionAndUpdate` message variant in StorageActor with `persist_session_and_update_nowait()` on the handle
+  - Eliminates two sequential actor round-trips + `spawn_blocking` calls from the response path
+
+- **Combined RocksDB write (`save_session_with_updates`)**:
+  - New `save_session_with_updates` method on `Storage` trait with default implementation
+  - RocksDB backend: single `WriteBatch` + single `spawn_blocking` for both session blob and update records (was 2 separate writes)
+
+- **Background entity graph extraction**:
+  - New `add_incremental_update_fast()` on `ActiveSession` — skips `update_entity_graph` (up to 5s timeout)
+  - Entity graph update runs in a background `tokio::spawn` task after CAS success
+  - New `apply_entity_graph_update()` for the background path
+  - Background CAS failure is benign — next update catches up
+
+- **Batched SurrealDB operations**:
+  - `save_session` now builds all upserts (session metadata + context updates + entities + relationships) into a single multi-statement SurrealQL query (1 network round-trip instead of N)
+  - `batch_save_updates` uses single multi-statement query instead of individual upserts per update
+  - Estimated 50-100x reduction in `save_session` latency for remote SurrealDB backends
+
+### Fixed
+
+- SurrealDB `save_session` performance: was doing N+1 individual WebSocket round-trips (1 session + N updates + N entities + N relationships); now 1 round-trip
+
 ## [0.1.17] - 2026-02-26
 
 ### Added

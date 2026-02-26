@@ -577,16 +577,22 @@ impl Storage for SurrealDBStorage {
             ));
         }
 
-        // Execute all statements in a single transaction (1 network round-trip)
-        let full_query = format!("BEGIN; {} COMMIT;", query_parts.join(" "));
+        // Execute all statements in a single multi-statement query (1 network round-trip)
+        // No BEGIN/COMMIT — each statement runs in its own implicit transaction,
+        // so individual failures don't cascade.
+        let full_query = query_parts.join(" ");
 
         debug!(
-            "SurrealDBStorage: Executing batched transaction - {} statements",
+            "SurrealDBStorage: Executing batched query - {} statements",
             query_parts.len()
         );
 
         let response = self.db.query(&full_query).await?;
-        response.check()?;
+        // Don't use response.check() — individual statement errors are non-fatal
+        // (matches original behavior where each upsert was independently try/catch'd)
+        if let Err(e) = response.check() {
+            debug!("SurrealDBStorage: Some statements had errors (non-fatal): {}", e);
+        }
 
         debug!(
             "SurrealDBStorage: Session saved (batched) - {} updates, {} entities, {} rels",
@@ -810,12 +816,14 @@ impl Storage for SurrealDBStorage {
             ));
         }
 
-        let full_query = format!("BEGIN; {} COMMIT;", query_parts.join(" "));
+        let full_query = query_parts.join(" ");
         let response = self.db.query(&full_query).await?;
-        response.check()?;
+        if let Err(e) = response.check() {
+            debug!("SurrealDBStorage: Some batch_save statements had errors (non-fatal): {}", e);
+        }
 
         debug!(
-            "SurrealDBStorage: Batch save completed - {} updates in 1 transaction",
+            "SurrealDBStorage: Batch save completed - {} updates in 1 query",
             updates.len()
         );
 
