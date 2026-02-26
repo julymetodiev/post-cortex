@@ -884,6 +884,49 @@ async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result<(),
         println!("  Created: .claude/hooks/pcx-compact-reinject.sh");
     }
 
+    // 6. Install agents to ~/.claude/agents/post-cortex-agents/
+    let agents_dir = dirs::home_dir()
+        .ok_or_else(|| "Cannot determine home directory".to_string())?
+        .join(".claude/agents/post-cortex-agents");
+
+    let agent_files: &[(&str, &str)] = &[
+        ("SKILL.md", include_str!("templates/agents/SKILL.md")),
+        (
+            "error-handling.md",
+            include_str!("templates/agents/error-handling.md"),
+        ),
+        (
+            "agents/context-builder.md",
+            include_str!("templates/agents/agents/context-builder.md"),
+        ),
+        (
+            "agents/knowledge-analyst.md",
+            include_str!("templates/agents/agents/knowledge-analyst.md"),
+        ),
+        (
+            "agents/memory-curator.md",
+            include_str!("templates/agents/agents/memory-curator.md"),
+        ),
+        (
+            "agents/search-specialist.md",
+            include_str!("templates/agents/agents/search-specialist.md"),
+        ),
+    ];
+
+    std::fs::create_dir_all(agents_dir.join("agents"))
+        .map_err(|e| format!("Failed to create agents directory: {}", e))?;
+
+    for (rel_path, content) in agent_files {
+        let target = agents_dir.join(rel_path);
+        if target.exists() {
+            println!("  ~/.claude/agents/post-cortex-agents/{} already exists, skipping", rel_path);
+        } else {
+            std::fs::write(&target, content)
+                .map_err(|e| format!("Failed to write {}: {}", rel_path, e))?;
+            println!("  Created: ~/.claude/agents/post-cortex-agents/{}", rel_path);
+        }
+    }
+
     println!();
     println!("Setup complete!");
     println!();

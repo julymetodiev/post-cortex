@@ -5,6 +5,18 @@ All notable changes to Post-Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.21] - 2026-02-26
+
+### Added
+
+- **Agent auto-installation in `pcx setup`**: Setup wizard now installs post-cortex agent definitions to `~/.claude/agents/post-cortex-agents/` (context-builder, search-specialist, knowledge-analyst, memory-curator). Checks for existing files before writing.
+
+### Changed
+
+- **Removed `docs/examples/`**: All templates are now embedded in the binary via `src/bin/templates/` and installed by `pcx setup`. Eliminates template drift between docs and source.
+- **Trimmed README.md**: Condensed from ~340 to ~120 lines. Removed verbose MCP tool examples, storage backend details, and benchmarks. Added `pcx setup` to Quick Start.
+- **Rewrote USAGE_GUIDE.md**: Quick Setup now points to `pcx setup` instead of manual MCP calls and file copying. Removed all `docs/examples/` references.
+
 ## [0.1.20] - 2026-02-26
 
 ### Added

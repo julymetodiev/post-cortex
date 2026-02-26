@@ -16,7 +16,7 @@ Post-Cortex is an MCP server that gives AI assistants long-term memory. It store
 - **Knowledge Graph** - Automatic entity and relationship extraction
 - **Privacy-First** - All processing runs locally, no external APIs
 - **Fast** - Lock-free Rust architecture, O(log n) vector search, <10ms queries
-- **Flexible Storage** - RocksDB (embedded) or SurrealDB (distributed) with feature parity
+- **Flexible Storage** - RocksDB (embedded) or SurrealDB (distributed)
 
 ## Installation
 
@@ -31,9 +31,9 @@ chmod +x /usr/local/bin/pcx
 
 ## Quick Start
 
-### 1. Configure Claude Desktop
+### 1. Configure MCP
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+Add to your Claude config (`claude_desktop_config.json` or `.mcp.json`):
 
 ```json
 {
@@ -45,148 +45,41 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-### 2. Create a Session
+### 2. Set Up Your Project
 
-Ask Claude: *"Create a Post-Cortex session for this project"*
-
-### 3. Use Memory
-
-Claude will automatically store important context and search past knowledge.
-
-### 4. Configure Agent Workflow
-
-For best results, add a `CLAUDE.md` to your project with memory rules. See **[Usage Guide](docs/USAGE_GUIDE.md)** for:
-- Multi-project setup with workspaces
-- Agent workflow (search → explore → log → respond)
-- Working examples and templates
-
-## MCP Tools (6 Tools)
-
-### `session` - Manage Sessions
-
-```
-session(action: "create", name: "my-project", description: "Project notes")
-session(action: "list")
+```bash
+pcx setup
 ```
 
-### `update_conversation_context` - Store Knowledge
+This creates a session, workspace, `CLAUDE.md` with memory rules, hooks for enforcement, and installs agent definitions. See **[Usage Guide](docs/USAGE_GUIDE.md)** for details.
 
-```
-// Single update
-update_conversation_context(
-  session_id: "uuid",
-  interaction_type: "decision_made",
-  content: {
-    "decision": "Use PostgreSQL",
-    "rationale": "Better JSON support"
-  }
-)
+### 3. Start Coding
 
-// Bulk update
-update_conversation_context(
-  session_id: "uuid",
-  updates: [
-    {interaction_type: "qa", content: {...}},
-    {interaction_type: "code_change", content: {...}}
-  ]
-)
+```bash
+claude
 ```
 
-**Interaction types:** `qa`, `decision_made`, `problem_solved`, `code_change`, `requirement_added`, `concept_defined`
+Claude will automatically search past knowledge before answering and log new discoveries.
 
-### `semantic_search` - Find Related Content
+## MCP Tools
 
-```
-// Search within session
-semantic_search(query: "database decisions", scope: "session", scope_id: "uuid")
-
-// Search across workspace
-semantic_search(query: "authentication", scope: "workspace", scope_id: "ws-uuid")
-
-// Search everything
-semantic_search(query: "performance issues", scope: "global")
-
-// Search with recency bias (prioritize recent content)
-semantic_search(query: "API changes", scope: "session", scope_id: "uuid", recency_bias: 0.5)
-
-// Search with date range
-semantic_search(
-  query: "authentication",
-  scope: "global",
-  date_from: "2024-01-01T00:00:00Z",
-  date_to: "2024-12-31T23:59:59Z"
-)
-```
-
-**Temporal Decay (Recency Bias):**
-
-The `recency_bias` parameter prioritizes recent content using exponential decay.
-
-| Value | Effect | Use Case |
-|-------|--------|----------|
-| `0.0` (default) | Disabled | Architecture docs, timeless concepts |
-| `0.1 - 0.3` | Very soft bias | General search with slight recency preference |
-| `0.3 - 0.5` | Soft bias | Finding recent solutions, debugging |
-| `0.5 - 1.0` | Moderate bias | Current context, recent issues |
-| `1.0+` | Aggressive bias | Latest changes only |
-
-**Formula:** `adjusted_score = base_score × e^(-λ × days/365)` where λ is the recency_bias value
-
-### `get_structured_summary` - Session Overview
-
-```
-// Get decisions only
-get_structured_summary(session_id: "uuid", include: ["decisions"])
-
-// Get insights only
-get_structured_summary(session_id: "uuid", include: ["insights"])
-
-// Get full summary
-get_structured_summary(session_id: "uuid", include: ["all"])
-```
-
-### `query_conversation_context` - Query Entities
-
-```
-// Entity importance ranking
-query_conversation_context(
-  session_id: "uuid",
-  query_type: "entity_importance",
-  parameters: {"limit": "10"}
-)
-
-// Keyword search
-query_conversation_context(
-  session_id: "uuid",
-  query_type: "search_updates",
-  parameters: {"keyword": "API"}
-)
-```
-
-### `manage_workspace` - Organize Sessions
-
-```
-manage_workspace(action: "create", name: "trading-project")
-manage_workspace(action: "list")
-manage_workspace(action: "add_session", workspace_id: "ws-uuid", session_id: "uuid", role: "primary")
-manage_workspace(action: "remove_session", workspace_id: "ws-uuid", session_id: "uuid")
-```
-
-**Roles:** `primary`, `related`, `dependency`, `shared`
+| Tool | Purpose |
+|------|---------|
+| `session` | Create and list sessions |
+| `update_conversation_context` | Store knowledge (qa, decisions, problems, code changes) |
+| `semantic_search` | Find related content across sessions, workspaces, or globally |
+| `get_structured_summary` | Get session overview (decisions, insights, entities) |
+| `query_conversation_context` | Query entity relationships and keyword search |
+| `manage_workspace` | Organize sessions into workspaces |
 
 ## Daemon Mode
 
 For multiple Claude instances sharing the same memory:
 
 ```bash
-# Start daemon
-pcx start
-
-# Check status
-pcx status
-
-# Stop daemon
-pcx stop
+pcx start    # Start daemon
+pcx status   # Check status
+pcx stop     # Stop daemon
 ```
 
 Configure Claude for HTTP transport:
@@ -201,79 +94,25 @@ Configure Claude for HTTP transport:
 }
 ```
 
+See [Daemon Mode docs](docs/DAEMON_MODE.md) for details.
+
 ## Data Export/Import
 
-Backup and restore your memory database:
-
 ```bash
-# Full export
-pcx export --output backup.json
-
-# Export with compression
-pcx export --output backup.json.gz
-
-# Export specific session
-pcx export --output session.json --session <uuid>
-
-# List contents of backup
-pcx import --input backup.json --list
-
-# Import (skip existing)
-pcx import --input backup.json --skip-existing
-
-# Import (overwrite existing)
-pcx import --input backup.json --overwrite
+pcx export --output backup.json       # Full export
+pcx export --output backup.json.gz    # Compressed
+pcx import --input backup.json        # Import
 ```
-
-**Compression:** Auto-detected from extension (`.json`, `.json.gz`, `.json.zst`)
 
 ## Storage Backends
 
-Both backends provide **full feature parity** with identical capabilities:
-
-| Feature | RocksDB | SurrealDB |
-|---------|---------|-----------|
-| Vector Search | HNSW O(log n) | HNSW O(log n) |
-| Graph Storage | Persistent | Persistent |
-| Embedding Validation | 384 dimensions | 384 dimensions |
+| | RocksDB (default) | SurrealDB |
+|---|---|---|
 | Setup | Zero config | Requires server |
 | Distribution | Embedded | Distributed |
+| Vector Search | HNSW O(log n) | HNSW O(log n) |
 
-### RocksDB (Default)
-
-Embedded key-value store with in-memory HNSW index, zero configuration:
-
-```bash
-pcx start  # Uses ~/.post-cortex/data
-```
-
-**Architecture:** Hybrid storage with RocksDB for persistence and lock-free HNSW index for fast vector search. On startup, embeddings are loaded from disk to rebuild the HNSW index.
-
-### SurrealDB
-
-Distributed graph database with native HNSW support:
-
-1. Start SurrealDB:
-```bash
-surreal start --user root --pass root
-```
-
-2. Configure `~/.post-cortex/daemon.toml`:
-```toml
-storage_backend = "surrealdb"
-surrealdb_endpoint = "ws://localhost:8000"
-surrealdb_username = "root"
-surrealdb_password = "root"
-surrealdb_namespace = "post_cortex"
-surrealdb_database = "main"
-```
-
-3. Start Post-Cortex:
-```bash
-pcx start
-```
-
-**Use SurrealDB when:** You need distributed storage, multiple Post-Cortex instances, or native graph queries.
+Configure in `~/.post-cortex/daemon.toml`. See [Daemon Mode docs](docs/DAEMON_MODE.md).
 
 ## Environment Variables
 
@@ -282,60 +121,15 @@ pcx start
 | `PC_HOST` | 127.0.0.1 | Bind address |
 | `PC_PORT` | 3737 | Port |
 | `PC_DATA_DIR` | ~/.post-cortex/data | Storage location |
-| `PC_STORAGE_BACKEND` | rocksdb | Storage: `rocksdb` or `surrealdb` |
-| `PC_SURREALDB_ENDPOINT` | - | SurrealDB WebSocket URL |
-
-## Performance
-
-| Operation | Latency |
-|-----------|---------|
-| Semantic search | 1-7ms |
-| Keyword search | <10ms |
-| Context update | <5ms |
+| `PC_STORAGE_BACKEND` | rocksdb | `rocksdb` or `surrealdb` |
 
 ## Development
 
 ```bash
-# Build with all features
 cargo build --release --features "embeddings,surrealdb-storage"
-
-# Build with RocksDB only
-cargo build --release --features embeddings
-
-# Test
 cargo test
-
-# Run with logging
-RUST_LOG=debug pcx start
-```
-
-### Benchmarks
-
-Post-Cortex includes microbenchmarks for performance regression testing using Criterion:
-
-```bash
-# Run all benchmarks
 cargo bench
-
-# Run specific benchmark
-cargo bench --bench recency_decay
-
-# Save baseline for comparison
-cargo bench -- --save-baseline main
-
-# Compare against baseline
-cargo bench -- --baseline main
-
-# Generate HTML report
-cargo bench -- --output-format html
 ```
-
-**Benchmark results (for reference):**
-- Decay calculation: ~317 ps
-- Score adjustment: ~317 ps
-- Batch processing (1000 results): ~74 ns
-
-Benchmarks are automatically run on CI to detect performance regressions.
 
 ## License
 
