@@ -5,6 +5,29 @@ All notable changes to Post-Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.17] - 2026-02-26
+
+### Changed
+
+- **Removed "LockFree" prefix from all type names**: Consolidated indirection layers by inlining implementations into canonical modules and dropping the "LockFree" naming convention
+  - Deleted: `lockfree_embeddings.rs`, `lockfree_query_cache.rs`, `lockfree_vector_db.rs`, `embeddings_compat.rs`, `query_cache_compat.rs`
+  - Renamed files: `lockfree_cache.rs` → `cache.rs`, `lockfree_memory_system.rs` → `memory_system.rs`, `lockfree_performance.rs` → `performance.rs`
+  - Renamed types: `LockFreeConversationMemorySystem` → `ConversationMemorySystem`, `LockFreeCache` → `Cache`, `LockFreeVectorDB` → `VectorDB`, `LockFreeWorkspaceManager` → `WorkspaceManager`, `LockFreeNEREngine` → `NEREngine`, `LockFreeEntityGraph` → `EntityGraph`, `LockFreeDaemonServer` → `DaemonServer`, `LockFreePerformanceMonitor` → `PerformanceMonitor`
+
+### Added
+
+- **Batch write methods for graph data and embeddings**: RocksDB WriteBatch for saving multiple entities, relationships, and embeddings in a single `spawn_blocking` call instead of N individual writes
+
+### Improved
+
+- **Lock-free memory system optimizations**:
+  - Per-operation counters (load/save/delete) in StorageActor
+  - Reduced CAS retry limit from 100 to 20 with exponential backoff
+  - Optimized `search_sessions` to prefer in-memory cache over storage
+  - Fast-path exact key lookup in entity graph search
+  - Batch insertion for HNSW index rebuild with progress logging
+  - Replaced DEBUG-level `info!`/`eprintln!` with proper `debug!` tracing
+
 ## [0.1.16] - 2026-01-16
 
 ### Added
