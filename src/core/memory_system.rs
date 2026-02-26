@@ -1066,14 +1066,41 @@ impl ConversationMemorySystem {
                     }
                 });
 
-                // Auto-vectorize if embeddings are enabled
+                // Auto-vectorize in background (non-blocking)
                 #[cfg(feature = "embeddings")]
-                {
-                    if let Err(e) = self.auto_vectorize_if_enabled(session_id).await {
-                        debug!(
-                            "Auto-vectorization warning for session {}: {}",
-                            session_id, e
-                        );
+                if self.config.enable_embeddings && self.config.auto_vectorize_on_update {
+                    // Pre-check and initialize vectorizer on the caller's context
+                    match self.ensure_vectorizer_initialized().await {
+                        Ok(vectorizer) => {
+                            let session_arc_vec = Arc::clone(&session_arc);
+                            let storage_actor = self.storage_actor.clone();
+                            tokio::spawn(async move {
+                                let session = session_arc_vec.load();
+                                match vectorizer.vectorize_latest_update(&session).await {
+                                    Ok(count) if count > 0 => {
+                                        let _ = vectorizer.invalidate_session_cache(session_id).await;
+                                        storage_actor.persist_session_and_update_nowait(
+                                            (**session).clone(),
+                                            vec![],
+                                        );
+                                        debug!(
+                                            "Background vectorization: {} update(s) for session {}",
+                                            count, session_id
+                                        );
+                                    }
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        debug!(
+                                            "Background vectorization failed for session {}: {}",
+                                            session_id, e
+                                        );
+                                    }
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            debug!("Vectorizer init failed (non-fatal): {}", e);
+                        }
                     }
                 }
 
@@ -2464,12 +2491,12 @@ impl ConversationMemorySystem {
                             );
                         }
 
-                        // Persist session to save the updated vectorized_update_ids
-                        if let Err(e) = self.storage_actor.save_session((**session).clone()).await {
-                            warn!("Failed to persist session {} after vectorization: {}", session_id, e);
-                        } else {
-                            debug!("Session {} persisted after vectorization", session_id);
-                        }
+                        // Fire-and-forget persist to save the updated vectorized_update_ids
+                        self.storage_actor.persist_session_and_update_nowait(
+                            (**session).clone(),
+                            vec![],
+                        );
+                        debug!("Session {} vectorization persist enqueued", session_id);
                     }
 
                     return Ok(());
