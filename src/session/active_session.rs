@@ -947,6 +947,35 @@ impl ActiveSession {
         Ok(())
     }
 
+    /// Rebuild the entity graph by clearing it and replaying all updates through NER extraction.
+    /// Returns (entities_before, entities_after) counts.
+    pub async fn rebuild_entity_graph_from_updates(&mut self) -> anyhow::Result<(usize, usize)> {
+        let entity_graph = Arc::make_mut(&mut self.entity_graph);
+        let entities_before = entity_graph.entity_count();
+        entity_graph.clear();
+
+        let updates: Vec<ContextUpdate> = self.incremental_updates.as_ref().clone();
+        let total = updates.len();
+        info!(
+            "Rebuilding entity graph: {} updates to process, {} entities cleared",
+            total, entities_before
+        );
+
+        for (i, update) in updates.iter().enumerate() {
+            if (i + 1) % 10 == 0 || i + 1 == total {
+                info!("Rebuilding entity graph: {}/{} updates processed", i + 1, total);
+            }
+            self.update_entity_graph(update).await?;
+        }
+
+        let entities_after = self.entity_graph.entity_count();
+        info!(
+            "Entity graph rebuild complete: {} -> {} entities",
+            entities_before, entities_after
+        );
+        Ok((entities_before, entities_after))
+    }
+
     async fn update_current_state(&mut self, update: &ContextUpdate) -> anyhow::Result<()> {
         // Use Arc::make_mut for CoW semantics on current_state
         // This will only clone if there are other Arc references

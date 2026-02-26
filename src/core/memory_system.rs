@@ -256,6 +256,10 @@ pub enum StorageMessage {
         session_id: Uuid,
         response_tx: Sender<Result<bool, String>>,
     },
+    ClearSessionEntities {
+        session_id: Uuid,
+        response_tx: Sender<Result<(), String>>,
+    },
     ListSessions {
         response_tx: Sender<Result<Vec<Uuid>, String>>,
     },
@@ -1633,6 +1637,61 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Clear all entities and relationships for a session from storage.
+    async fn clear_session_entities(&self, session_id: Uuid) -> Result<(), String> {
+        let (response_tx, mut response_rx) = channel::<Result<(), String>>(1);
+
+        self.sender
+            .send(StorageMessage::ClearSessionEntities {
+                session_id,
+                response_tx,
+            })
+            .map_err(|_| "Storage actor unavailable".to_string())?;
+
+        self.execute_with_timeout(
+            OperationType::Medium,
+            &format!("ClearSessionEntities {}", session_id),
+            response_rx.recv(),
+        )
+        .await
+    }
+
+    /// Rebuild entity graph for a session by clearing it and replaying all updates through NER.
+    /// Returns (entities_before, entities_after) counts.
+    pub async fn rebuild_entity_graph(
+        &self,
+        session_id: Uuid,
+    ) -> Result<(usize, usize), String> {
+        // Ensure NER engine is loaded
+        #[cfg(feature = "embeddings")]
+        {
+            use crate::session::active_session::preload_ner_engine;
+            if !preload_ner_engine().await {
+                return Err("Failed to load NER engine - cannot rebuild without it".to_string());
+            }
+        }
+
+        // Load session
+        let session = self
+            .load_session(session_id)
+            .await?
+            .ok_or_else(|| format!("Session {} not found", session_id))?;
+
+        let mut session = session;
+        let stats = session
+            .rebuild_entity_graph_from_updates()
+            .await
+            .map_err(|e| format!("Rebuild failed: {}", e))?;
+
+        // Clear old entities/relationships from storage before saving rebuilt graph
+        self.clear_session_entities(session_id).await?;
+
+        // Save rebuilt session (with clean entity graph)
+        self.save_session(session).await?;
+
+        Ok(stats)
+    }
+
     /// Enqueue session + updates persistence without blocking.
     /// Returns immediately after sending the message. Errors are logged by the actor.
     pub fn persist_session_and_update_nowait(
@@ -1946,6 +2005,17 @@ impl StorageActor {
                     .delete_session(session_id)
                     .await
                     .map(|_| true)
+                    .map_err(|e| e.to_string());
+                let _ = response_tx.send(result).await;
+            }
+            StorageMessage::ClearSessionEntities {
+                session_id,
+                response_tx,
+            } => {
+                let result = self
+                    .storage
+                    .clear_session_entities(session_id)
+                    .await
                     .map_err(|e| e.to_string());
                 let _ = response_tx.send(result).await;
             }

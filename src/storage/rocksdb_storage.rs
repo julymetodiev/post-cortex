@@ -1065,6 +1065,14 @@ impl Storage for RealRocksDBStorage {
     async fn get_stats(&self) -> Result<String> {
         RealRocksDBStorage::get_stats(self).await
     }
+
+    async fn clear_session_entities(&self, session_id: Uuid) -> Result<()> {
+        let entities = self.load_session_entities(session_id).await?;
+        for entity in &entities {
+            self.delete_stored_entity(session_id, &entity.name).await?;
+        }
+        Ok(())
+    }
 }
 
 // ============================================================================

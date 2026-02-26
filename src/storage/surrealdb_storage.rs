@@ -761,6 +761,28 @@ impl Storage for SurrealDBStorage {
         Ok(())
     }
 
+    async fn clear_session_entities(&self, session_id: Uuid) -> Result<()> {
+        debug!("SurrealDBStorage: Clearing all entities and relationships for session {}", session_id);
+
+        self.db
+            .query("DELETE entity WHERE session_id = $session_id")
+            .bind(("session_id", session_id.to_string()))
+            .await?;
+
+        for table in [
+            "required_by", "leads_to", "related_to", "conflicts_with",
+            "depends_on", "implements", "caused_by", "solves",
+        ] {
+            self.db
+                .query(format!("DELETE {} WHERE session_id = $session_id", table))
+                .bind(("session_id", session_id.to_string()))
+                .await?;
+        }
+
+        info!("SurrealDBStorage: Cleared entities and relationships for session {}", session_id);
+        Ok(())
+    }
+
     async fn list_sessions(&self) -> Result<Vec<Uuid>> {
         debug!("SurrealDBStorage: Listing sessions");
 
@@ -1295,6 +1317,7 @@ impl GraphStorage for SurrealDBStorage {
         let _: Option<EntityRecord> = self.delete("entity", &entity_id).await?;
         Ok(())
     }
+
 
     async fn create_relationship(
         &self,

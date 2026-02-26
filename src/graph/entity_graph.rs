@@ -267,6 +267,15 @@ impl SimpleEntityGraph {
         }
     }
 
+    /// Clear all entities, relationships, and graph data
+    pub fn clear(&mut self) {
+        self.entities.clear();
+        self.entity_mentions.clear();
+        self.graph.clear();
+        self.entity_to_node.clear();
+        self.node_to_entity.clear();
+    }
+
     /// Check if entity exists in the graph
     pub fn has_entity(&self, name: &str) -> bool {
         self.entities.contains_key(name)

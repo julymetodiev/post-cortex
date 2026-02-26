@@ -52,6 +52,9 @@ pub trait Storage: Send + Sync {
     /// Delete a session and all related data
     async fn delete_session(&self, session_id: Uuid) -> Result<()>;
 
+    /// Delete all entities and relationships for a session (used by entity graph rebuild)
+    async fn clear_session_entities(&self, session_id: Uuid) -> Result<()>;
+
     /// List all session IDs
     async fn list_sessions(&self) -> Result<Vec<Uuid>>;
 
@@ -316,6 +319,14 @@ impl Storage for StorageBackend {
             StorageBackend::RocksDB(storage) => storage.delete_session(session_id).await,
             #[cfg(feature = "surrealdb-storage")]
             StorageBackend::SurrealDB(storage) => storage.delete_session(session_id).await,
+        }
+    }
+
+    async fn clear_session_entities(&self, session_id: Uuid) -> Result<()> {
+        match self {
+            StorageBackend::RocksDB(storage) => storage.clear_session_entities(session_id).await,
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => storage.clear_session_entities(session_id).await,
         }
     }
 
