@@ -106,7 +106,9 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
             if preload_ner_engine().await {
                 info!("NER engine pre-loaded successfully");
             } else {
-                warn!("NER engine pre-load failed, entity extraction will use pattern matching fallback");
+                warn!(
+                    "NER engine pre-load failed, entity extraction will use pattern matching fallback"
+                );
             }
         });
     }
@@ -371,6 +373,14 @@ async fn api_create_workspace(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
+    // Update in-memory workspace manager
+    state.memory_system.workspace_manager.restore_workspace(
+        id,
+        req.name.clone(),
+        description.clone(),
+        vec![],
+    );
+
     Ok(Json(WorkspaceInfo {
         id: id.to_string(),
         name: req.name,
@@ -392,6 +402,12 @@ async fn api_delete_workspace(
         .delete_workspace(uuid)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    // Update in-memory workspace manager
+    state
+        .memory_system
+        .workspace_manager
+        .delete_workspace(&uuid);
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -425,9 +441,15 @@ async fn api_attach_session(
     state
         .memory_system
         .get_storage()
-        .add_session_to_workspace(ws_id, sess_id, role)
+        .add_session_to_workspace(ws_id, sess_id, role.clone())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    // Update in-memory workspace manager to keep it in sync
+    let _ = state
+        .memory_system
+        .workspace_manager
+        .add_session_to_workspace(&ws_id, sess_id, role);
 
     Ok(StatusCode::OK)
 }

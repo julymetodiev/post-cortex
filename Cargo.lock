@@ -4252,7 +4252,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "arc-swap",
