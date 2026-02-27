@@ -5,6 +5,16 @@ All notable changes to Post-Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.22] - 2026-02-27
+
+### Fixed
+
+- **Daemon workspace state sync via REST API**: In-memory `WorkspaceManager` now updates after `api_create_workspace`, `api_delete_workspace`, and `api_attach_session` REST handlers — previously only storage was updated, causing stale workspace data until daemon restart
+
+### Changed
+
+- **README Quick Start**: Replaced manual JSON config with `claude mcp add` CLI commands for both HTTP and stdio transports; added global scope note
+
 ## [0.1.21] - 2026-02-26
 
 ### Added
