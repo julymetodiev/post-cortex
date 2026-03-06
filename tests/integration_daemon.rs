@@ -20,6 +20,7 @@ async fn setup_test_app() -> (TestApp, TempDir) {
     let config = DaemonConfig {
         host: "127.0.0.1".to_string(),
         port: 0, // Unused in testing
+        grpc_port: 0,
         data_directory: temp_dir.path().to_str().unwrap().to_string(),
         storage_backend: "surrealdb".to_string(),
         surrealdb_endpoint: Some("ws://localhost:8000".to_string()),
@@ -48,6 +49,7 @@ async fn start_real_daemon() -> (u16, TempDir) {
     let config = DaemonConfig {
         host: "127.0.0.1".to_string(),
         port,
+        grpc_port: 0,
         data_directory: temp_dir.path().to_str().unwrap().to_string(),
         storage_backend: "surrealdb".to_string(),
         surrealdb_endpoint: Some("ws://localhost:8000".to_string()),

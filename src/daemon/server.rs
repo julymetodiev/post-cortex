@@ -1574,6 +1574,7 @@ mod tests {
         let config = DaemonConfig {
             host: "127.0.0.1".to_string(),
             port: 0, // Random port
+            grpc_port: 0,
             data_directory: tempfile::tempdir()
                 .unwrap()
                 .path()
@@ -1601,6 +1602,7 @@ mod tests {
         let config = DaemonConfig {
             host: "127.0.0.1".to_string(),
             port: 0,
+            grpc_port: 0,
             data_directory: tempfile::tempdir()
                 .unwrap()
                 .path()
