@@ -66,6 +66,14 @@ flate2 = "1.0"
 zstd = "0.13"
 rmcp = { version = "0.12.0", features = ["server", "transport-streamable-http-server"] }
 
+# gRPC
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+
+[build-dependencies]
+tonic-build = "0.12"
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3.0"

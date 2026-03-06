@@ -26,6 +26,7 @@
 pub mod config;
 pub mod coerce;
 pub mod format_helpers;
+pub mod grpc_service;
 pub mod mcp_service;
 pub mod rmcp_server;
 pub mod server;
@@ -34,6 +35,7 @@ pub mod stdio_proxy;
 pub mod validate;
 
 pub use config::DaemonConfig;
+pub use grpc_service::start_grpc_server;
 pub use mcp_service::PostCortexService;
 pub use rmcp_server::start_rmcp_daemon;
 pub use server::DaemonServer;

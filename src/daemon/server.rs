@@ -110,7 +110,10 @@ impl DaemonServer {
             if system_config.storage_backend == StorageBackendType::SurrealDB {
                 info!(
                     "Using SurrealDB storage backend: {} (ns: {}, db: {})",
-                    system_config.surrealdb_endpoint.as_deref().unwrap_or("not configured"),
+                    system_config
+                        .surrealdb_endpoint
+                        .as_deref()
+                        .unwrap_or("not configured"),
                     config.surrealdb_namespace,
                     config.surrealdb_database
                 );
@@ -155,11 +158,20 @@ impl DaemonServer {
             .route("/message", post(handle_mcp_request))
             .route("/stats", get(get_stats))
             // REST API for CLI
-            .route("/api/sessions", get(api_list_sessions).post(api_create_session))
+            .route(
+                "/api/sessions",
+                get(api_list_sessions).post(api_create_session),
+            )
             .route("/api/sessions/{id}", delete(api_delete_session))
-            .route("/api/workspaces", get(api_list_workspaces).post(api_create_workspace))
+            .route(
+                "/api/workspaces",
+                get(api_list_workspaces).post(api_create_workspace),
+            )
             .route("/api/workspaces/{id}", delete(api_delete_workspace))
-            .route("/api/workspaces/{workspace_id}/sessions/{session_id}", post(api_attach_session))
+            .route(
+                "/api/workspaces/{workspace_id}/sessions/{session_id}",
+                post(api_attach_session),
+            )
             .layer(CorsLayer::permissive())
             .with_state(server)
     }
@@ -528,7 +540,8 @@ async fn handle_update_context(
 
     let mut content = HashMap::new();
     for (key, value) in content_obj {
-        let value_str = value.as_str()
+        let value_str = value
+            .as_str()
             .map(|s| s.to_string())
             .unwrap_or_else(|| value.to_string());
         content.insert(key.clone(), value_str);
@@ -621,9 +634,7 @@ async fn handle_semantic_search(
     }))
 }
 
-async fn handle_list_sessions(
-    _server: &Arc<DaemonServer>,
-) -> Result<serde_json::Value, String> {
+async fn handle_list_sessions(_server: &Arc<DaemonServer>) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::list_sessions;
 
     let result = list_sessions()
@@ -656,7 +667,8 @@ async fn handle_query_context(
 
     let mut parameters = HashMap::new();
     for (key, value) in params_obj {
-        let value_str = value.as_str()
+        let value_str = value
+            .as_str()
             .map(|s| s.to_string())
             .unwrap_or_else(|| value.to_string());
         parameters.insert(key.clone(), value_str);
@@ -755,9 +767,16 @@ async fn handle_semantic_search_global(
         .and_then(|v| v.as_f64())
         .map(|v| v as f32);
 
-    let result = semantic_search_global(query, limit, date_from, date_to, interaction_type, recency_bias)
-        .await
-        .map_err(|e| format!("Failed to search globally: {}", e))?;
+    let result = semantic_search_global(
+        query,
+        limit,
+        date_from,
+        date_to,
+        interaction_type,
+        recency_bias,
+    )
+    .await
+    .map_err(|e| format!("Failed to search globally: {}", e))?;
 
     Ok(serde_json::json!({
         "content": [{
@@ -1065,9 +1084,7 @@ async fn handle_get_vectorization_stats(
     }))
 }
 
-async fn handle_get_tool_catalog(
-    _server: &Arc<DaemonServer>,
-) -> Result<serde_json::Value, String> {
+async fn handle_get_tool_catalog(_server: &Arc<DaemonServer>) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::get_tool_catalog;
 
     let result = get_tool_catalog()
@@ -1191,9 +1208,7 @@ async fn handle_get_workspace(
     }))
 }
 
-async fn handle_list_workspaces(
-    _server: &Arc<DaemonServer>,
-) -> Result<serde_json::Value, String> {
+async fn handle_list_workspaces(_server: &Arc<DaemonServer>) -> Result<serde_json::Value, String> {
     use crate::tools::mcp::list_workspaces;
 
     let result = list_workspaces()
@@ -1421,7 +1436,8 @@ async fn api_delete_session(
     State(server): State<Arc<DaemonServer>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let uuid = Uuid::parse_str(&id).map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid UUID: {}", e)))?;
+    let uuid = Uuid::parse_str(&id)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid UUID: {}", e)))?;
 
     server
         .memory_system
@@ -1473,10 +1489,12 @@ async fn api_create_workspace(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     // Update in-memory workspace manager
-    server
-        .memory_system
-        .workspace_manager
-        .restore_workspace(id, req.name.clone(), description.clone(), vec![]);
+    server.memory_system.workspace_manager.restore_workspace(
+        id,
+        req.name.clone(),
+        description.clone(),
+        vec![],
+    );
 
     Ok(Json(WorkspaceInfo {
         id: id.to_string(),
@@ -1491,7 +1509,8 @@ async fn api_delete_workspace(
     State(server): State<Arc<DaemonServer>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let uuid = Uuid::parse_str(&id).map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid UUID: {}", e)))?;
+    let uuid = Uuid::parse_str(&id)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid UUID: {}", e)))?;
 
     server
         .memory_system
@@ -1509,10 +1528,18 @@ async fn api_attach_session(
     Path((workspace_id, session_id)): Path<(String, String)>,
     Json(req): Json<AttachSessionRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let ws_id = Uuid::parse_str(&workspace_id)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid workspace UUID: {}", e)))?;
-    let sess_id = Uuid::parse_str(&session_id)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid session UUID: {}", e)))?;
+    let ws_id = Uuid::parse_str(&workspace_id).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid workspace UUID: {}", e),
+        )
+    })?;
+    let sess_id = Uuid::parse_str(&session_id).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid session UUID: {}", e),
+        )
+    })?;
 
     let role = match req.role.as_deref().unwrap_or("related") {
         "primary" => crate::workspace::SessionRole::Primary,

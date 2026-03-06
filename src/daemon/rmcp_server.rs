@@ -181,6 +181,20 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
         }
     });
 
+    // Start gRPC server alongside HTTP if configured
+    if config.grpc_port > 0 {
+        let grpc_addr: SocketAddr = format!("{}:{}", config.host, config.grpc_port)
+            .parse()
+            .map_err(|e| format!("Invalid gRPC address: {}", e))?;
+        let grpc_memory = memory_system.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::daemon::grpc_service::start_grpc_server(grpc_memory, grpc_addr).await {
+                error!("gRPC server error: {}", e);
+            }
+        });
+        info!("gRPC endpoint: {}:{}", config.host, config.grpc_port);
+    }
+
     info!("Post-Cortex MCP service registered with SSE server");
     info!("Daemon is ready to accept connections");
     info!("Press Ctrl+C to shutdown");

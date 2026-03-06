@@ -36,6 +36,10 @@ pub struct DaemonConfig {
     /// Port to listen on (default: 3737)
     pub port: u16,
 
+    /// gRPC port (default: 3738, 0 = disabled)
+    #[serde(default = "default_grpc_port")]
+    pub grpc_port: u16,
+
     /// Data directory for RocksDB (default: ~/.post-cortex/data)
     pub data_directory: String,
 
@@ -65,6 +69,10 @@ pub struct DaemonConfig {
     pub surrealdb_database: String,
 }
 
+fn default_grpc_port() -> u16 {
+    3738
+}
+
 fn default_storage_backend() -> String {
     "rocksdb".to_string()
 }
@@ -82,6 +90,7 @@ impl Default for DaemonConfig {
         Self {
             host: "127.0.0.1".to_string(),
             port: 3737,
+            grpc_port: default_grpc_port(),
             data_directory: default_data_dir(),
             storage_backend: default_storage_backend(),
             surrealdb_endpoint: None,
@@ -141,6 +150,13 @@ impl DaemonConfig {
                 tracing::debug!("Overriding port from PC_PORT environment variable");
             } else {
                 tracing::warn!("Invalid PC_PORT value: {}", port_str);
+            }
+        }
+
+        if let Ok(grpc_port_str) = std::env::var("PC_GRPC_PORT") {
+            if let Ok(port) = grpc_port_str.parse::<u16>() {
+                config.grpc_port = port;
+                tracing::debug!("Overriding grpc_port from PC_GRPC_PORT environment variable");
             }
         }
 
