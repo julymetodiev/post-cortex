@@ -3503,7 +3503,7 @@ impl FreshnessStorage for SurrealDBStorage {
                 (None, None, None, None)
             };
 
-        let query = "UPSERT source_reference:`$entry_id` SET \
+        let query = "UPSERT type::thing('source_reference', $entry_id) SET \
             entry_id = $entry_id, file_path = $file_path, \
             content_hash = $content_hash, captured_at_unix = $captured_at_unix, \
             symbol_name = $symbol_name, symbol_type = $symbol_type, \
@@ -3639,7 +3639,7 @@ impl FreshnessStorage for SurrealDBStorage {
         let mut count = 0u32;
         for to in &to_symbols {
             // Use SurrealDB native graph relations
-            let query = "UPSERT symbol_dep:`$from_key` SET \
+            let query = "UPSERT type::thing('symbol_dep', $from_key) SET \
                 from_file = $from_file, from_symbol = $from_symbol, \
                 to_file = $to_file, to_symbol = $to_symbol, \
                 to_symbol_type = $to_type;";
