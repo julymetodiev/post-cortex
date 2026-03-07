@@ -25,6 +25,9 @@
 
 use crate::core::context_update::{ContextUpdate, EntityData, EntityRelationship, RelationType};
 use crate::core::vector_db::{SearchMatch, VectorMetadata};
+use crate::daemon::grpc_service::pb::{
+    CascadeInvalidateReport, FreshnessEntry, SourceReference, SymbolId,
+};
 use crate::graph::entity_graph::EntityNetwork;
 use crate::session::active_session::ActiveSession;
 use crate::storage::rocksdb_storage::{SessionCheckpoint, StoredWorkspace};
@@ -33,14 +36,18 @@ use anyhow::Result;
 use async_trait::async_trait;
 use uuid::Uuid;
 
-/// Core storage trait for post-cortex.
+/// Report returned when checking if sources are still fresh
+#[derive(Debug, Clone)]
+pub struct FreshnessReportExt {
+    pub entries: Vec<FreshnessEntry>,
+}
 ///
 /// This trait defines the fundamental storage operations required for
 /// session management, context updates, and workspace persistence.
 ///
 /// Implementations must be Send + Sync for concurrent access.
 #[async_trait]
-pub trait Storage: Send + Sync {
+pub trait Storage: FreshnessStorage + Send + Sync {
     // ===== Session Operations =====
 
     /// Save a session to storage
@@ -259,6 +266,59 @@ pub trait VectorStorage: Send + Sync {
 
     /// Get all vectors from storage (for loading into memory on startup)
     async fn get_all_vectors(&self) -> Result<Vec<(Vec<f32>, VectorMetadata)>>;
+}
+
+/// Storage trait for source freshness tracking.
+///
+/// This trait manages tracking where information in PCX originally came from,
+/// allowing efficient invalidation when the source files change.
+#[async_trait]
+pub trait FreshnessStorage: Send + Sync {
+    /// Register or update a source reference for an entry
+    async fn register_source(&self, session_id: Uuid, reference: SourceReference) -> Result<()>;
+
+    /// Check if an entry's stored hash matches the provided hash.
+    /// When the stored entry has a FunctionScope with ast_hash, compares that
+    /// instead of the file-level hash (semantic freshness).
+    async fn check_freshness(&self, entry_id: &str, file_hash: &[u8]) -> Result<FreshnessEntry>;
+
+    /// Semantic freshness check: compare ast_hash when available, fallback to file hash.
+    /// The `ast_hash` and `symbol_name` are optional — if provided and the stored entry
+    /// has a FunctionScope, ast_hash comparison is used instead of file-level hash.
+    async fn check_freshness_semantic(
+        &self,
+        entry_id: &str,
+        file_hash: &[u8],
+        _ast_hash: Option<&[u8]>,
+        _symbol_name: Option<&str>,
+    ) -> Result<FreshnessEntry> {
+        // Default: delegate to basic check_freshness (backends override for semantic)
+        self.check_freshness(entry_id, file_hash).await
+    }
+
+    /// Invalidate (remove) a source reference, usually because the source changed
+    /// or the entry is being deleted. Returns count of removed references.
+    async fn invalidate_source(&self, file_path: &str) -> Result<u32>;
+
+    /// Get all entries associated with a specific file path
+    async fn get_entries_by_source(&self, file_path: &str) -> Result<Vec<SourceReference>>;
+
+    /// Register symbol-level dependencies (e.g., fn foo depends on struct Bar).
+    /// Used for cascade invalidation.
+    async fn register_symbol_dependencies(
+        &self,
+        from: SymbolId,
+        to_symbols: Vec<SymbolId>,
+    ) -> Result<u32>;
+
+    /// Cascade invalidate: when a symbol changes, invalidate all entries
+    /// whose symbols depend on it (transitively up to max_depth).
+    async fn cascade_invalidate(
+        &self,
+        changed: SymbolId,
+        new_ast_hash: Vec<u8>,
+        max_depth: u32,
+    ) -> Result<CascadeInvalidateReport>;
 }
 
 /// Unified storage backend enum for runtime selection.
@@ -643,6 +703,107 @@ impl GraphStorage for StorageBackend {
             StorageBackend::SurrealDB(storage) => {
                 storage
                     .get_entity_network(session_id, center, max_depth)
+                    .await
+            }
+        }
+    }
+}
+
+// Implement FreshnessStorage trait for StorageBackend via delegation
+#[async_trait]
+impl FreshnessStorage for StorageBackend {
+    async fn register_source(&self, session_id: Uuid, reference: SourceReference) -> Result<()> {
+        match self {
+            StorageBackend::RocksDB(storage) => {
+                storage.register_source(session_id, reference).await
+            }
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => {
+                storage.register_source(session_id, reference).await
+            }
+        }
+    }
+
+    async fn check_freshness(&self, entry_id: &str, file_hash: &[u8]) -> Result<FreshnessEntry> {
+        match self {
+            StorageBackend::RocksDB(storage) => storage.check_freshness(entry_id, file_hash).await,
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => {
+                storage.check_freshness(entry_id, file_hash).await
+            }
+        }
+    }
+
+    async fn invalidate_source(&self, file_path: &str) -> Result<u32> {
+        match self {
+            StorageBackend::RocksDB(storage) => storage.invalidate_source(file_path).await,
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => storage.invalidate_source(file_path).await,
+        }
+    }
+
+    async fn get_entries_by_source(&self, file_path: &str) -> Result<Vec<SourceReference>> {
+        match self {
+            StorageBackend::RocksDB(storage) => storage.get_entries_by_source(file_path).await,
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => storage.get_entries_by_source(file_path).await,
+        }
+    }
+
+    async fn check_freshness_semantic(
+        &self,
+        entry_id: &str,
+        file_hash: &[u8],
+        ast_hash: Option<&[u8]>,
+        symbol_name: Option<&str>,
+    ) -> Result<FreshnessEntry> {
+        match self {
+            StorageBackend::RocksDB(storage) => {
+                storage
+                    .check_freshness_semantic(entry_id, file_hash, ast_hash, symbol_name)
+                    .await
+            }
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => {
+                storage
+                    .check_freshness_semantic(entry_id, file_hash, ast_hash, symbol_name)
+                    .await
+            }
+        }
+    }
+
+    async fn register_symbol_dependencies(
+        &self,
+        from: SymbolId,
+        to_symbols: Vec<SymbolId>,
+    ) -> Result<u32> {
+        match self {
+            StorageBackend::RocksDB(storage) => {
+                storage.register_symbol_dependencies(from, to_symbols).await
+            }
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => {
+                storage.register_symbol_dependencies(from, to_symbols).await
+            }
+        }
+    }
+
+    async fn cascade_invalidate(
+        &self,
+        changed: SymbolId,
+        new_ast_hash: Vec<u8>,
+        max_depth: u32,
+    ) -> Result<CascadeInvalidateReport> {
+        match self {
+            StorageBackend::RocksDB(storage) => {
+                storage
+                    .cascade_invalidate(changed, new_ast_hash, max_depth)
+                    .await
+            }
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => {
+                storage
+                    .cascade_invalidate(changed, new_ast_hash, max_depth)
                     .await
             }
         }

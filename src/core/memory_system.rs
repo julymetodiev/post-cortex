@@ -22,6 +22,9 @@ use crate::core::performance::PerformanceMonitor;
 use crate::session::active_session::ActiveSession;
 use crate::storage::rocksdb_storage::RealRocksDBStorage;
 use crate::workspace::WorkspaceManager;
+use crate::daemon::grpc_service::pb::{
+    CascadeInvalidateReport, FreshnessEntry, SourceReference, SymbolId,
+};
 use anyhow;
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
@@ -321,6 +324,33 @@ pub enum StorageMessage {
         from_entity: String,
         to_entity: String,
         response_tx: Sender<Result<Option<Vec<String>>, String>>,
+    },
+    RegisterSource {
+        session_id: Uuid,
+        source_ref: SourceReference,
+        response_tx: Sender<Result<(), String>>,
+    },
+    CheckFreshness {
+        entry_id: String,
+        file_hash: Vec<u8>,
+        ast_hash: Option<Vec<u8>>,
+        symbol_name: Option<String>,
+        response_tx: Sender<Result<FreshnessEntry, String>>,
+    },
+    InvalidateSource {
+        file_path: String,
+        response_tx: Sender<Result<u32, String>>,
+    },
+    RegisterSymbolDependencies {
+        from: SymbolId,
+        to_symbols: Vec<SymbolId>,
+        response_tx: Sender<Result<u32, String>>,
+    },
+    CascadeInvalidate {
+        changed: SymbolId,
+        new_ast_hash: Vec<u8>,
+        max_depth: u32,
+        response_tx: Sender<Result<CascadeInvalidateReport, String>>,
     },
     Shutdown,
 }
@@ -1909,6 +1939,138 @@ impl StorageActorHandle {
         )
         .await
     }
+
+    pub async fn register_source(
+        &self,
+        session_id: Uuid,
+        source_ref: SourceReference,
+    ) -> Result<(), String> {
+        let (response_tx, mut response_rx) = channel(1);
+
+        self.sender
+            .send(StorageMessage::RegisterSource {
+                session_id,
+                source_ref,
+                response_tx,
+            })
+            .map_err(|_| "Storage actor unavailable".to_string())?;
+
+        self.execute_with_timeout(
+            OperationType::Medium,
+            "RegisterSource",
+            response_rx.recv(),
+        )
+        .await
+    }
+
+    pub async fn check_freshness(
+        &self,
+        entry_id: String,
+        file_hash: Vec<u8>,
+    ) -> Result<FreshnessEntry, String> {
+        self.check_freshness_semantic(entry_id, file_hash, None, None)
+            .await
+    }
+
+    pub async fn check_freshness_semantic(
+        &self,
+        entry_id: String,
+        file_hash: Vec<u8>,
+        ast_hash: Option<Vec<u8>>,
+        symbol_name: Option<String>,
+    ) -> Result<FreshnessEntry, String> {
+        let (response_tx, mut response_rx) = channel(1);
+
+        self.sender
+            .send(StorageMessage::CheckFreshness {
+                entry_id: entry_id.clone(),
+                file_hash,
+                ast_hash,
+                symbol_name,
+                response_tx,
+            })
+            .map_err(|_| "Storage actor unavailable".to_string())?;
+
+        self.execute_with_timeout(
+            OperationType::Fast,
+            &format!("CheckFreshness {}", entry_id),
+            response_rx.recv(),
+        )
+        .await
+    }
+
+    pub async fn invalidate_source(
+        &self,
+        file_path: &str,
+    ) -> Result<u32, String> {
+        let (response_tx, mut response_rx) = channel(1);
+
+        self.sender
+            .send(StorageMessage::InvalidateSource {
+                file_path: file_path.to_string(),
+                response_tx,
+            })
+            .map_err(|_| "Storage actor unavailable".to_string())?;
+
+        self.execute_with_timeout(
+            OperationType::Medium,
+            "InvalidateSource",
+            response_rx.recv(),
+        )
+        .await
+        .map_err(|e: String| {
+            error!("Storage actor failed to invalidate source: {}", e);
+            e
+        })
+    }
+
+    pub async fn register_symbol_dependencies(
+        &self,
+        from: SymbolId,
+        to_symbols: Vec<SymbolId>,
+    ) -> Result<u32, String> {
+        let (response_tx, mut response_rx) = channel(1);
+
+        self.sender
+            .send(StorageMessage::RegisterSymbolDependencies {
+                from,
+                to_symbols,
+                response_tx,
+            })
+            .map_err(|_| "Storage actor unavailable".to_string())?;
+
+        self.execute_with_timeout(
+            OperationType::Medium,
+            "RegisterSymbolDependencies",
+            response_rx.recv(),
+        )
+        .await
+    }
+
+    pub async fn cascade_invalidate(
+        &self,
+        changed: SymbolId,
+        new_ast_hash: Vec<u8>,
+        max_depth: u32,
+    ) -> Result<CascadeInvalidateReport, String> {
+        let (response_tx, mut response_rx) = channel(1);
+
+        self.sender
+            .send(StorageMessage::CascadeInvalidate {
+                changed,
+                new_ast_hash,
+                max_depth,
+                response_tx,
+            })
+            .map_err(|_| "Storage actor unavailable".to_string())?;
+
+        self.execute_with_timeout(
+            OperationType::Medium,
+            "CascadeInvalidate",
+            response_rx.recv(),
+        )
+        .await
+    }
 }
 
 impl StorageActor {
@@ -2165,6 +2327,48 @@ impl StorageActor {
                 };
                 let _ = response_tx.send(result).await;
             }
+            StorageMessage::RegisterSource {
+                session_id,
+                source_ref,
+                response_tx,
+            } => {
+                let result = self
+                    .storage
+                    .register_source(session_id, source_ref)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = response_tx.send(result).await;
+            }
+            StorageMessage::CheckFreshness {
+                entry_id,
+                file_hash,
+                ast_hash,
+                symbol_name,
+                response_tx,
+            } => {
+                let result = self
+                    .storage
+                    .check_freshness_semantic(
+                        &entry_id,
+                        &file_hash,
+                        ast_hash.as_deref(),
+                        symbol_name.as_deref(),
+                    )
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = response_tx.send(result).await;
+            }
+            StorageMessage::InvalidateSource {
+                file_path,
+                response_tx,
+            } => {
+                let result = self
+                    .storage
+                    .invalidate_source(&file_path)
+                    .await
+                    .map_err(|e: anyhow::Error| e.to_string());
+                let _ = response_tx.send(result).await;
+            }
             StorageMessage::PersistSessionAndUpdate {
                 session,
                 session_id,
@@ -2183,6 +2387,31 @@ impl StorageActor {
                 } else {
                     debug!("Background persist completed for session {}", session_id);
                 }
+            }
+            StorageMessage::RegisterSymbolDependencies {
+                from,
+                to_symbols,
+                response_tx,
+            } => {
+                let result = self
+                    .storage
+                    .register_symbol_dependencies(from, to_symbols)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = response_tx.send(result).await;
+            }
+            StorageMessage::CascadeInvalidate {
+                changed,
+                new_ast_hash,
+                max_depth,
+                response_tx,
+            } => {
+                let result = self
+                    .storage
+                    .cascade_invalidate(changed, new_ast_hash, max_depth)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = response_tx.send(result).await;
             }
             StorageMessage::Shutdown => {} // Handled in main loop
         }

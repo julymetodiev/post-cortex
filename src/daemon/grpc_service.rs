@@ -4,6 +4,8 @@
 //! enabling native binary protocol access for coding agents like Axon.
 
 use crate::ConversationMemorySystem;
+use crate::storage::rocksdb_storage::SessionCheckpoint;
+use crate::workspace::SessionRole;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
@@ -118,6 +120,111 @@ impl PostCortex for PcxGrpcService {
         Ok(Response::new(ListSessionsResponse { sessions }))
     }
 
+    async fn load_session(
+        &self,
+        request: Request<LoadSessionRequest>,
+    ) -> Result<Response<LoadSessionResponse>, Status> {
+        let req = request.into_inner();
+        debug!("gRPC LoadSession: session_id={}", req.session_id);
+
+        let session_id = parse_uuid(&req.session_id)?;
+
+        let session_arc = self
+            .memory
+            .get_session(session_id)
+            .await
+            .map_err(|e| Status::not_found(e))?;
+        let session = session_arc.load();
+
+        let info = SessionInfo {
+            session_id: session_id.to_string(),
+            name: session.name().unwrap_or_default(),
+            description: session.description().unwrap_or_default(),
+            created_at_unix: session.created_at().timestamp(),
+            update_count: session.incremental_updates.len() as u32,
+        };
+
+        Ok(Response::new(LoadSessionResponse {
+            session: Some(info),
+        }))
+    }
+
+    async fn search_sessions(
+        &self,
+        request: Request<SearchSessionsRequest>,
+    ) -> Result<Response<SearchSessionsResponse>, Status> {
+        let req = request.into_inner();
+        debug!("gRPC SearchSessions: query={}", req.query);
+
+        if req.query.is_empty() {
+            return Err(Status::invalid_argument("query cannot be empty"));
+        }
+
+        let session_ids = self
+            .memory
+            .find_sessions_by_name_or_description(&req.query)
+            .await
+            .map_err(|e| Status::internal(e))?;
+
+        let mut sessions = Vec::new();
+        for session_id in session_ids {
+            if let Ok(session_arc) = self.memory.get_session(session_id).await {
+                let session = session_arc.load();
+                sessions.push(SessionInfo {
+                    session_id: session_id.to_string(),
+                    name: session.name().unwrap_or_default(),
+                    description: session.description().unwrap_or_default(),
+                    created_at_unix: session.created_at().timestamp(),
+                    update_count: session.incremental_updates.len() as u32,
+                });
+            }
+        }
+
+        Ok(Response::new(SearchSessionsResponse { sessions }))
+    }
+
+    async fn update_session_metadata(
+        &self,
+        request: Request<UpdateSessionMetadataRequest>,
+    ) -> Result<Response<UpdateSessionMetadataResponse>, Status> {
+        let req = request.into_inner();
+        debug!("gRPC UpdateSessionMetadata: session_id={}", req.session_id);
+
+        let session_id = parse_uuid(&req.session_id)?;
+
+        match self
+            .memory
+            .update_session_metadata(session_id, req.name, req.description)
+            .await
+        {
+            Ok(()) => Ok(Response::new(UpdateSessionMetadataResponse {
+                success: true,
+            })),
+            Err(e) => {
+                error!("gRPC UpdateSessionMetadata failed: {}", e);
+                Err(Status::internal(e))
+            }
+        }
+    }
+
+    async fn delete_session(
+        &self,
+        request: Request<DeleteSessionRequest>,
+    ) -> Result<Response<DeleteSessionResponse>, Status> {
+        let req = request.into_inner();
+        debug!("gRPC DeleteSession: session_id={}", req.session_id);
+
+        let session_id = parse_uuid(&req.session_id)?;
+
+        match self.memory.storage_actor.delete_session(session_id).await {
+            Ok(success) => Ok(Response::new(DeleteSessionResponse { success })),
+            Err(e) => {
+                error!("gRPC DeleteSession failed: {}", e);
+                Err(Status::internal(e))
+            }
+        }
+    }
+
     async fn update_context(
         &self,
         request: Request<UpdateContextRequest>,
@@ -148,6 +255,93 @@ impl PostCortex for PcxGrpcService {
             })),
             Err(e) => {
                 error!("gRPC UpdateContext failed: {}", e);
+                Err(Status::internal(e))
+            }
+        }
+    }
+
+    async fn bulk_update_context(
+        &self,
+        request: Request<BulkUpdateContextRequest>,
+    ) -> Result<Response<BulkUpdateContextResponse>, Status> {
+        let req = request.into_inner();
+        debug!(
+            "gRPC BulkUpdateContext: session={}, count={}",
+            req.session_id,
+            req.updates.len()
+        );
+
+        let session_id = parse_uuid(&req.session_id)?;
+
+        let mut update_ids = Vec::new();
+        let mut success_count = 0u32;
+        let mut failure_count = 0u32;
+
+        for item in req.updates {
+            let content = item.content.unwrap_or_default();
+            let description = format_context_description(&item.interaction_type, &content);
+            let metadata = build_update_metadata(&item.interaction_type, &content);
+
+            match self
+                .memory
+                .add_incremental_update(session_id, description, Some(metadata))
+                .await
+            {
+                Ok(update_id) => {
+                    update_ids.push(update_id);
+                    success_count += 1;
+                }
+                Err(e) => {
+                    error!("gRPC BulkUpdateContext item failed: {}", e);
+                    failure_count += 1;
+                }
+            }
+        }
+
+        Ok(Response::new(BulkUpdateContextResponse {
+            update_ids,
+            success_count,
+            failure_count,
+        }))
+    }
+
+    async fn create_checkpoint(
+        &self,
+        request: Request<CreateCheckpointRequest>,
+    ) -> Result<Response<CreateCheckpointResponse>, Status> {
+        let req = request.into_inner();
+        debug!("gRPC CreateCheckpoint: session_id={}", req.session_id);
+
+        let session_id = parse_uuid(&req.session_id)?;
+
+        let session_arc = self
+            .memory
+            .get_session(session_id)
+            .await
+            .map_err(|e| Status::not_found(e))?;
+        let session = session_arc.load();
+
+        let checkpoint = SessionCheckpoint {
+            id: Uuid::new_v4(),
+            session_id,
+            created_at: chrono::Utc::now(),
+            structured_context: (*session.current_state).clone(),
+            recent_updates: (*session.incremental_updates).clone(),
+            code_references: (*session.code_references).clone(),
+            change_history: (*session.change_history).clone(),
+            total_updates: session.incremental_updates.len(),
+            context_quality_score: 1.0,
+            compression_ratio: 1.0,
+        };
+        let checkpoint_id = checkpoint.id.to_string();
+
+        match self.memory.storage_actor.save_checkpoint(&checkpoint).await {
+            Ok(()) => Ok(Response::new(CreateCheckpointResponse {
+                checkpoint_id,
+                success: true,
+            })),
+            Err(e) => {
+                error!("gRPC CreateCheckpoint failed: {}", e);
                 Err(Status::internal(e))
             }
         }
@@ -293,37 +487,586 @@ impl PostCortex for PcxGrpcService {
         }
     }
 
-    // --- Source Tracking (stub for Phase 4, full implementation in Phase 9) ---
+    async fn find_related_content(
+        &self,
+        request: Request<FindRelatedContentRequest>,
+    ) -> Result<Response<FindRelatedContentResponse>, Status> {
+        let req = request.into_inner();
+        debug!(
+            "gRPC FindRelatedContent: session={}, topic='{}'",
+            req.session_id, req.topic
+        );
+
+        if req.topic.is_empty() {
+            return Err(Status::invalid_argument("topic cannot be empty"));
+        }
+
+        #[cfg(feature = "embeddings")]
+        {
+            let session_id = parse_uuid(&req.session_id)?;
+            let max_results = req.limit.unwrap_or(10) as usize;
+
+            let search_results = self
+                .memory
+                .semantic_search_session(session_id, &req.topic, Some(max_results), None, None)
+                .await
+                .map_err(|e| Status::internal(format!("Search failed: {e}")))?;
+
+            let results: Vec<SearchResult> = search_results
+                .into_iter()
+                .map(|r| SearchResult {
+                    entry_id: r.content_id,
+                    content: r.text_content,
+                    score: r.combined_score,
+                    session_id: r.session_id.to_string(),
+                    content_type: format!("{:?}", r.content_type),
+                    metadata: std::collections::HashMap::new(),
+                })
+                .collect();
+
+            Ok(Response::new(FindRelatedContentResponse { results }))
+        }
+
+        #[cfg(not(feature = "embeddings"))]
+        {
+            Err(Status::unimplemented(
+                "FindRelatedContent requires the 'embeddings' feature",
+            ))
+        }
+    }
+
+    async fn vectorize_session(
+        &self,
+        request: Request<VectorizeSessionRequest>,
+    ) -> Result<Response<VectorizeSessionResponse>, Status> {
+        let req = request.into_inner();
+        debug!("gRPC VectorizeSession: session_id={}", req.session_id);
+
+        let session_id = parse_uuid(&req.session_id)?;
+
+        #[cfg(feature = "embeddings")]
+        {
+            match self.memory.vectorize_session(session_id).await {
+                Ok(vectors_created) => Ok(Response::new(VectorizeSessionResponse {
+                    success: true,
+                    vectors_created: vectors_created as u32,
+                })),
+                Err(e) => {
+                    error!("gRPC VectorizeSession failed: {}", e);
+                    Err(Status::internal(e))
+                }
+            }
+        }
+
+        #[cfg(not(feature = "embeddings"))]
+        {
+            Err(Status::unimplemented(
+                "VectorizeSession requires the 'embeddings' feature",
+            ))
+        }
+    }
+
+    async fn get_vectorization_stats(
+        &self,
+        _request: Request<GetVectorizationStatsRequest>,
+    ) -> Result<Response<TextResponse>, Status> {
+        debug!("gRPC GetVectorizationStats");
+
+        #[cfg(feature = "embeddings")]
+        {
+            match self.memory.get_vectorization_stats() {
+                Ok(stats) => {
+                    let text =
+                        serde_json::to_string_pretty(&stats).unwrap_or_else(|_| "{}".to_string());
+                    Ok(Response::new(TextResponse { text }))
+                }
+                Err(e) => {
+                    error!("gRPC GetVectorizationStats failed: {}", e);
+                    Err(Status::internal(e))
+                }
+            }
+        }
+
+        #[cfg(not(feature = "embeddings"))]
+        {
+            Err(Status::unimplemented(
+                "GetVectorizationStats requires the 'embeddings' feature",
+            ))
+        }
+    }
+
+    // --- Analysis & Insights ---
+
+    async fn get_structured_summary(
+        &self,
+        request: Request<GetStructuredSummaryRequest>,
+    ) -> Result<Response<TextResponse>, Status> {
+        let req = request.into_inner();
+        debug!("gRPC GetStructuredSummary: session_id={}", req.session_id);
+
+        let result = crate::tools::mcp::get_structured_summary(
+            req.session_id,
+            req.decisions_limit.map(|v| v as usize),
+            req.entities_limit.map(|v| v as usize),
+            req.questions_limit.map(|v| v as usize),
+            req.concepts_limit.map(|v| v as usize),
+            req.min_confidence,
+            req.compact,
+        )
+        .await
+        .map_err(|e| {
+            error!("gRPC GetStructuredSummary failed: {}", e);
+            Status::internal(e.to_string())
+        })?;
+
+        Ok(Response::new(TextResponse {
+            text: result.message,
+        }))
+    }
+
+    async fn get_key_decisions(
+        &self,
+        request: Request<GetKeyDecisionsRequest>,
+    ) -> Result<Response<TextResponse>, Status> {
+        let req = request.into_inner();
+        debug!("gRPC GetKeyDecisions: session_id={}", req.session_id);
+
+        let result = crate::tools::mcp::get_key_decisions(req.session_id)
+            .await
+            .map_err(|e| {
+                error!("gRPC GetKeyDecisions failed: {}", e);
+                Status::internal(e.to_string())
+            })?;
+
+        Ok(Response::new(TextResponse {
+            text: result.message,
+        }))
+    }
+
+    async fn get_key_insights(
+        &self,
+        request: Request<GetKeyInsightsRequest>,
+    ) -> Result<Response<TextResponse>, Status> {
+        let req = request.into_inner();
+        debug!("gRPC GetKeyInsights: session_id={}", req.session_id);
+
+        let result =
+            crate::tools::mcp::get_key_insights(req.session_id, req.limit.map(|v| v as usize))
+                .await
+                .map_err(|e| {
+                    error!("gRPC GetKeyInsights failed: {}", e);
+                    Status::internal(e.to_string())
+                })?;
+
+        Ok(Response::new(TextResponse {
+            text: result.message,
+        }))
+    }
+
+    async fn get_entity_importance(
+        &self,
+        request: Request<GetEntityImportanceRequest>,
+    ) -> Result<Response<TextResponse>, Status> {
+        let req = request.into_inner();
+        debug!("gRPC GetEntityImportance: session_id={}", req.session_id);
+
+        let result = crate::tools::mcp::get_entity_importance_analysis(
+            req.session_id,
+            req.limit.map(|v| v as usize),
+            req.min_importance,
+        )
+        .await
+        .map_err(|e| {
+            error!("gRPC GetEntityImportance failed: {}", e);
+            Status::internal(e.to_string())
+        })?;
+
+        Ok(Response::new(TextResponse {
+            text: result.message,
+        }))
+    }
+
+    async fn get_entity_network(
+        &self,
+        request: Request<GetEntityNetworkRequest>,
+    ) -> Result<Response<TextResponse>, Status> {
+        let req = request.into_inner();
+        debug!("gRPC GetEntityNetwork: session_id={}", req.session_id);
+
+        let result = crate::tools::mcp::get_entity_network_view(
+            req.session_id,
+            req.center_entity,
+            req.max_entities.map(|v| v as usize),
+            req.max_relationships.map(|v| v as usize),
+        )
+        .await
+        .map_err(|e| {
+            error!("gRPC GetEntityNetwork failed: {}", e);
+            Status::internal(e.to_string())
+        })?;
+
+        Ok(Response::new(TextResponse {
+            text: result.message,
+        }))
+    }
+
+    async fn get_session_statistics(
+        &self,
+        request: Request<GetSessionStatisticsRequest>,
+    ) -> Result<Response<TextResponse>, Status> {
+        let req = request.into_inner();
+        debug!("gRPC GetSessionStatistics: session_id={}", req.session_id);
+
+        let result = crate::tools::mcp::get_session_statistics(req.session_id)
+            .await
+            .map_err(|e| {
+                error!("gRPC GetSessionStatistics failed: {}", e);
+                Status::internal(e.to_string())
+            })?;
+
+        Ok(Response::new(TextResponse {
+            text: result.message,
+        }))
+    }
+
+    // --- Workspace Management ---
+
+    async fn create_workspace(
+        &self,
+        request: Request<CreateWorkspaceRequest>,
+    ) -> Result<Response<CreateWorkspaceResponse>, Status> {
+        let req = request.into_inner();
+        debug!("gRPC CreateWorkspace: name={}", req.name);
+
+        let workspace_id = self
+            .memory
+            .workspace_manager
+            .create_workspace(req.name.clone(), req.description.clone());
+
+        // Persist to storage
+        if let Err(e) = self
+            .memory
+            .save_workspace_metadata(workspace_id, &req.name, &req.description, &[])
+            .await
+        {
+            warn!("gRPC CreateWorkspace: failed to persist metadata: {}", e);
+        }
+
+        Ok(Response::new(CreateWorkspaceResponse {
+            workspace_id: workspace_id.to_string(),
+        }))
+    }
+
+    async fn get_workspace(
+        &self,
+        request: Request<GetWorkspaceRequest>,
+    ) -> Result<Response<GetWorkspaceResponse>, Status> {
+        let req = request.into_inner();
+        debug!("gRPC GetWorkspace: workspace_id={}", req.workspace_id);
+
+        let workspace_id = parse_uuid(&req.workspace_id)?;
+
+        let workspace = self
+            .memory
+            .workspace_manager
+            .get_workspace(&workspace_id)
+            .ok_or_else(|| Status::not_found(format!("Workspace {} not found", workspace_id)))?;
+
+        let info = workspace_to_info(&workspace);
+
+        Ok(Response::new(GetWorkspaceResponse {
+            workspace: Some(info),
+        }))
+    }
+
+    async fn list_workspaces(
+        &self,
+        _request: Request<ListWorkspacesRequest>,
+    ) -> Result<Response<ListWorkspacesResponse>, Status> {
+        debug!("gRPC ListWorkspaces");
+
+        let workspaces = self.memory.workspace_manager.list_workspaces();
+
+        let infos: Vec<WorkspaceInfo> = workspaces.iter().map(|ws| workspace_to_info(ws)).collect();
+
+        Ok(Response::new(ListWorkspacesResponse { workspaces: infos }))
+    }
+
+    async fn delete_workspace(
+        &self,
+        request: Request<DeleteWorkspaceRequest>,
+    ) -> Result<Response<DeleteWorkspaceResponse>, Status> {
+        let req = request.into_inner();
+        debug!("gRPC DeleteWorkspace: workspace_id={}", req.workspace_id);
+
+        let workspace_id = parse_uuid(&req.workspace_id)?;
+
+        let deleted = self
+            .memory
+            .workspace_manager
+            .delete_workspace(&workspace_id);
+
+        let success = deleted.is_some();
+        Ok(Response::new(DeleteWorkspaceResponse { success }))
+    }
+
+    async fn add_session_to_workspace(
+        &self,
+        request: Request<AddSessionToWorkspaceRequest>,
+    ) -> Result<Response<AddSessionToWorkspaceResponse>, Status> {
+        let req = request.into_inner();
+        debug!(
+            "gRPC AddSessionToWorkspace: workspace={}, session={}, role={}",
+            req.workspace_id, req.session_id, req.role
+        );
+
+        let workspace_id = parse_uuid(&req.workspace_id)?;
+        let session_id = parse_uuid(&req.session_id)?;
+        let role = parse_session_role(&req.role);
+
+        self.memory
+            .workspace_manager
+            .add_session_to_workspace(&workspace_id, session_id, role)
+            .map_err(|e| Status::not_found(e))?;
+
+        // Persist updated workspace membership
+        if let Some(ws) = self.memory.workspace_manager.get_workspace(&workspace_id) {
+            let session_ids: Vec<Uuid> = ws.session_ids.iter().map(|entry| *entry.key()).collect();
+            if let Err(e) = self
+                .memory
+                .save_workspace_metadata(workspace_id, &ws.name, &ws.description, &session_ids)
+                .await
+            {
+                warn!(
+                    "gRPC AddSessionToWorkspace: failed to persist metadata: {}",
+                    e
+                );
+            }
+        }
+
+        Ok(Response::new(AddSessionToWorkspaceResponse {
+            success: true,
+        }))
+    }
+
+    async fn remove_session_from_workspace(
+        &self,
+        request: Request<RemoveSessionFromWorkspaceRequest>,
+    ) -> Result<Response<RemoveSessionFromWorkspaceResponse>, Status> {
+        let req = request.into_inner();
+        debug!(
+            "gRPC RemoveSessionFromWorkspace: workspace={}, session={}",
+            req.workspace_id, req.session_id
+        );
+
+        let workspace_id = parse_uuid(&req.workspace_id)?;
+        let session_id = parse_uuid(&req.session_id)?;
+
+        self.memory
+            .workspace_manager
+            .remove_session_from_workspace(&workspace_id, &session_id)
+            .map_err(|e| Status::not_found(e))?;
+
+        // Persist updated workspace membership
+        if let Some(ws) = self.memory.workspace_manager.get_workspace(&workspace_id) {
+            let session_ids: Vec<Uuid> = ws.session_ids.iter().map(|entry| *entry.key()).collect();
+            if let Err(e) = self
+                .memory
+                .save_workspace_metadata(workspace_id, &ws.name, &ws.description, &session_ids)
+                .await
+            {
+                warn!(
+                    "gRPC RemoveSessionFromWorkspace: failed to persist metadata: {}",
+                    e
+                );
+            }
+        }
+
+        Ok(Response::new(RemoveSessionFromWorkspaceResponse {
+            success: true,
+        }))
+    }
+
+    // --- Source Tracking (Phase 9) ---
 
     async fn register_source(
         &self,
-        _request: Request<RegisterSourceRequest>,
+        request: Request<RegisterSourceRequest>,
     ) -> Result<Response<RegisterSourceAck>, Status> {
-        // TODO: Phase 9 — store source references for freshness tracking
-        warn!("gRPC RegisterSource: not yet implemented (Phase 9)");
-        Ok(Response::new(RegisterSourceAck {}))
+        let session_id_str = get_session_id_from_metadata(&request)?;
+        let session_id = parse_uuid(&session_id_str)?;
+
+        let req = request.into_inner();
+
+        // Ensure source_ref is present
+        let source_ref = req
+            .source_ref
+            .ok_or_else(|| Status::invalid_argument("Missing source_ref in request"))?;
+
+        debug!("gRPC RegisterSource: entry_id={}", source_ref.entry_id);
+
+        match self
+            .memory
+            .storage_actor
+            .register_source(session_id, source_ref)
+            .await
+        {
+            Ok(()) => Ok(Response::new(RegisterSourceAck {})),
+            Err(e) => {
+                error!("gRPC RegisterSource failed: {}", e);
+                let e_msg: String = e.to_string();
+                Err(Status::internal(e_msg))
+            }
+        }
     }
 
     async fn check_freshness(
         &self,
-        _request: Request<FreshnessRequest>,
+        request: Request<FreshnessRequest>,
     ) -> Result<Response<FreshnessReport>, Status> {
-        // TODO: Phase 9 — check file hashes against stored source references
-        warn!("gRPC CheckFreshness: not yet implemented (Phase 9)");
-        Ok(Response::new(FreshnessReport {
-            entries: Vec::new(),
-        }))
+        let req = request.into_inner();
+        debug!(
+            "gRPC CheckFreshness: checking {} entries",
+            req.entry_ids.len()
+        );
+
+        if req.entry_ids.len() != req.current_hashes.len() {
+            return Err(Status::invalid_argument(
+                "entry_ids and current_hashes must have the same length",
+            ));
+        }
+
+        let mut reports = Vec::new();
+        let has_checks = req.checks.len() == req.entry_ids.len();
+
+        for (i, entry_id) in req.entry_ids.iter().enumerate() {
+            let current_hash = &req.current_hashes[i].hash;
+
+            // Use semantic check if FreshnessCheck is provided
+            let (ast_hash, symbol_name) = if has_checks {
+                let check = &req.checks[i];
+                (
+                    if check.ast_hash.is_empty() { None } else { Some(check.ast_hash.clone()) },
+                    if check.symbol_name.is_empty() { None } else { Some(check.symbol_name.clone()) },
+                )
+            } else {
+                (None, None)
+            };
+
+            match self
+                .memory
+                .storage_actor
+                .check_freshness_semantic(
+                    entry_id.to_string(),
+                    current_hash.to_vec(),
+                    ast_hash,
+                    symbol_name,
+                )
+                .await
+            {
+                Ok(entry) => {
+                    reports.push(entry);
+                }
+                Err(e) => {
+                    error!("gRPC CheckFreshness failed for entry {}: {}", entry_id, e);
+                    reports.push(FreshnessEntry {
+                        entry_id: entry_id.clone(),
+                        file_path: req.current_hashes[i].file_path.clone(),
+                        status: FreshnessStatus::Unknown as i32,
+                        stored_hash: Vec::new(),
+                        current_hash: current_hash.clone(),
+                    });
+                }
+            }
+        }
+
+        Ok(Response::new(FreshnessReport { entries: reports }))
     }
 
     async fn invalidate(
         &self,
-        _request: Request<InvalidateRequest>,
+        request: Request<InvalidateRequest>,
     ) -> Result<Response<InvalidateAck>, Status> {
-        // TODO: Phase 9 — invalidate entries by file path
-        warn!("gRPC Invalidate: not yet implemented (Phase 9)");
-        Ok(Response::new(InvalidateAck {
-            entries_invalidated: 0,
-        }))
+        let req = request.into_inner();
+        debug!("gRPC Invalidate: checking source path {}", req.file_path);
+
+        match self
+            .memory
+            .storage_actor
+            .invalidate_source(&req.file_path)
+            .await
+        {
+            Ok(count) => Ok(Response::new(InvalidateAck {
+                entries_invalidated: count,
+            })),
+            Err(e) => {
+                error!("gRPC Invalidate failed for file {}: {}", req.file_path, e);
+                let e_msg: String = e.to_string();
+                Err(Status::internal(e_msg))
+            }
+        }
+    }
+
+    async fn register_symbol_dependency(
+        &self,
+        request: Request<RegisterSymbolDependencyRequest>,
+    ) -> Result<Response<RegisterSymbolDependencyAck>, Status> {
+        let req = request.into_inner();
+        let from = req
+            .from_symbol
+            .ok_or_else(|| Status::invalid_argument("Missing from_symbol"))?;
+        let to_symbols = req.to_symbols;
+
+        debug!(
+            "gRPC RegisterSymbolDependency: {}::{} -> {} deps",
+            from.file_path,
+            from.symbol_name,
+            to_symbols.len()
+        );
+
+        match self
+            .memory
+            .storage_actor
+            .register_symbol_dependencies(from, to_symbols)
+            .await
+        {
+            Ok(count) => Ok(Response::new(RegisterSymbolDependencyAck {
+                edges_created: count,
+            })),
+            Err(e) => {
+                error!("gRPC RegisterSymbolDependency failed: {}", e);
+                Err(Status::internal(e.to_string()))
+            }
+        }
+    }
+
+    async fn cascade_invalidate(
+        &self,
+        request: Request<CascadeInvalidateRequest>,
+    ) -> Result<Response<CascadeInvalidateReport>, Status> {
+        let req = request.into_inner();
+        let changed = req
+            .changed_symbol
+            .ok_or_else(|| Status::invalid_argument("Missing changed_symbol"))?;
+        let max_depth = if req.max_depth == 0 { 10 } else { req.max_depth };
+
+        debug!(
+            "gRPC CascadeInvalidate: {}::{} depth={}",
+            changed.file_path, changed.symbol_name, max_depth
+        );
+
+        match self
+            .memory
+            .storage_actor
+            .cascade_invalidate(changed, req.new_ast_hash, max_depth)
+            .await
+        {
+            Ok(report) => Ok(Response::new(report)),
+            Err(e) => {
+                error!("gRPC CascadeInvalidate failed: {}", e);
+                Err(Status::internal(e.to_string()))
+            }
+        }
     }
 }
 
@@ -331,6 +1074,49 @@ impl PostCortex for PcxGrpcService {
 
 fn parse_uuid(s: &str) -> Result<Uuid, Status> {
     Uuid::parse_str(s).map_err(|_| Status::invalid_argument(format!("Invalid UUID: {s}")))
+}
+
+fn get_session_id_from_metadata<T>(request: &Request<T>) -> Result<String, Status> {
+    request
+        .metadata()
+        .get("x-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .ok_or_else(|| Status::unauthenticated("Missing x-session-id metadata"))
+}
+
+fn parse_session_role(s: &str) -> SessionRole {
+    match s.to_lowercase().as_str() {
+        "primary" => SessionRole::Primary,
+        "dependency" => SessionRole::Dependency,
+        "shared" => SessionRole::Shared,
+        _ => SessionRole::Related,
+    }
+}
+
+fn workspace_to_info(workspace: &crate::workspace::Workspace) -> WorkspaceInfo {
+    let created_at_unix = workspace
+        .created_at
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    let sessions: Vec<WorkspaceSessionEntry> = workspace
+        .session_ids
+        .iter()
+        .map(|entry| WorkspaceSessionEntry {
+            session_id: entry.key().to_string(),
+            role: format!("{:?}", entry.value()),
+        })
+        .collect();
+
+    WorkspaceInfo {
+        workspace_id: workspace.id.to_string(),
+        name: workspace.name.clone(),
+        description: workspace.description.clone(),
+        created_at_unix,
+        sessions,
+    }
 }
 
 fn format_context_description(interaction_type: &str, content: &ContextContent) -> String {
@@ -350,10 +1136,7 @@ fn format_context_description(interaction_type: &str, content: &ContextContent) 
     desc
 }
 
-fn build_update_metadata(
-    interaction_type: &str,
-    content: &ContextContent,
-) -> serde_json::Value {
+fn build_update_metadata(interaction_type: &str, content: &ContextContent) -> serde_json::Value {
     let mut meta = serde_json::json!({
         "interaction_type": interaction_type,
         "title": content.title,

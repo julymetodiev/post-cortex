@@ -5,24 +5,60 @@ service PostCortex {
   // --- Session Management ---
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc LoadSession(LoadSessionRequest) returns (LoadSessionResponse);
+  rpc SearchSessions(SearchSessionsRequest) returns (SearchSessionsResponse);
+  rpc UpdateSessionMetadata(UpdateSessionMetadataRequest) returns (UpdateSessionMetadataResponse);
+  rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
 
   // --- Context Operations ---
   rpc UpdateContext(UpdateContextRequest) returns (UpdateContextResponse);
   rpc QueryContext(QueryContextRequest) returns (QueryContextResponse);
+  rpc BulkUpdateContext(BulkUpdateContextRequest) returns (BulkUpdateContextResponse);
+  rpc CreateCheckpoint(CreateCheckpointRequest) returns (CreateCheckpointResponse);
 
   // --- Semantic Search ---
   rpc SemanticSearch(SemanticSearchRequest) returns (SemanticSearchResponse);
+  rpc FindRelatedContent(FindRelatedContentRequest) returns (FindRelatedContentResponse);
+  rpc VectorizeSession(VectorizeSessionRequest) returns (VectorizeSessionResponse);
+  rpc GetVectorizationStats(GetVectorizationStatsRequest) returns (TextResponse);
 
-  // --- Source Tracking (for coding agent file freshness) ---
+  // --- Analysis & Insights ---
+  rpc GetStructuredSummary(GetStructuredSummaryRequest) returns (TextResponse);
+  rpc GetKeyDecisions(GetKeyDecisionsRequest) returns (TextResponse);
+  rpc GetKeyInsights(GetKeyInsightsRequest) returns (TextResponse);
+  rpc GetEntityImportance(GetEntityImportanceRequest) returns (TextResponse);
+  rpc GetEntityNetwork(GetEntityNetworkRequest) returns (TextResponse);
+  rpc GetSessionStatistics(GetSessionStatisticsRequest) returns (TextResponse);
+
+  // --- Workspace Management ---
+  rpc CreateWorkspace(CreateWorkspaceRequest) returns (CreateWorkspaceResponse);
+  rpc GetWorkspace(GetWorkspaceRequest) returns (GetWorkspaceResponse);
+  rpc ListWorkspaces(ListWorkspacesRequest) returns (ListWorkspacesResponse);
+  rpc DeleteWorkspace(DeleteWorkspaceRequest) returns (DeleteWorkspaceResponse);
+  rpc AddSessionToWorkspace(AddSessionToWorkspaceRequest) returns (AddSessionToWorkspaceResponse);
+  rpc RemoveSessionFromWorkspace(RemoveSessionFromWorkspaceRequest) returns (RemoveSessionFromWorkspaceResponse);
+
+  // --- Source Tracking ---
   rpc RegisterSource(RegisterSourceRequest) returns (RegisterSourceAck);
   rpc CheckFreshness(FreshnessRequest) returns (FreshnessReport);
   rpc Invalidate(InvalidateRequest) returns (InvalidateAck);
+
+  // --- Symbol Dependencies (Phase 9.2) ---
+  rpc RegisterSymbolDependency(RegisterSymbolDependencyRequest) returns (RegisterSymbolDependencyAck);
+  rpc CascadeInvalidate(CascadeInvalidateRequest) returns (CascadeInvalidateReport);
 
   // --- Health ---
   rpc Health(HealthRequest) returns (HealthResponse);
 }
 
-// ============ Session ============
+// ============ Common ============
+
+// Used for RPCs that return JSON text from analysis functions.
+message TextResponse {
+  string text = 1;
+}
+
+// ============ Session Management ============
 
 message CreateSessionRequest {
   string name = 1;
@@ -49,6 +85,41 @@ message SessionInfo {
 
 message ListSessionsResponse {
   repeated SessionInfo sessions = 1;
+}
+
+message LoadSessionRequest {
+  string session_id = 1;
+}
+
+message LoadSessionResponse {
+  SessionInfo session = 1;
+}
+
+message SearchSessionsRequest {
+  string query = 1;
+}
+
+message SearchSessionsResponse {
+  repeated SessionInfo sessions = 1;
+}
+
+message UpdateSessionMetadataRequest {
+  string session_id = 1;
+  // All fields are optional — only provided fields are updated.
+  optional string name = 2;
+  optional string description = 3;
+}
+
+message UpdateSessionMetadataResponse {
+  bool success = 1;
+}
+
+message DeleteSessionRequest {
+  string session_id = 1;
+}
+
+message DeleteSessionResponse {
+  bool success = 1;
 }
 
 // ============ Context Update ============
@@ -85,6 +156,35 @@ message CodeReference {
 
 message UpdateContextResponse {
   string update_id = 1;
+  bool success = 2;
+}
+
+// ============ Bulk Context Update ============
+
+message ContextUpdateItem {
+  string interaction_type = 1;
+  ContextContent content = 2;
+}
+
+message BulkUpdateContextRequest {
+  string session_id = 1;
+  repeated ContextUpdateItem updates = 2;
+}
+
+message BulkUpdateContextResponse {
+  repeated string update_ids = 1;
+  uint32 success_count = 2;
+  uint32 failure_count = 3;
+}
+
+// ============ Checkpoint ============
+
+message CreateCheckpointRequest {
+  string session_id = 1;
+}
+
+message CreateCheckpointResponse {
+  string checkpoint_id = 1;
   bool success = 2;
 }
 
@@ -137,6 +237,132 @@ message SemanticSearchResponse {
   uint32 total_matches = 2;
 }
 
+message FindRelatedContentRequest {
+  string session_id = 1;
+  string topic = 2;
+  optional uint32 limit = 3;
+}
+
+message FindRelatedContentResponse {
+  repeated SearchResult results = 1;
+}
+
+message VectorizeSessionRequest {
+  string session_id = 1;
+}
+
+message VectorizeSessionResponse {
+  bool success = 1;
+  uint32 vectors_created = 2;
+}
+
+message GetVectorizationStatsRequest {}
+
+// ============ Analysis & Insights ============
+
+message GetStructuredSummaryRequest {
+  string session_id = 1;
+  optional bool compact = 2;
+  optional uint32 decisions_limit = 3;
+  optional uint32 entities_limit = 4;
+  optional uint32 questions_limit = 5;
+  optional uint32 concepts_limit = 6;
+  optional float min_confidence = 7;
+}
+
+message GetKeyDecisionsRequest {
+  string session_id = 1;
+}
+
+message GetKeyInsightsRequest {
+  string session_id = 1;
+  optional uint32 limit = 2;
+}
+
+message GetEntityImportanceRequest {
+  string session_id = 1;
+  optional uint32 limit = 2;
+  optional float min_importance = 3;
+}
+
+message GetEntityNetworkRequest {
+  string session_id = 1;
+  optional string center_entity = 2;
+  optional uint32 max_entities = 3;
+  optional uint32 max_relationships = 4;
+}
+
+message GetSessionStatisticsRequest {
+  string session_id = 1;
+}
+
+// ============ Workspace Management ============
+
+message CreateWorkspaceRequest {
+  string name = 1;
+  string description = 2;
+}
+
+message CreateWorkspaceResponse {
+  string workspace_id = 1;
+}
+
+message WorkspaceInfo {
+  string workspace_id = 1;
+  string name = 2;
+  string description = 3;
+  int64 created_at_unix = 4;
+  repeated WorkspaceSessionEntry sessions = 5;
+}
+
+message WorkspaceSessionEntry {
+  string session_id = 1;
+  // Role: Primary, Related, Dependency, Shared
+  string role = 2;
+}
+
+message GetWorkspaceRequest {
+  string workspace_id = 1;
+}
+
+message GetWorkspaceResponse {
+  WorkspaceInfo workspace = 1;
+}
+
+message ListWorkspacesRequest {}
+
+message ListWorkspacesResponse {
+  repeated WorkspaceInfo workspaces = 1;
+}
+
+message DeleteWorkspaceRequest {
+  string workspace_id = 1;
+}
+
+message DeleteWorkspaceResponse {
+  bool success = 1;
+}
+
+message AddSessionToWorkspaceRequest {
+  string workspace_id = 1;
+  string session_id = 2;
+  // Role: Primary, Related, Dependency, Shared
+  string role = 3;
+}
+
+message AddSessionToWorkspaceResponse {
+  bool success = 1;
+}
+
+message RemoveSessionFromWorkspaceRequest {
+  string workspace_id = 1;
+  string session_id = 2;
+}
+
+message RemoveSessionFromWorkspaceResponse {
+  bool success = 1;
+}
+
 // ============ Source Tracking ============
 
 message SourceReference {
@@ -158,6 +384,8 @@ message SourceScope {
 message FunctionScope {
   string name = 1;
   bytes ast_hash = 2;
+  string symbol_type = 3;    // "Function", "Struct", "Class", "Trait", "Interface", "Method", "Enum"
+  repeated string imports = 4; // Symbols this symbol depends on
 }
 
 message BlockScope {
@@ -175,6 +403,14 @@ message RegisterSourceAck {}
 message FreshnessRequest {
   repeated string entry_ids = 1;
   repeated FileHash current_hashes = 2;
+  repeated FreshnessCheck checks = 3; // Richer per-entry checks (optional, parallel to entry_ids)
+}
+
+message FreshnessCheck {
+  string file_path = 1;
+  bytes content_hash = 2;   // File-level hash (fallback)
+  bytes ast_hash = 3;       // Function-level AST hash (optional)
+  string symbol_name = 4;   // For fuzzy matching when lines shift (optional)
 }
 
 message FileHash {
@@ -208,6 +444,35 @@ message InvalidateRequest {
 
 message InvalidateAck {
   uint32 entries_invalidated = 1;
+}
+
+// ============ Symbol Dependencies (Phase 9.2) ============
+
+message SymbolId {
+  string file_path = 1;
+  string symbol_name = 2;
+  string symbol_type = 3;  // "Function", "Struct", etc.
+}
+
+message RegisterSymbolDependencyRequest {
+  SymbolId from_symbol = 1;        // The symbol that depends on another
+  repeated SymbolId to_symbols = 2; // Symbols it depends on
+}
+
+message RegisterSymbolDependencyAck {
+  uint32 edges_created = 1;
+}
+
+message CascadeInvalidateRequest {
+  SymbolId changed_symbol = 1;  // The symbol that changed
+  bytes new_ast_hash = 2;       // Its new AST hash
+  uint32 max_depth = 3;         // Max graph traversal depth (0 = unlimited)
+}
+
+message CascadeInvalidateReport {
+  uint32 direct_invalidations = 1;   // Entries for the changed symbol
+  uint32 cascade_invalidations = 2;  // Entries invalidated via dependency graph
+  repeated string invalidated_symbols = 3; // Names of cascade-invalidated symbols
 }
 
 // ============ Health ============
