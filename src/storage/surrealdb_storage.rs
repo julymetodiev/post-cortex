@@ -3503,11 +3503,14 @@ impl FreshnessStorage for SurrealDBStorage {
                 (None, None, None, None)
             };
 
-        let query = "UPSERT type::thing('source_reference', $entry_id) SET \
+        // Use UPSERT WHERE instead of type::record() to avoid SurrealDB record ID
+        // parsing issues with entry_ids containing special chars (/, ::).
+        let query = "UPSERT source_reference SET \
             entry_id = $entry_id, file_path = $file_path, \
             content_hash = $content_hash, captured_at_unix = $captured_at_unix, \
             symbol_name = $symbol_name, symbol_type = $symbol_type, \
-            ast_hash = $ast_hash, imports = $imports;";
+            ast_hash = $ast_hash, imports = $imports \
+            WHERE entry_id = $entry_id;";
 
         self.db.query(query)
             .bind(("entry_id", reference.entry_id))
@@ -3528,7 +3531,14 @@ impl FreshnessStorage for SurrealDBStorage {
         entry_id: &str,
         file_hash: &[u8],
     ) -> Result<FreshnessEntry> {
-        let record: Option<SourceReferenceRecord> = self.select_one("source_reference", entry_id).await?;
+        // Use query instead of select_one because entry_id contains special chars
+        // (slashes, colons) that SurrealDB record IDs handle differently than UPSERT.
+        let mut response = self.db
+            .query("SELECT * FROM source_reference WHERE entry_id = $entry_id LIMIT 1")
+            .bind(("entry_id", entry_id.to_string()))
+            .await?;
+        let records: Vec<SourceReferenceRecord> = response.take(0)?;
+        let record = records.into_iter().next();
         let current_hash = file_hash.to_vec();
         
         match record {
@@ -3592,8 +3602,13 @@ impl FreshnessStorage for SurrealDBStorage {
         ast_hash: Option<&[u8]>,
         _symbol_name: Option<&str>,
     ) -> Result<FreshnessEntry> {
-        let record: Option<SourceReferenceRecord> =
-            self.select_one("source_reference", entry_id).await?;
+        // Use query instead of select_one because entry_id contains special chars
+        let mut response = self.db
+            .query("SELECT * FROM source_reference WHERE entry_id = $entry_id LIMIT 1")
+            .bind(("entry_id", entry_id.to_string()))
+            .await?;
+        let records: Vec<SourceReferenceRecord> = response.take(0)?;
+        let record = records.into_iter().next();
         let current_hash = file_hash.to_vec();
 
         match record {
@@ -3639,7 +3654,7 @@ impl FreshnessStorage for SurrealDBStorage {
         let mut count = 0u32;
         for to in &to_symbols {
             // Use SurrealDB native graph relations
-            let query = "UPSERT type::thing('symbol_dep', $from_key) SET \
+            let query = "UPSERT type::record('symbol_dep', $from_key) SET \
                 from_file = $from_file, from_symbol = $from_symbol, \
                 to_file = $to_file, to_symbol = $to_symbol, \
                 to_symbol_type = $to_type;";
