@@ -34,6 +34,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{Sender, UnboundedReceiver, UnboundedSender, channel, unbounded_channel};
 use tokio::sync::{OnceCell, Semaphore, oneshot};
+use tokio::time::timeout;
 
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
@@ -336,6 +337,10 @@ pub enum StorageMessage {
         ast_hash: Option<Vec<u8>>,
         symbol_name: Option<String>,
         response_tx: Sender<Result<FreshnessEntry, String>>,
+    },
+    CheckFreshnessBatch {
+        entries: Vec<(String, Vec<u8>, Option<Vec<u8>>, Option<String>)>,
+        response_tx: Sender<Result<Vec<FreshnessEntry>, String>>,
     },
     InvalidateSource {
         file_path: String,
@@ -1999,6 +2004,27 @@ impl StorageActorHandle {
         .await
     }
 
+    pub async fn check_freshness_batch(
+        &self,
+        entries: Vec<(String, Vec<u8>, Option<Vec<u8>>, Option<String>)>,
+    ) -> Result<Vec<FreshnessEntry>, String> {
+        let (response_tx, mut response_rx) = channel(1);
+
+        self.sender
+            .send(StorageMessage::CheckFreshnessBatch {
+                entries,
+                response_tx,
+            })
+            .map_err(|_| "Storage actor unavailable".to_string())?;
+
+        self.execute_with_timeout(
+            OperationType::Medium,
+            "CheckFreshnessBatch",
+            response_rx.recv(),
+        )
+        .await
+    }
+
     pub async fn invalidate_source(
         &self,
         file_path: &str,
@@ -2332,11 +2358,17 @@ impl StorageActor {
                 source_ref,
                 response_tx,
             } => {
-                let result = self
-                    .storage
-                    .register_source(session_id, source_ref)
-                    .await
-                    .map_err(|e| e.to_string());
+                let result = match timeout(
+                    Duration::from_secs(5),
+                    self.storage.register_source(session_id, source_ref),
+                )
+                .await
+                {
+                    Ok(inner) => inner.map_err(|e| e.to_string()),
+                    Err(_) => Err(
+                        "register_source timed out after 5s".to_string()
+                    ),
+                };
                 let _ = response_tx.send(result).await;
             }
             StorageMessage::CheckFreshness {
@@ -2358,6 +2390,14 @@ impl StorageActor {
                     .map_err(|e| e.to_string());
                 let _ = response_tx.send(result).await;
             }
+            StorageMessage::CheckFreshnessBatch { entries, response_tx } => {
+                let result = self
+                    .storage
+                    .check_freshness_batch(entries)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = response_tx.send(result).await;
+            }
             StorageMessage::InvalidateSource {
                 file_path,
                 response_tx,
@@ -2375,18 +2415,23 @@ impl StorageActor {
                 updates,
             } => {
                 self.save_count.fetch_add(1, Ordering::Relaxed);
-                if let Err(e) = self
-                    .storage
-                    .save_session_with_updates(&session, session_id, updates)
-                    .await
-                {
-                    warn!(
-                        "Background persist failed for session {}: {}",
-                        session_id, e
-                    );
-                } else {
-                    debug!("Background persist completed for session {}", session_id);
-                }
+                // Spawn as background task so we don't block the actor queue.
+                // PersistSessionAndUpdate is fire-and-forget (no response_tx),
+                // so it's safe to run outside the actor loop.
+                let storage = Arc::clone(&self.storage);
+                tokio::spawn(async move {
+                    if let Err(e) = storage
+                        .save_session_with_updates(&session, session_id, updates)
+                        .await
+                    {
+                        warn!(
+                            "Background persist failed for session {}: {}",
+                            session_id, e
+                        );
+                    } else {
+                        debug!("Background persist completed for session {}", session_id);
+                    }
+                });
             }
             StorageMessage::RegisterSymbolDependencies {
                 from,

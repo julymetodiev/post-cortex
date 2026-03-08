@@ -319,6 +319,40 @@ pub trait FreshnessStorage: Send + Sync {
         new_ast_hash: Vec<u8>,
         max_depth: u32,
     ) -> Result<CascadeInvalidateReport>;
+
+    /// Batch freshness check: check multiple entries in a single storage round-trip.
+    ///
+    /// Each element of `entries` is `(entry_id, file_hash, ast_hash, symbol_name)`.
+    /// Returns one `FreshnessEntry` per input element, in the same order.
+    ///
+    /// The default implementation loops over `check_freshness_semantic` calls.
+    /// Backends with native batch support (e.g., SurrealDB) should override this
+    /// with a single `WHERE entry_id IN $ids` query.
+    async fn check_freshness_batch(
+        &self,
+        entries: Vec<(String, Vec<u8>, Option<Vec<u8>>, Option<String>)>,
+    ) -> Result<Vec<FreshnessEntry>> {
+        let mut results = Vec::with_capacity(entries.len());
+        for (entry_id, file_hash, ast_hash, symbol_name) in entries {
+            let result = self
+                .check_freshness_semantic(
+                    &entry_id,
+                    &file_hash,
+                    ast_hash.as_deref(),
+                    symbol_name.as_deref(),
+                )
+                .await
+                .unwrap_or_else(|_| FreshnessEntry {
+                    entry_id: entry_id.clone(),
+                    file_path: String::new(),
+                    status: crate::daemon::grpc_service::pb::FreshnessStatus::Unknown as i32,
+                    stored_hash: Vec::new(),
+                    current_hash: file_hash,
+                });
+            results.push(result);
+        }
+        Ok(results)
+    }
 }
 
 /// Unified storage backend enum for runtime selection.
@@ -806,6 +840,17 @@ impl FreshnessStorage for StorageBackend {
                     .cascade_invalidate(changed, new_ast_hash, max_depth)
                     .await
             }
+        }
+    }
+
+    async fn check_freshness_batch(
+        &self,
+        entries: Vec<(String, Vec<u8>, Option<Vec<u8>>, Option<String>)>,
+    ) -> Result<Vec<FreshnessEntry>> {
+        match self {
+            StorageBackend::RocksDB(storage) => storage.check_freshness_batch(entries).await,
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => storage.check_freshness_batch(entries).await,
         }
     }
 }

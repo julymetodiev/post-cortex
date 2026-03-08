@@ -40,6 +40,7 @@ service PostCortex {
 
   // --- Source Tracking ---
   rpc RegisterSource(RegisterSourceRequest) returns (RegisterSourceAck);
+  rpc RegisterSourceBatch(RegisterSourceBatchRequest) returns (RegisterSourceBatchAck);
   rpc CheckFreshness(FreshnessRequest) returns (FreshnessReport);
   rpc Invalidate(InvalidateRequest) returns (InvalidateAck);
 
@@ -399,6 +400,14 @@ message RegisterSourceRequest {
 }
 
 message RegisterSourceAck {}
+
+message RegisterSourceBatchRequest {
+  repeated SourceReference sources = 1;
+}
+
+message RegisterSourceBatchAck {
+  uint32 registered = 1;
+}
 
 message FreshnessRequest {
   repeated string entry_ids = 1;

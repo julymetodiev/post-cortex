@@ -3646,6 +3646,77 @@ impl FreshnessStorage for SurrealDBStorage {
         }
     }
 
+    async fn check_freshness_batch(
+        &self,
+        entries: Vec<(String, Vec<u8>, Option<Vec<u8>>, Option<String>)>,
+    ) -> Result<Vec<FreshnessEntry>> {
+        if entries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Collect the entry_ids for the single batch query.
+        let ids: Vec<String> = entries.iter().map(|(id, _, _, _)| id.clone()).collect();
+
+        // ONE round-trip to SurrealDB: WHERE entry_id IN $ids.
+        // We use .query()/.bind() to avoid the record-ID parsing issue with
+        // entry_ids that contain '/' or '::'.
+        let mut response = self
+            .db
+            .query("SELECT * FROM source_reference WHERE entry_id IN $ids")
+            .bind(("ids", ids.clone()))
+            .await?;
+        let records: Vec<SourceReferenceRecord> = response.take(0)?;
+
+        // Build a lookup map: entry_id -> record
+        let record_map: std::collections::HashMap<String, SourceReferenceRecord> = records
+            .into_iter()
+            .map(|r| (r.entry_id.clone(), r))
+            .collect();
+
+        // For each input entry, match against the fetched records and compare hashes.
+        let mut results = Vec::with_capacity(entries.len());
+        for (entry_id, file_hash, ast_hash, _symbol_name) in entries {
+            let current_hash = file_hash.clone();
+            match record_map.get(&entry_id) {
+                Some(r) => {
+                    // Semantic: prefer ast_hash comparison when both sides have it
+                    let is_fresh = if let (Some(client_ast), Some(stored_ast)) =
+                        (ast_hash.as_deref(), r.ast_hash.as_deref())
+                    {
+                        client_ast == stored_ast
+                    } else {
+                        r.content_hash == current_hash
+                    };
+
+                    let status = if is_fresh {
+                        FreshnessStatus::Fresh as i32
+                    } else {
+                        FreshnessStatus::Stale as i32
+                    };
+
+                    results.push(FreshnessEntry {
+                        entry_id: r.entry_id.clone(),
+                        file_path: r.file_path.clone(),
+                        status,
+                        stored_hash: r.content_hash.clone(),
+                        current_hash,
+                    });
+                }
+                None => {
+                    results.push(FreshnessEntry {
+                        entry_id,
+                        file_path: String::new(),
+                        status: FreshnessStatus::Unknown as i32,
+                        stored_hash: Vec::new(),
+                        current_hash,
+                    });
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
     async fn register_symbol_dependencies(
         &self,
         from: SymbolId,

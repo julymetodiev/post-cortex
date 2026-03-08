@@ -6,6 +6,7 @@
 use crate::ConversationMemorySystem;
 use crate::storage::rocksdb_storage::SessionCheckpoint;
 use crate::workspace::SessionRole;
+use futures::future::join_all;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
@@ -920,6 +921,47 @@ impl PostCortex for PcxGrpcService {
         }
     }
 
+    async fn register_source_batch(
+        &self,
+        request: Request<RegisterSourceBatchRequest>,
+    ) -> Result<Response<RegisterSourceBatchAck>, Status> {
+        let session_id_str = get_session_id_from_metadata(&request)?;
+        let session_id = parse_uuid(&session_id_str)?;
+
+        let req = request.into_inner();
+        let total = req.sources.len();
+        debug!(
+            "gRPC RegisterSourceBatch: session={} sources={}",
+            session_id, total
+        );
+
+        let futures = req.sources.into_iter().map(|source_ref| {
+            let entry_id = source_ref.entry_id.clone();
+            let actor = self.memory.storage_actor.clone();
+            async move { (entry_id, actor.register_source(session_id, source_ref).await) }
+        });
+        let results = join_all(futures).await;
+
+        let mut registered: u32 = 0;
+        for (entry_id, result) in results {
+            match result {
+                Ok(()) => registered += 1,
+                Err(e) => {
+                    error!(
+                        "gRPC RegisterSourceBatch: failed for entry_id={}: {}",
+                        entry_id, e
+                    );
+                }
+            }
+        }
+
+        debug!(
+            "gRPC RegisterSourceBatch: registered {}/{} sources",
+            registered, total
+        );
+        Ok(Response::new(RegisterSourceBatchAck { registered }))
+    }
+
     async fn check_freshness(
         &self,
         request: Request<FreshnessRequest>,
@@ -936,51 +978,66 @@ impl PostCortex for PcxGrpcService {
             ));
         }
 
-        let mut reports = Vec::new();
         let has_checks = req.checks.len() == req.entry_ids.len();
 
-        for (i, entry_id) in req.entry_ids.iter().enumerate() {
-            let current_hash = &req.current_hashes[i].hash;
+        // Collect per-entry metadata needed for fallback Unknown responses.
+        // (file_path is not stored in storage; it comes from the request.)
+        let mut file_paths: Vec<String> = Vec::with_capacity(req.entry_ids.len());
+        let mut fallback_hashes: Vec<Vec<u8>> = Vec::with_capacity(req.entry_ids.len());
 
-            // Use semantic check if FreshnessCheck is provided
-            let (ast_hash, symbol_name) = if has_checks {
-                let check = &req.checks[i];
-                (
-                    if check.ast_hash.is_empty() { None } else { Some(check.ast_hash.clone()) },
-                    if check.symbol_name.is_empty() { None } else { Some(check.symbol_name.clone()) },
-                )
-            } else {
-                (None, None)
-            };
+        // Build the batch input: one tuple per entry.
+        let batch: Vec<(String, Vec<u8>, Option<Vec<u8>>, Option<String>)> = req
+            .entry_ids
+            .iter()
+            .enumerate()
+            .map(|(i, entry_id)| {
+                let current_hash = req.current_hashes[i].hash.clone();
+                file_paths.push(req.current_hashes[i].file_path.clone());
+                fallback_hashes.push(current_hash.clone());
 
-            match self
-                .memory
-                .storage_actor
-                .check_freshness_semantic(
-                    entry_id.to_string(),
-                    current_hash.to_vec(),
-                    ast_hash,
-                    symbol_name,
-                )
-                .await
-            {
-                Ok(entry) => {
-                    reports.push(entry);
-                }
-                Err(e) => {
-                    error!("gRPC CheckFreshness failed for entry {}: {}", entry_id, e);
-                    reports.push(FreshnessEntry {
-                        entry_id: entry_id.clone(),
-                        file_path: req.current_hashes[i].file_path.clone(),
+                let (ast_hash, symbol_name) = if has_checks {
+                    let check = &req.checks[i];
+                    (
+                        if check.ast_hash.is_empty() {
+                            None
+                        } else {
+                            Some(check.ast_hash.clone())
+                        },
+                        if check.symbol_name.is_empty() {
+                            None
+                        } else {
+                            Some(check.symbol_name.clone())
+                        },
+                    )
+                } else {
+                    (None, None)
+                };
+
+                (entry_id.clone(), current_hash, ast_hash, symbol_name)
+            })
+            .collect();
+
+        // Single actor message — one SurrealDB round-trip for the whole batch.
+        match self.memory.storage_actor.check_freshness_batch(batch).await {
+            Ok(entries) => Ok(Response::new(FreshnessReport { entries })),
+            Err(e) => {
+                error!("gRPC CheckFreshness batch failed: {}", e);
+                // Fall back to Unknown for every entry so callers are not blocked.
+                let reports = req
+                    .entry_ids
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, entry_id)| FreshnessEntry {
+                        entry_id,
+                        file_path: file_paths.get(i).cloned().unwrap_or_default(),
                         status: FreshnessStatus::Unknown as i32,
                         stored_hash: Vec::new(),
-                        current_hash: current_hash.clone(),
-                    });
-                }
+                        current_hash: fallback_hashes.get(i).cloned().unwrap_or_default(),
+                    })
+                    .collect();
+                Ok(Response::new(FreshnessReport { entries: reports }))
             }
         }
-
-        Ok(Response::new(FreshnessReport { entries: reports }))
     }
 
     async fn invalidate(
