@@ -42,7 +42,7 @@ use uuid::Uuid;
 // Retry configuration constants
 const MAX_VECTORIZATION_RETRIES: u32 = 3;
 const VECTORIZATION_RETRY_DELAY_MS: u64 = 100;
-const MAX_VECTORIZER_INIT_RETRIES: u32 = 2;
+const MAX_VECTORIZER_INIT_RETRIES: u32 = 10;
 
 // Timeout constants for different operation types
 const TIMEOUT_FAST_MS: u64 = 5_000; // 5 seconds for simple operations
@@ -2514,36 +2514,10 @@ impl ConversationMemorySystem {
             "add_context_update_to_session: Starting with description: '{}'",
             description
         );
-        // Try to deserialize complete ContextUpdate from metadata
+        // Deserialize ContextUpdate from metadata — caller MUST provide valid metadata
         let update = if let Some(metadata) = metadata {
-            if let Ok(context_update) = serde_json::from_value::<ContextUpdate>(metadata) {
-                tracing::info!(
-                    "Using provided ContextUpdate with ID: {}",
-                    context_update.id
-                );
-                context_update
-            } else {
-                tracing::info!("Failed to deserialize ContextUpdate, creating new one");
-                let update_id = Uuid::new_v4();
-                ContextUpdate {
-                    id: update_id,
-                    update_type: UpdateType::ConceptDefined,
-                    content: UpdateContent {
-                        title: "Incremental Update".to_string(),
-                        description,
-                        details: Vec::new(),
-                        examples: Vec::new(),
-                        implications: Vec::new(),
-                    },
-                    timestamp: chrono::Utc::now(),
-                    related_code: None,
-                    parent_update: None,
-                    user_marked_important: false,
-                    creates_entities: Vec::new(),
-                    creates_relationships: Vec::new(),
-                    references_entities: Vec::new(),
-                }
-            }
+            serde_json::from_value::<ContextUpdate>(metadata)
+                .map_err(|e| format!("Invalid ContextUpdate metadata: {e}"))?
         } else {
             tracing::info!("No metadata provided, creating new ContextUpdate");
             let update_id = Uuid::new_v4();
@@ -2616,19 +2590,21 @@ impl ConversationMemorySystem {
     /// Lazy-initialize content vectorizer on first use with retry mechanism
     #[cfg(feature = "embeddings")]
     async fn ensure_vectorizer_initialized(&self) -> Result<Arc<ContentVectorizer>, String> {
-        // Check if already initialized
+        // Check if already initialized — fast path, no counter increment
         if let Some(vectorizer) = self.content_vectorizer.get() {
             return Ok(Arc::clone(vectorizer));
         }
 
-        // Track initialization attempts for diagnostics
+        // Note: We don't increment the counter here because concurrent callers
+        // would burn through the limit. The counter is incremented only on actual
+        // initialization failure inside the closure.
         let attempt = self
             .embedding_config_holder
             .init_attempt_count
-            .fetch_add(1, Ordering::Relaxed)
+            .load(Ordering::Relaxed)
             + 1;
 
-        // Check if we've exceeded max retries
+        // Check if we've exceeded max retries (set by actual failures, not callers)
         if attempt > MAX_VECTORIZER_INIT_RETRIES as u64 + 1 {
             if let Some(last_error) = self.embedding_config_holder.last_init_error.read().as_ref() {
                 return Err(format!(
@@ -2681,7 +2657,7 @@ impl ConversationMemorySystem {
                 // Set persistent storage for embedding persistence
                 vectorizer.set_persistent_storage(self.vector_storage.clone());
 
-                // Load persisted embeddings from storage immediately on initialization
+                // Load persisted embeddings from storage (best-effort, don't fail init)
                 match vectorizer.load_all_embeddings_from_storage().await {
                     Ok(count) => {
                         if count > 0 {
@@ -2689,8 +2665,9 @@ impl ConversationMemorySystem {
                         }
                     }
                     Err(e) => {
-                        // We fail initialization if we can't load embeddings - this allows retry
-                        return Err(format!("Failed to load persisted embeddings from storage: {}", e));
+                        // Don't fail initialization — embeddings will be re-vectorized on demand.
+                        // SurrealDB WS can have transient errors under concurrent access.
+                        warn!("Failed to load persisted embeddings (non-fatal, will re-vectorize on demand): {}", e);
                     }
                 }
 
@@ -2710,11 +2687,17 @@ impl ConversationMemorySystem {
                 Ok(Arc::clone(vectorizer))
             }
             Err(e) => {
+                // Increment counter only on actual failure (not on concurrent caller contention)
+                let real_attempt = self
+                    .embedding_config_holder
+                    .init_attempt_count
+                    .fetch_add(1, Ordering::Relaxed)
+                    + 1;
                 // Store the error for diagnostics
                 *self.embedding_config_holder.last_init_error.write() = Some(e.clone());
                 error!(
                     "Vectorizer initialization failed on attempt {}: {}",
-                    attempt, e
+                    real_attempt, e
                 );
                 Err(e)
             }

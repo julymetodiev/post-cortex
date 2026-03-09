@@ -414,16 +414,21 @@ impl ContentVectorizer {
         let mut vectorized_count = 0;
 
         // Vectorize context updates
-        vectorized_count += self.vectorize_context_updates(session).await?;
+        let update_count = self.vectorize_context_updates(session).await?;
+        vectorized_count += update_count;
 
         // Vectorize entity descriptions if enabled
-        if self.config.enable_entity_vectorization {
-            vectorized_count += self.vectorize_entities(session).await?;
-        }
+        let entity_count = if self.config.enable_entity_vectorization {
+            let c = self.vectorize_entities(session).await?;
+            vectorized_count += c;
+            c
+        } else {
+            0
+        };
 
         info!(
-            "Vectorized {} items for session {}",
-            vectorized_count, session.id()
+            "Vectorized {} items for session {} (updates={}, entities={})",
+            vectorized_count, session.id(), update_count, entity_count
         );
         Ok(vectorized_count)
     }
@@ -431,7 +436,7 @@ impl ContentVectorizer {
     /// Vectorize only the most recent update (incremental vectorization)
     /// This is much more efficient than re-vectorizing the entire session
     pub async fn vectorize_latest_update(&self, session: &ActiveSession) -> Result<usize> {
-        debug!("Vectorizing latest update for session: {}", session.id());
+        info!("vectorize_latest_update: session={}, hot_context_len={}", session.id(), session.hot_context.len());
 
         // Get the most recent update from hot context (VecDeque uses back() not last())
         let latest_update = session.hot_context.back();
@@ -440,7 +445,7 @@ impl ContentVectorizer {
         let update = match latest_update {
             Some(u) => u,
             None => {
-                debug!("No updates to vectorize for session {}", session.id());
+                info!("vectorize_latest_update: no updates in hot_context for session {}", session.id());
                 return Ok(0);
             }
         };
@@ -448,6 +453,7 @@ impl ContentVectorizer {
         let raw_text = Self::extract_text_from_update(&update);
 
         if !self.should_vectorize_text(&raw_text) {
+            info!("vectorize_latest_update: text too short ({} chars) for session {}", raw_text.len(), session.id());
             debug!("Skipping vectorization - text too short or empty");
             return Ok(0);
         }
@@ -534,11 +540,18 @@ impl ContentVectorizer {
         }
 
         // Count only non-vectorized updates for threshold decision
+        let total_updates = session.incremental_updates.len();
+        let vectorized_ids_count = session.vectorized_update_ids.len();
         let non_vectorized_count = session
             .incremental_updates
             .iter()
             .filter(|u| !session.vectorized_update_ids.contains(&u.id))
             .count();
+
+        info!(
+            "vectorize_context_updates: session={}, total_updates={}, vectorized_ids={}, non_vectorized={}, actual_in_vector_db={}",
+            session.id(), total_updates, vectorized_ids_count, non_vectorized_count, actual_vectorized.len()
+        );
 
         // Use parallel processing for large sessions, sequential for small ones
         let (texts_to_embed, metadata_list) = if non_vectorized_count >= PARALLEL_PROCESSING_THRESHOLD {
@@ -553,7 +566,10 @@ impl ContentVectorizer {
         };
 
         if texts_to_embed.is_empty() {
-            debug!("No new texts to vectorize for session {}", session.id());
+            info!(
+                "vectorize_context_updates: NO texts to embed for session {} (non_vectorized={}, collected=0 — texts too short or filtered)",
+                session.id(), non_vectorized_count
+            );
             return Ok(0);
         }
 

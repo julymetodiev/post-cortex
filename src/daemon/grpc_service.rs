@@ -605,24 +605,37 @@ impl PostCortex for PcxGrpcService {
         let req = request.into_inner();
         debug!("gRPC GetStructuredSummary: session_id={}", req.session_id);
 
-        let result = crate::tools::mcp::get_structured_summary(
-            req.session_id,
-            req.decisions_limit.map(|v| v as usize),
-            req.entities_limit.map(|v| v as usize),
-            req.questions_limit.map(|v| v as usize),
-            req.concepts_limit.map(|v| v as usize),
-            req.min_confidence,
-            req.compact,
-        )
-        .await
-        .map_err(|e| {
-            error!("gRPC GetStructuredSummary failed: {}", e);
-            Status::internal(e.to_string())
-        })?;
+        let session_id = parse_uuid(&req.session_id)?;
+        let session_arc = self.memory.get_session(session_id).await
+            .map_err(|e| Status::not_found(e))?;
+        let session = session_arc.load();
 
-        Ok(Response::new(TextResponse {
-            text: result.message,
-        }))
+        use crate::summary::{SummaryGenerator, SummaryOptions};
+        let user_requested_compact = req.compact.unwrap_or(false);
+        const MAX_TOKENS: usize = 50_000;
+
+        let (_estimated_tokens, should_compact) =
+            SummaryGenerator::estimate_summary_size(&session, MAX_TOKENS);
+        let auto_compacted = !user_requested_compact && should_compact;
+
+        let options = if user_requested_compact || auto_compacted {
+            SummaryOptions::compact()
+        } else {
+            SummaryOptions {
+                decisions_limit: req.decisions_limit.map(|v| v as usize),
+                entities_limit: req.entities_limit.map(|v| v as usize),
+                questions_limit: req.questions_limit.map(|v| v as usize),
+                concepts_limit: req.concepts_limit.map(|v| v as usize),
+                min_confidence: req.min_confidence,
+                compact: false,
+            }
+        };
+
+        let summary = SummaryGenerator::generate_structured_summary_filtered(&session, &options);
+        let text = serde_json::to_string_pretty(&summary)
+            .unwrap_or_else(|_| format!("{summary:?}"));
+
+        Ok(Response::new(TextResponse { text }))
     }
 
     async fn get_key_decisions(
@@ -632,16 +645,17 @@ impl PostCortex for PcxGrpcService {
         let req = request.into_inner();
         debug!("gRPC GetKeyDecisions: session_id={}", req.session_id);
 
-        let result = crate::tools::mcp::get_key_decisions(req.session_id)
-            .await
-            .map_err(|e| {
-                error!("gRPC GetKeyDecisions failed: {}", e);
-                Status::internal(e.to_string())
-            })?;
+        let session_id = parse_uuid(&req.session_id)?;
+        let session_arc = self.memory.get_session(session_id).await
+            .map_err(|e| Status::not_found(e))?;
+        let session = session_arc.load();
 
-        Ok(Response::new(TextResponse {
-            text: result.message,
-        }))
+        use crate::summary::SummaryGenerator;
+        let decisions = SummaryGenerator::extract_decision_timeline(&session);
+        let text = serde_json::to_string_pretty(&decisions)
+            .unwrap_or_else(|_| format!("{decisions:?}"));
+
+        Ok(Response::new(TextResponse { text }))
     }
 
     async fn get_key_insights(
@@ -651,17 +665,17 @@ impl PostCortex for PcxGrpcService {
         let req = request.into_inner();
         debug!("gRPC GetKeyInsights: session_id={}", req.session_id);
 
-        let result =
-            crate::tools::mcp::get_key_insights(req.session_id, req.limit.map(|v| v as usize))
-                .await
-                .map_err(|e| {
-                    error!("gRPC GetKeyInsights failed: {}", e);
-                    Status::internal(e.to_string())
-                })?;
+        let session_id = parse_uuid(&req.session_id)?;
+        let session_arc = self.memory.get_session(session_id).await
+            .map_err(|e| Status::not_found(e))?;
+        let session = session_arc.load();
 
-        Ok(Response::new(TextResponse {
-            text: result.message,
-        }))
+        use crate::summary::SummaryGenerator;
+        let insights = SummaryGenerator::extract_key_insights(&session, req.limit.map(|v| v as usize).unwrap_or(5));
+        let text = serde_json::to_string_pretty(&insights)
+            .unwrap_or_else(|_| format!("{insights:?}"));
+
+        Ok(Response::new(TextResponse { text }))
     }
 
     async fn get_entity_importance(
@@ -671,20 +685,22 @@ impl PostCortex for PcxGrpcService {
         let req = request.into_inner();
         debug!("gRPC GetEntityImportance: session_id={}", req.session_id);
 
-        let result = crate::tools::mcp::get_entity_importance_analysis(
-            req.session_id,
-            req.limit.map(|v| v as usize),
-            req.min_importance,
-        )
-        .await
-        .map_err(|e| {
-            error!("gRPC GetEntityImportance failed: {}", e);
-            Status::internal(e.to_string())
-        })?;
+        let session_id = parse_uuid(&req.session_id)?;
+        let session_arc = self.memory.get_session(session_id).await
+            .map_err(|e| Status::not_found(e))?;
+        let session = session_arc.load();
 
-        Ok(Response::new(TextResponse {
-            text: result.message,
-        }))
+        let mut analysis = session.entity_graph.analyze_entity_importance();
+        if let Some(min_imp) = req.min_importance {
+            analysis.retain(|a| a.importance_score >= min_imp);
+        }
+        if let Some(limit) = req.limit {
+            analysis.truncate(limit as usize);
+        }
+        let text = serde_json::to_string_pretty(&analysis)
+            .unwrap_or_else(|_| format!("{analysis:?}"));
+
+        Ok(Response::new(TextResponse { text }))
     }
 
     async fn get_entity_network(
@@ -694,21 +710,26 @@ impl PostCortex for PcxGrpcService {
         let req = request.into_inner();
         debug!("gRPC GetEntityNetwork: session_id={}", req.session_id);
 
-        let result = crate::tools::mcp::get_entity_network_view(
-            req.session_id,
-            req.center_entity,
-            req.max_entities.map(|v| v as usize),
-            req.max_relationships.map(|v| v as usize),
-        )
-        .await
-        .map_err(|e| {
-            error!("gRPC GetEntityNetwork failed: {}", e);
-            Status::internal(e.to_string())
-        })?;
+        let session_id = parse_uuid(&req.session_id)?;
+        let session_arc = self.memory.get_session(session_id).await
+            .map_err(|e| Status::not_found(e))?;
+        let session = session_arc.load();
 
-        Ok(Response::new(TextResponse {
-            text: result.message,
-        }))
+        let network = match req.center_entity {
+            Some(entity) => session.entity_graph.get_entity_network(&entity, 2),
+            None => {
+                let top_entities = session.entity_graph.get_most_important_entities(1);
+                if let Some(top) = top_entities.first() {
+                    session.entity_graph.get_entity_network(&top.name, 2)
+                } else {
+                    session.entity_graph.get_entity_network("", 2)
+                }
+            }
+        };
+        let text = serde_json::to_string_pretty(&network)
+            .unwrap_or_else(|_| format!("{network:?}"));
+
+        Ok(Response::new(TextResponse { text }))
     }
 
     async fn get_session_statistics(
@@ -718,16 +739,17 @@ impl PostCortex for PcxGrpcService {
         let req = request.into_inner();
         debug!("gRPC GetSessionStatistics: session_id={}", req.session_id);
 
-        let result = crate::tools::mcp::get_session_statistics(req.session_id)
-            .await
-            .map_err(|e| {
-                error!("gRPC GetSessionStatistics failed: {}", e);
-                Status::internal(e.to_string())
-            })?;
+        let session_id = parse_uuid(&req.session_id)?;
+        let session_arc = self.memory.get_session(session_id).await
+            .map_err(|e| Status::not_found(e))?;
+        let session = session_arc.load();
 
-        Ok(Response::new(TextResponse {
-            text: result.message,
-        }))
+        use crate::summary::SummaryGenerator;
+        let stats = SummaryGenerator::calculate_session_stats(&session);
+        let text = serde_json::to_string_pretty(&stats)
+            .unwrap_or_else(|_| format!("{stats:?}"));
+
+        Ok(Response::new(TextResponse { text }))
     }
 
     // --- Workspace Management ---
@@ -1194,33 +1216,49 @@ fn format_context_description(interaction_type: &str, content: &ContextContent) 
 }
 
 fn build_update_metadata(interaction_type: &str, content: &ContextContent) -> serde_json::Value {
-    let mut meta = serde_json::json!({
-        "interaction_type": interaction_type,
-        "title": content.title,
-        "description": content.description,
+    use crate::core::context_update::{ContextUpdate, UpdateContent, UpdateType};
+
+    let update_type = match interaction_type {
+        "decision_made" => UpdateType::DecisionMade,
+        "problem_solved" => UpdateType::ProblemSolved,
+        "code_change" | "code_changed" => UpdateType::CodeChanged,
+        "qa" | "question_answered" => UpdateType::QuestionAnswered,
+        "requirement_added" => UpdateType::RequirementAdded,
+        "concept_defined" | _ => UpdateType::ConceptDefined,
+    };
+
+    let related_code = content.code_ref.as_ref().map(|c| {
+        crate::core::context_update::CodeReference {
+            file_path: c.file_path.clone(),
+            start_line: c.start_line,
+            end_line: c.end_line,
+            code_snippet: c.code_snippet.clone(),
+            commit_hash: if c.commit_hash.is_empty() { None } else { Some(c.commit_hash.clone()) },
+            branch: if c.branch.is_empty() { None } else { Some(c.branch.clone()) },
+            change_description: c.change_description.clone(),
+        }
     });
 
-    if !content.details.is_empty() {
-        meta["details"] = serde_json::json!(content.details);
-    }
-    if !content.examples.is_empty() {
-        meta["examples"] = serde_json::json!(content.examples);
-    }
-    if !content.implications.is_empty() {
-        meta["implications"] = serde_json::json!(content.implications);
-    }
+    let update = ContextUpdate {
+        id: Uuid::new_v4(),
+        timestamp: chrono::Utc::now(),
+        update_type,
+        content: UpdateContent {
+            title: content.title.clone(),
+            description: content.description.clone(),
+            details: content.details.clone(),
+            examples: content.examples.clone(),
+            implications: content.implications.clone(),
+        },
+        related_code,
+        parent_update: None,
+        user_marked_important: false,
+        creates_entities: Vec::new(),
+        creates_relationships: Vec::new(),
+        references_entities: Vec::new(),
+    };
 
-    if let Some(ref code_ref) = content.code_ref {
-        meta["code_reference"] = serde_json::json!({
-            "file_path": code_ref.file_path,
-            "start_line": code_ref.start_line,
-            "end_line": code_ref.end_line,
-            "code_snippet": code_ref.code_snippet,
-            "change_description": code_ref.change_description,
-        });
-    }
-
-    meta
+    serde_json::to_value(update).expect("ContextUpdate serialization cannot fail")
 }
 
 /// Start the gRPC server on the given port.
