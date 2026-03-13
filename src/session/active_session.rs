@@ -1307,7 +1307,14 @@ impl ActiveSession {
             referenced_entities.len()
         );
 
-        // If no entities were explicitly provided, extract from content
+        // If no entities were explicitly provided, extract from content.
+        // NER relations extracted from the model (typed edges for the graph).
+        let mut ner_relations: Vec<crate::core::context_update::EntityRelationship> = Vec::new();
+        // NER entity types (more accurate than heuristic inference).
+        let mut ner_entity_types: std::collections::HashMap<String, crate::core::context_update::EntityType> = std::collections::HashMap::new();
+        // Track whether NER was used — if so, skip heuristic relation extraction entirely.
+        let mut ner_used = false;
+
         if extracted_entities.is_empty() && referenced_entities.is_empty() {
             let content_text = format!(
                 "{} {} {}",
@@ -1317,15 +1324,50 @@ impl ActiveSession {
             );
             info!("Extracting entities from text: '{}'", content_text);
 
-            let auto_extracted = self.extract_entities_from_text(&content_text);
-            info!(
-                "Auto-extracted {} entities: {:?}",
-                auto_extracted.len(),
-                auto_extracted
-            );
+            // Use NER for entity + relation extraction (no heuristic fallback when NER is loaded)
+            #[cfg(feature = "embeddings")]
+            {
+                if let Some(engine) = GLOBAL_NER_ENGINE.get() {
+                    match engine.extract_for_graph(&content_text) {
+                        Ok((typed_entities, typed_relations)) => {
+                            info!(
+                                "NER extracted {} entities, {} relations",
+                                typed_entities.len(),
+                                typed_relations.len()
+                            );
+                            let names: Vec<String> = typed_entities.iter().map(|(n, _)| n.clone()).collect();
+                            for (name, etype) in &typed_entities {
+                                ner_entity_types.insert(name.clone(), etype.clone());
+                            }
+                            ner_relations = typed_relations;
+                            ner_used = true;
+                            extracted_entities.extend(names.clone());
+                            referenced_entities.extend(names);
+                        }
+                        Err(e) => {
+                            info!("NER extract_for_graph failed: {}", e);
+                            // NER loaded but errored — still no heuristic fallback for relations,
+                            // but extract entity names via the simpler path for graph nodes.
+                            let auto_extracted = self.extract_entities_from_text(&content_text);
+                            ner_used = true; // NER is authoritative, don't mix with heuristic relations
+                            extracted_entities.extend(auto_extracted.clone());
+                            referenced_entities.extend(auto_extracted);
+                        }
+                    }
+                } else {
+                    // NER not loaded — use pattern-based extraction (legacy path)
+                    let auto_extracted = self.extract_entities_from_text(&content_text);
+                    extracted_entities.extend(auto_extracted.clone());
+                    referenced_entities.extend(auto_extracted);
+                }
+            }
 
-            extracted_entities.extend(auto_extracted.clone());
-            referenced_entities.extend(auto_extracted);
+            #[cfg(not(feature = "embeddings"))]
+            {
+                let auto_extracted = self.extract_entities_from_text(&content_text);
+                extracted_entities.extend(auto_extracted.clone());
+                referenced_entities.extend(auto_extracted);
+            }
         }
 
         // Prepare content text for entity scoring
@@ -1370,22 +1412,30 @@ impl ActiveSession {
             self.total_entities_truncated
         );
 
-        // Pre-compute entity types and relationships before taking mutable borrow of entity_graph
-        // This avoids borrowing self while entity_graph is mutably borrowed
+        // Pre-compute entity types before taking mutable borrow of entity_graph.
+        // Prefer NER-inferred types (from extract_for_graph) over heuristic inference.
         let mut entity_type_map = std::collections::HashMap::new();
 
         for name in &extracted_entities {
-            entity_type_map.insert(
-                name.clone(),
-                self.infer_entity_type(&update.update_type, name),
-            );
-        }
-        for name in &referenced_entities {
-            if !entity_type_map.contains_key(name) {
+            if let Some(ner_type) = ner_entity_types.get(name) {
+                entity_type_map.insert(name.clone(), ner_type.clone());
+            } else {
                 entity_type_map.insert(
                     name.clone(),
                     self.infer_entity_type(&update.update_type, name),
                 );
+            }
+        }
+        for name in &referenced_entities {
+            if !entity_type_map.contains_key(name) {
+                if let Some(ner_type) = ner_entity_types.get(name) {
+                    entity_type_map.insert(name.clone(), ner_type.clone());
+                } else {
+                    entity_type_map.insert(
+                        name.clone(),
+                        self.infer_entity_type(&update.update_type, name),
+                    );
+                }
             }
         }
 
@@ -1395,8 +1445,18 @@ impl ActiveSession {
         all_entities.sort();
         all_entities.dedup();
 
-        // Extract relationships from text (heuristic)
-        let extracted_rels = if !all_entities.is_empty() {
+        // When NER was used, trust its relations exclusively (even if 0 — that means
+        // the model found no relations above threshold, which is better than heuristic noise).
+        // Only use heuristic pattern matching when NER engine was not available.
+        let extracted_rels = if ner_used {
+            if !ner_relations.is_empty() {
+                info!(
+                    "Using {} NER-extracted typed relations",
+                    ner_relations.len()
+                );
+            }
+            ner_relations
+        } else if !all_entities.is_empty() {
             self.extract_relationships_from_text(&content_text, &all_entities)
         } else {
             Vec::new()

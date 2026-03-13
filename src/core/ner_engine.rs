@@ -432,11 +432,13 @@ struct TextToken {
 
 #[cfg(feature = "embeddings")]
 fn tokenize_text(text: &str) -> Vec<TextToken> {
+    // NOTE: Do NOT lowercase — the tokenizer is case-sensitive (SentencePiece/DeBERTa).
+    // "Post" and "post" produce different token IDs → different embeddings.
+    // The (?i) flag only makes the regex pattern case-insensitive, not the captured text.
     let re = Regex::new(
-        r"(?i)(?:https?://[^\s]+|www\.[^\s]+)|[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}|@[a-z0-9_]+|\w+(?:[-_]\w+)*|\S",
+        r"(?i)(?:https?://[^\s]+|www\.[^\s]+)|[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}|@[a-zA-Z0-9_]+|\w+(?:[-_]\w+)*|\S",
     ).unwrap();
-    let lower = text.to_lowercase();
-    re.find_iter(&lower)
+    re.find_iter(text)
         .map(|m| TextToken {
             text: m.as_str().to_string(),
             start: m.start(),
@@ -472,16 +474,19 @@ fn tokenize_prompt(tokenizer: &Tokenizer, text_tokens: Vec<TextToken>) -> Tokeni
     // BOS
     input_ids.push(TOK_BOS);
 
-    // Entity section: <<ENT>> label: description for each entity type
-    for (label, description) in ENTITY_LABELS {
+    // Entity section: <<ENT>> label_name for each entity type
+    // NOTE: Only the label name goes into the prompt (e.g. "library"),
+    // NOT the description. The description is used by the Python dict-label
+    // API to guide the model's internal matching, but the actual tokenized
+    // prompt must match what the model was trained on: <<ENT>> label_name.
+    for (label, _description) in ENTITY_LABELS {
         // <<ENT>> marker
         ent_marker_positions.push(input_ids.len());
         input_ids.push(TOK_ENT);
 
-        // Tokenize "label: description"
-        let label_text = format!("{}: {}", label, description);
+        // Tokenize just the label name
         let enc = tokenizer
-            .encode(label_text.as_str(), false)
+            .encode(*label, false)
             .expect("tokenize entity label");
         for &id in enc.get_ids() {
             input_ids.push(id);
@@ -669,8 +674,21 @@ fn extract_entities_from_scores(
         all_spans.extend(selected);
     }
 
-    all_spans.sort_by_key(|s| s.start);
-    all_spans
+    // Cross-field deduplication: if multiple fields produce overlapping spans,
+    // keep only the one with the highest confidence.
+    all_spans.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+    let mut deduped: Vec<RecognizedEntity> = Vec::new();
+    for span in all_spans {
+        let overlaps = deduped
+            .iter()
+            .any(|s| !(span.end <= s.start || span.start >= s.end));
+        if !overlaps {
+            deduped.push(span);
+        }
+    }
+
+    deduped.sort_by_key(|s| s.start);
+    deduped
 }
 
 // ─── Post-filter ─────────────────────────────────────────────────────────
@@ -678,6 +696,11 @@ fn extract_entities_from_scores(
 /// Generic phrases that are descriptions, not named entities.
 #[cfg(feature = "embeddings")]
 const GENERIC_PHRASES: &[&str] = &[
+    // Pronouns and common false positives (single words)
+    "it", "we", "he", "she", "they", "i", "you", "us", "them",
+    "this", "that", "these", "those", "the", "a", "an",
+    // PCX internal labels that appear in content_text
+    "incremental update",
     // ML/AI generic
     "embedding model",
     "language model",
@@ -1383,12 +1406,76 @@ impl NEREngine {
         Ok((entities, relations))
     }
 
+    /// Extract entities (with PCX types) and relations (as PCX EntityRelationship) for graph integration.
+    /// Primary method for `update_entity_graph` — typed edges from NER replace heuristic co-occurrence.
+    pub fn extract_for_graph(
+        &self,
+        text: &str,
+    ) -> Result<(Vec<(String, crate::core::context_update::EntityType)>, Vec<crate::core::context_update::EntityRelationship>)> {
+        let (entities, relations) = self.extract_entities_and_relations(text)?;
+
+        let pcx_entities: Vec<(String, crate::core::context_update::EntityType)> = entities
+            .iter()
+            .map(|e| (e.text.clone(), ner_to_pcx_entity_type(&e.entity_type)))
+            .collect();
+
+        let pcx_relations: Vec<crate::core::context_update::EntityRelationship> = relations
+            .iter()
+            .map(|r| crate::core::context_update::EntityRelationship {
+                from_entity: r.head.text.clone(),
+                to_entity: r.tail.text.clone(),
+                relation_type: ner_to_pcx_relation_type(&r.relation_type),
+                context: format!(
+                    "{} --[{}]--> {} ({:.0}%)",
+                    r.head.text, r.relation_type, r.tail.text, r.confidence * 100.0
+                ),
+            })
+            .collect();
+
+        Ok((pcx_entities, pcx_relations))
+    }
+
     pub fn clear_cache(&self) {
         self.cache.clear();
     }
 
     pub fn cache_size(&self) -> usize {
         self.cache.len()
+    }
+}
+
+/// Map NER EntityType → PCX EntityType
+#[cfg(feature = "embeddings")]
+fn ner_to_pcx_entity_type(et: &EntityType) -> crate::core::context_update::EntityType {
+    use crate::core::context_update::EntityType as PcxET;
+    match et {
+        EntityType::Library
+        | EntityType::Framework
+        | EntityType::Language
+        | EntityType::Database
+        | EntityType::Protocol
+        | EntityType::Tool
+        | EntityType::Model
+        | EntityType::Algorithm => PcxET::Technology,
+        EntityType::Person | EntityType::Organization => PcxET::Concept,
+        EntityType::Dataset => PcxET::Concept,
+        EntityType::API => PcxET::Technology,
+        EntityType::DataStructure => PcxET::Technology,
+        EntityType::Function | EntityType::Class => PcxET::CodeComponent,
+        EntityType::Location | EntityType::Miscellaneous => PcxET::Concept,
+    }
+}
+
+/// Map NER relation label → PCX RelationType
+#[cfg(feature = "embeddings")]
+fn ner_to_pcx_relation_type(rel: &str) -> crate::core::context_update::RelationType {
+    use crate::core::context_update::RelationType as RT;
+    match rel {
+        "built with" | "uses" | "based on" => RT::DependsOn,
+        "replaced by" => RT::LeadsTo,
+        "alternative to" | "connects to" | "created by" => RT::RelatedTo,
+        "part of" => RT::RequiredBy,
+        _ => RT::RelatedTo,
     }
 }
 
