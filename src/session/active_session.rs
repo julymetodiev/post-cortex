@@ -50,6 +50,68 @@ static ENGLISH_STOP_WORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         "every", "both", "few", "many", "total", "using", "used", "uses", "use", "made", "make",
         "now", "then", "when", "where", "how", "what", "why", "one", "two", "three", "first",
         "second", "last",
+        // Common English verbs that aren't meaningful entities
+        "based", "returns", "generates", "creates", "uses", "contains", "includes", "provides",
+        "requires", "supports", "handles", "processes", "represents", "implements", "defines",
+        "specifies", "manages", "performs", "produces", "accepts", "receives", "sends", "stores",
+        "loads", "reads", "writes", "calls", "checks", "finds", "gets", "sets", "takes", "makes",
+        "gives", "keeps", "shows", "starts", "stops", "runs", "builds", "tests", "fixes", "adds",
+        "removes", "updates", "changes", "moves", "needs", "works", "allows", "enables", "ensures",
+        "helps", "serves", "follows", "leads", "holds", "passes", "turns", "pulls", "pushes",
+        "drops", "wraps", "maps", "splits", "joins", "trims", "clips", "pads", "fills", "counts",
+        "sorts", "filters", "parses", "formats", "renders", "draws", "prints", "clears", "resets",
+        "inits", "spans", "truncate", "truncates", "truncated",
+        // Common English adjectives/adverbs that aren't entities
+        "new", "old", "good", "bad", "big", "small", "large", "high", "low", "full", "empty",
+        "fast", "slow", "long", "short", "true", "false", "valid", "invalid", "enabled", "disabled",
+        "simple", "complex", "basic", "advanced", "current", "previous", "next", "local", "remote",
+        "public", "private", "internal", "external", "global", "default", "custom", "generic",
+        "abstract", "concrete", "explicit", "implicit", "automatic", "manual", "optional", "required",
+        // Generic nouns that are rarely meaningful as entities in technical text
+        "line", "lines", "column", "columns", "row", "rows", "item", "items", "entry", "entries",
+        "node", "nodes", "edge", "edges", "path", "paths", "point", "points", "step", "steps",
+        "part", "parts", "side", "type", "types", "kind", "mode", "level", "layer", "stage",
+        "state", "status", "event", "events", "action", "actions", "task", "tasks", "job", "jobs",
+        "file", "files", "dir", "dirs", "name", "names", "label", "labels", "tag", "tags",
+        "value", "values", "param", "params", "field", "fields", "attr", "attrs",
+        // Programming words that appear everywhere but aren't specific entities
+        "struct", "trait", "impl", "enum", "mod", "crate", "method", "function",
+        "object", "class", "instance", "interface", "module", "package", "library",
+        "code", "test", "tests", "spec", "docs", "doc", "comment", "comments",
+        "body", "head", "tail", "list", "output", "input", "index", "limit",
+        "count", "size", "length", "width", "height", "depth", "weight", "score",
+        "response", "request", "message", "messages", "command", "commands",
+        "argument", "arguments", "property", "properties", "parameter", "parameters",
+        "element", "elements", "resource", "resources", "handler", "handlers",
+        "callback", "callbacks", "iterator", "iterators", "receiver", "receiver",
+        "endpoint", "endpoints", "variable", "variables", "constant", "constants",
+        "operation", "operations", "component", "components", "reference", "references",
+        "description", "implementation", "configuration", "connection", "connections",
+        "directory", "directories", "position", "positions", "location", "locations",
+        "expected", "original", "modified", "returned", "received", "selected",
+        "existing", "matching", "starting", "stopping", "building", "creating",
+        "updating", "removing", "checking", "tracking", "handling", "processing",
+        "following", "resulting", "remaining", "containing", "including", "providing",
+    ]
+    .into_iter()
+    .collect()
+});
+
+// Rust language keywords and common programming noise words — never valid entities
+static PROGRAMMING_KEYWORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    [
+        // Rust keywords
+        "pub", "fn", "impl", "struct", "enum", "mod", "use", "let", "mut", "self", "super",
+        "crate", "trait", "type", "where", "async", "await", "match", "return", "break",
+        "continue", "loop", "for", "while", "if", "else", "ref", "move", "dyn", "box",
+        "unsafe", "extern", "static", "const", "in", "as", "true", "false",
+        // Generic type/value noise
+        "str", "int", "bool", "void", "null", "none", "ok", "err", "num",
+        "max", "min", "get", "set", "put", "del", "run", "log", "fmt", "std",
+        "io", "fs", "os", "env", "buf", "tmp", "src", "dst", "len", "idx", "ptr",
+        // Very short noise abbreviations
+        "ctx", "req", "res", "msg", "cfg", "opt", "arg", "ret", "val", "var",
+        "key", "map", "vec", "arr", "tbl", "col", "row", "pos",
     ]
     .into_iter()
     .collect()
@@ -356,6 +418,48 @@ static COMMON_ENGLISH_WORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| 
         "function",
         "method",
         "class",
+        // Additional programming noise (common words appearing in code discussion)
+        "string",
+        "buffer",
+        "vector",
+        "array",
+        "error",
+        "value",
+        "field",
+        "param",
+        "config",
+        "option",
+        "handle",
+        "layer",
+        "block",
+        "chunk",
+        "batch",
+        "queue",
+        "stack",
+        "table",
+        "record",
+        "model",
+        "schema",
+        "query",
+        "index",
+        "entry",
+        "token",
+        "digit",
+        "check",
+        "valid",
+        "match",
+        "found",
+        "given",
+        "since",
+        "along",
+        "there",
+        "these",
+        "those",
+        "their",
+        "which",
+        "where",
+        "while",
+        "whose",
     ]
     .into_iter()
     .collect()
@@ -1475,7 +1579,9 @@ impl ActiveSession {
         }
 
         let normalized = name.to_lowercase();
-        ENGLISH_STOP_WORDS.contains(normalized.as_str()) || normalized.parse::<f64>().is_ok()
+        ENGLISH_STOP_WORDS.contains(normalized.as_str())
+            || PROGRAMMING_KEYWORDS.contains(normalized.as_str())
+            || normalized.parse::<f64>().is_ok()
     }
 
     /// Normalize entity name (safe, returns None on error)
@@ -1522,11 +1628,35 @@ impl ActiveSession {
             None => return false,
         };
 
-        if cleaned.len() < 2 || cleaned.len() > 30 {
+        if cleaned.len() < 2 || cleaned.len() > 50 {
             return false;
         }
 
-        !self.is_stop_word(&cleaned)
+        if self.is_stop_word(&cleaned) {
+            return false;
+        }
+
+        // Reject pure numbers and number-like tokens (384, 1024, 50kb, 8ms, 66-84)
+        let alpha_count = cleaned.chars().filter(|c| c.is_alphabetic()).count();
+        if alpha_count < 3 {
+            return false;
+        }
+
+        // Reject pure all-lowercase words under 8 chars with no structural indicators.
+        // A word passes if it:
+        //   - has a capital letter (CamelCase / acronym / proper noun), OR
+        //   - contains an underscore (snake_case), OR
+        //   - contains a dot (path like std.fs), OR
+        //   - is at least 8 chars long (library names like surrealdb, petgraph)
+        let has_capital = cleaned.chars().any(|c| c.is_uppercase());
+        let has_underscore = cleaned.contains('_');
+        let has_dot = cleaned.contains('.');
+
+        if !has_capital && !has_underscore && !has_dot && cleaned.len() < 8 {
+            return false;
+        }
+
+        true
     }
 
     // ========== End Entity Intelligence Helpers ==========
@@ -1745,26 +1875,67 @@ impl ActiveSession {
         final_result
     }
 
-    /// Extract proper nouns and capitalized terms
+    /// Extract proper nouns and capitalized terms.
+    ///
+    /// CamelCase terms (e.g. FileWatcher, PcxClient, SurrealDB) are kept in their
+    /// original casing because `is_valid_entity` requires mixed-case or underscores
+    /// for short terms.  Plain Title-case words that appear at sentence start are
+    /// filtered out to avoid noise like "The", "Returns", "Based", etc.
     fn extract_proper_nouns(&self, text: &str, entities: &mut std::collections::HashSet<String>) {
-        // Use expect() for compile-time constant regex - this should never fail
-        // If it does, it indicates a programming error, not a runtime condition
-        let capitalized_regex = regex::Regex::new(r"\b[A-Z][a-zA-Z-]{2,}\b")
+        // Match CamelCase identifiers: must contain at least one lowercase letter after the
+        // initial uppercase, and at least one more uppercase somewhere (true CamelCase).
+        // This catches FileWatcher, PcxClient, SurrealDB, ConversationLoop etc.
+        let camel_case_regex = regex::Regex::new(r"\b[A-Z][a-z]+(?:[A-Z][a-zA-Z0-9]*)+\b")
             .expect("Built-in regex pattern should always compile");
 
-        let common_words = [
+        // Also match ALL_CAPS acronyms like HNSW, API, RPC, PCX (min 2 chars)
+        let acronym_regex = regex::Regex::new(r"\b[A-Z]{2,8}\b")
+            .expect("Built-in regex pattern should always compile");
+
+        // Plain Title-case words (only one capital at the start) that are NOT
+        // CamelCase.  We still collect these but apply stricter filtering below.
+        let title_case_regex = regex::Regex::new(r"\b[A-Z][a-z]{3,}\b")
+            .expect("Built-in regex pattern should always compile");
+
+        // Sentence-start / common English words to exclude from plain title-case
+        let sentence_starters = [
             "The", "This", "That", "These", "Those", "When", "Where", "What", "Why", "How", "Who",
             "Which", "Will", "Would", "Could", "Should", "Must", "Can", "May", "Might", "And",
-            "But", "Or", "Not", "So", "Yet", "For", "Nor", "Because", "Although", "Since", "While",
-            "Until", "Unless", "Before", "After", "During", "Through",
+            "But", "Or", "Not", "So", "Yet", "For", "Nor", "Because", "Although", "Since",
+            "While", "Until", "Unless", "Before", "After", "During", "Through", "With", "From",
+            "Into", "Upon", "Using", "Based", "Returns", "Creates", "Generates", "Implements",
+            "Provides", "Contains", "Supports", "Handles", "Defines", "Manages", "Performs",
+            "Stores", "Loads", "Reads", "Writes", "Calls", "Checks", "Finds", "Gets", "Sets",
+            "Takes", "Makes", "Runs", "Builds", "Tests", "Adds", "Removes", "Updates", "Changes",
         ];
 
-        for cap in capitalized_regex.find_iter(text) {
+        // CamelCase — high confidence, keep as-is
+        for cap in camel_case_regex.find_iter(text) {
             let original = cap.as_str();
-            let term = original.to_lowercase();
+            if original.len() >= 4 && original.len() <= 40 {
+                entities.insert(original.to_string());
+            }
+        }
 
-            if term.len() >= 3 && term.len() <= 20 && !common_words.contains(&original) {
-                entities.insert(term);
+        // Acronyms — keep uppercase
+        for cap in acronym_regex.find_iter(text) {
+            let original = cap.as_str();
+            // Skip very common English abbreviations
+            if !matches!(original, "I" | "A" | "OR" | "AND" | "BUT" | "FOR" | "NOT" | "TO" | "IN" | "IS" | "IT" | "BE" | "DO" | "GO") {
+                entities.insert(original.to_string());
+            }
+        }
+
+        // Plain Title-case — lower confidence, only keep if not a sentence-starter
+        // and the lowercased form passes is_valid_entity (length >= 7 or has indicators)
+        for cap in title_case_regex.find_iter(text) {
+            let original = cap.as_str();
+            if sentence_starters.contains(&original) {
+                continue;
+            }
+            // Require length >= 7 for plain title-case words (eliminates most noise)
+            if original.len() >= 7 && original.len() <= 25 {
+                entities.insert(original.to_string());
             }
         }
     }
@@ -1792,45 +1963,72 @@ impl ActiveSession {
             r"\b\w*xml\b",
         ];
 
-        // Extract lowercase technical terms (3-15 chars) with frequency-based scoring
-        // This is language-agnostic and works for any domain
-        let lowercase_term_regex = regex::Regex::new(r"\b[a-z][a-z0-9_]{2,14}\b")
+        // Extract lowercase technical terms with frequency-based scoring.
+        // Regex requires at least one underscore OR digit within the token so that
+        // plain dictionary words like "based", "returns", "generates" are never
+        // entered into the candidate pool in the first place.
+        // For longer words (≥8 chars) we allow plain lowercase because something
+        // like "dashmap", "surrealdb", "petgraph" is very unlikely to be noise.
+        let snake_or_versioned_regex =
+            regex::Regex::new(r"\b[a-z][a-z0-9]*(?:[_][a-z0-9]+)+[a-z0-9]*\b|(?:\b[a-z][a-z]*[0-9][a-z0-9]*\b)")
+                .expect("Built-in regex pattern should always compile");
+        let long_lowercase_regex = regex::Regex::new(r"\b[a-z]{8,20}\b")
             .expect("Built-in regex pattern should always compile");
 
-        // Step 1: Collect all terms with frequency count
+        // Step 1: Collect all candidates with frequency count
         let mut term_freq: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
-        for cap in lowercase_term_regex.find_iter(text_lower) {
+
+        // snake_case / versioned terms (always strong candidates)
+        for cap in snake_or_versioned_regex.find_iter(text_lower) {
             let term = cap.as_str().to_string();
             *term_freq.entry(term).or_insert(0) += 1;
         }
 
+        // Long plain-lowercase words (≥8 chars) — likely proper nouns / library names
+        for cap in long_lowercase_regex.find_iter(text_lower) {
+            let term = cap.as_str().to_string();
+            term_freq.entry(term).or_insert(0);
+            // Don't double-count — just ensure entry exists
+        }
+
         // Step 2: Score each term based on multiple factors
         for (term, count) in term_freq {
+            // Skip known stop/keyword words early
+            if ENGLISH_STOP_WORDS.contains(term.as_str())
+                || PROGRAMMING_KEYWORDS.contains(term.as_str())
+                || COMMON_ENGLISH_WORDS.contains(term.as_str())
+            {
+                continue;
+            }
+
             let mut score = 0.0;
 
-            // Length bonus (longer terms are more likely technical)
-            if term.len() >= 5 {
-                score += 2.0; // petgraph, dashmap, tokio
-            } else {
-                score += 0.5; // arc, vec, api (short but potentially important)
-            }
-
-            // Frequency bonus (repeated terms are important)
-            // Cap at 2.0 to prevent common words from dominating
-            score += (count as f64 * 0.5).min(2.0);
-
-            // Pattern bonuses (technical indicators)
+            // snake_case is a very strong technical indicator
             if term.contains('_') {
-                score += 1.5; // snake_case → definitely technical
-            }
-            if term.chars().any(|c| c.is_numeric()) {
-                score += 1.5; // http2, version3 → technical
+                score += 4.0; // file_watcher, pcx_client → definitely technical identifiers
             }
 
-            // Accept if score >= 2.0 (threshold for technical relevance)
-            // Stop words filter will remove common words even if they score high
-            if score >= 2.0 {
+            // Digit in term — versioned or numeric technical identifiers
+            if term.chars().any(|c| c.is_ascii_digit()) {
+                score += 3.0; // http2, blake3, v8 → technical
+            }
+
+            // Length bonus (longer plain-lowercase terms more likely to be library names)
+            if term.len() >= 10 {
+                score += 3.0; // surrealdb, dashmap, petgraph-level names
+            } else if term.len() >= 8 {
+                score += 2.0; // lockfree, tokioruntime
+            } else if term.len() >= 5 && (term.contains('_') || term.chars().any(|c| c.is_ascii_digit())) {
+                score += 1.0; // Only give length bonus to shorter terms if they have indicators
+            }
+
+            // Frequency bonus — cap low to prevent common words from gaming the score
+            score += (count as f64 * 0.4).min(1.5);
+
+            // Accept only at a meaningfully high threshold — 3.0 requires at least
+            // one strong technical signal (snake_case, digit, or length ≥ 10)
+            if score >= 3.0 {
                 entities.insert(term);
             }
         }
@@ -1889,22 +2087,21 @@ impl ActiveSession {
         }
     }
 
-    /// Extract terms in quotes, backticks, or code blocks
+    /// Extract terms in quotes or backticks (code identifiers, library names).
+    /// Casing is preserved to retain CamelCase/snake_case signal.
     fn extract_quoted_terms(&self, text: &str, entities: &mut std::collections::HashSet<String>) {
         let quoted_patterns = [
-            r#"["']([^"']{2,20})["']"#, // Single/double quotes
-            r"`([^`]{2,20})`",          // Backticks
-            r"\{([^}]{2,15})\}",        // Curly braces
-            r"\[([^\]]{2,15})\]",       // Square brackets
+            r#"["']([^"']{2,40})["']"#, // Single/double quotes
+            r"`([^`]{2,40})`",           // Backticks — highest confidence for code identifiers
         ];
 
         for pattern in quoted_patterns {
             if let Ok(regex) = regex::Regex::new(pattern) {
                 for cap in regex.captures_iter(text) {
                     if let Some(quoted_term) = cap.get(1) {
-                        let term = quoted_term.as_str().to_lowercase();
+                        let term = quoted_term.as_str().to_string(); // preserve casing
                         if term.len() >= 2
-                            && term.len() <= 15
+                            && term.len() <= 40
                             && !term.chars().all(|c| c.is_numeric())
                         {
                             entities.insert(term);
@@ -1915,20 +2112,21 @@ impl ActiveSession {
         }
     }
 
-    /// Extract compound terms with hyphens, underscores, dots
+    /// Extract compound terms with hyphens, underscores, dots, or CamelCase.
+    /// Original casing is preserved so that downstream scoring and `is_valid_entity`
+    /// can reward CamelCase and ALL_CAPS terms appropriately.
     fn extract_compound_terms(&self, text: &str, entities: &mut std::collections::HashSet<String>) {
         let compound_patterns = [
-            r"\b[a-zA-Z]+-[a-zA-Z]+(?:-[a-zA-Z]+)*\b",   // Hyphenated
-            r"\b[a-zA-Z]+_[a-zA-Z]+(?:_[a-zA-Z]+)*\b",   // Underscore
-            r"\b[a-zA-Z]+\.[a-zA-Z]+(?:\.[a-zA-Z]+)*\b", // Dotted (like file.ext, domain.com)
-            r"\b[A-Z][a-z]*[A-Z][a-zA-Z]*\b",            // CamelCase
+            r"\b[a-zA-Z]+-[a-zA-Z]+(?:-[a-zA-Z]+)*\b",   // Hyphenated: lock-free, multi-thread
+            r"\b[a-zA-Z]+_[a-zA-Z]+(?:_[a-zA-Z]+)*\b",   // snake_case: file_watcher, pcx_client
+            r"\b[A-Z][a-z]*[A-Z][a-zA-Z0-9]*\b",          // CamelCase: FileWatcher, PcxClient
         ];
 
         for pattern in compound_patterns {
             if let Ok(regex) = regex::Regex::new(pattern) {
                 for cap in regex.find_iter(text) {
-                    let term = cap.as_str().to_lowercase();
-                    if term.len() >= 4 && term.len() <= 25 {
+                    let term = cap.as_str().to_string(); // preserve original casing
+                    if term.len() >= 4 && term.len() <= 40 {
                         entities.insert(term);
                     }
                 }
@@ -2012,152 +2210,141 @@ impl ActiveSession {
         scored.into_iter().map(|(entity, _)| entity).collect()
     }
 
-    /// Calculate relevance score for an entity
+    /// Calculate relevance score for an entity.
+    ///
+    /// CamelCase, snake_case, ALL_CAPS, and versioned identifiers score highest.
+    /// Plain short lowercase words score very low and are relied upon to be filtered
+    /// by `is_valid_entity` before reaching this function.
     fn calculate_entity_score(&self, entity: &str, text: &str) -> f64 {
         let mut score = 0.0;
+        let lower = entity.to_lowercase();
 
-        // Base score from length (sweet spot is 4-12 characters)
+        // Strong structural bonuses — these are the primary signals of a real identifier
+        let has_upper = entity.chars().any(|c| c.is_uppercase());
+        let has_underscore = entity.contains('_');
+        let has_digit = entity.chars().any(|c| c.is_ascii_digit());
+        let is_camel = has_upper && entity.chars().any(|c| c.is_lowercase()); // mixed case
+        let is_all_caps = has_upper && entity.chars().all(|c| c.is_uppercase() || !c.is_alphabetic());
+        let is_snake = has_underscore;
+
+        if is_camel {
+            score += 3.0; // FileWatcher, PcxClient, ConversationLoop
+        }
+        if is_snake {
+            score += 2.5; // file_watcher, pcx_client, context_update
+        }
+        if is_all_caps && entity.len() >= 2 {
+            score += 2.5; // HNSW, API, PCX, RPC
+        }
+        if has_digit {
+            score += 1.5; // blake3, http2, v8
+        }
+
+        // Base score from length (still useful for tie-breaking)
         let length_score = match entity.len() {
-            1..=2 => 0.1,
-            3 => 0.3,
-            4..=8 => 1.0,
-            9..=12 => 0.8,
-            13..=20 => 0.5,
-            _ => 0.2,
+            1..=2 => 0.0,
+            3..=4 => 0.1,
+            5..=7 => 0.4,
+            8..=12 => 0.8,
+            13..=20 => 0.6,
+            _ => 0.3,
         };
         score += length_score;
 
         // Frequency score (more mentions = more important) - case insensitive
-        let freq_count = text.to_lowercase().matches(&entity.to_lowercase()).count() as f64;
-        score += freq_count * 0.3;
+        let freq_count = text.to_lowercase().matches(&lower).count() as f64;
+        score += (freq_count * 0.4).min(2.0);
 
-        // Pattern bonuses
-        if entity.contains('-') || entity.contains('_') {
-            score += 0.4; // Compound terms often important
+        // Technical term indicators in the identifier itself
+        let tech_suffixes = ["api", "db", "sql", "json", "xml", "http", "tcp", "udp", "rpc", "sdk"];
+        if tech_suffixes.iter().any(|&suffix| lower.ends_with(suffix)) {
+            score += 1.0;
         }
 
-        if entity.chars().any(|c| c.is_uppercase()) {
-            score += 0.3; // Proper nouns often important
-        }
-
-        // Technical term indicators
-        let tech_suffixes = ["api", "db", "sql", "json", "xml", "http", "tcp", "udp"];
-        if tech_suffixes.iter().any(|&suffix| entity.ends_with(suffix)) {
-            score += 0.5;
-        }
-
-        let tech_prefixes = ["micro", "multi", "auto", "async", "sync"];
-        if tech_prefixes
-            .iter()
-            .any(|&prefix| entity.starts_with(prefix))
-        {
-            score += 0.4;
-        }
-
-        // Architecture/process terms
-        let important_patterns = [
-            "system",
-            "service",
-            "protocol",
-            "framework",
-            "library",
-            "engine",
-            "platform",
-            "server",
-            "client",
-            "cache",
-            "storage",
-            "database",
-            "memory",
-            "thread",
-            "process",
+        // Architecture/component suffixes strongly indicate meaningful entities
+        let component_suffixes = [
+            "watcher", "client", "server", "engine", "manager", "handler", "service",
+            "registry", "storage", "context", "session", "system", "processor", "extractor",
+            "controller", "scheduler", "dispatcher", "executor", "listener", "observer",
+            "provider", "factory", "builder", "parser", "formatter", "writer", "reader",
+            "loop", "runtime", "pool", "cache", "queue", "store",
         ];
-        if important_patterns
-            .iter()
-            .any(|&pattern| entity.contains(pattern))
-        {
-            score += 0.6;
+        if component_suffixes.iter().any(|&s| lower.ends_with(s)) {
+            score += 2.0;
         }
 
-        // Penalize very common words that slipped through
-        let somewhat_common = ["thing", "stuff", "something", "anything", "everything"];
-        if somewhat_common.contains(&entity) {
-            score *= 0.1;
+        // Penalize very common words that slipped through (last-resort safety net)
+        if ENGLISH_STOP_WORDS.contains(lower.as_str())
+            || PROGRAMMING_KEYWORDS.contains(lower.as_str())
+            || COMMON_ENGLISH_WORDS.contains(lower.as_str())
+        {
+            score *= 0.05;
         }
 
         score
     }
 
-    /// Static version of calculate_entity_score for use with CoW patterns
+    /// Static version of calculate_entity_score for use with CoW patterns.
+    /// Mirrors the instance method — both must stay in sync.
     fn calculate_entity_score_static(entity: &str, text: &str) -> f64 {
         let mut score = 0.0;
+        let lower = entity.to_lowercase();
 
-        // Base score from length (sweet spot is 4-12 characters)
+        let has_upper = entity.chars().any(|c| c.is_uppercase());
+        let has_underscore = entity.contains('_');
+        let has_digit = entity.chars().any(|c| c.is_ascii_digit());
+        let is_camel = has_upper && entity.chars().any(|c| c.is_lowercase());
+        let is_all_caps =
+            has_upper && entity.chars().all(|c| c.is_uppercase() || !c.is_alphabetic());
+        let is_snake = has_underscore;
+
+        if is_camel {
+            score += 3.0;
+        }
+        if is_snake {
+            score += 2.5;
+        }
+        if is_all_caps && entity.len() >= 2 {
+            score += 2.5;
+        }
+        if has_digit {
+            score += 1.5;
+        }
+
         let length_score = match entity.len() {
-            1..=2 => 0.1,
-            3 => 0.3,
-            4..=8 => 1.0,
-            9..=12 => 0.8,
-            13..=20 => 0.5,
-            _ => 0.2,
+            1..=2 => 0.0,
+            3..=4 => 0.1,
+            5..=7 => 0.4,
+            8..=12 => 0.8,
+            13..=20 => 0.6,
+            _ => 0.3,
         };
         score += length_score;
 
-        // Frequency score (more mentions = more important) - case insensitive
-        let freq_count = text.to_lowercase().matches(&entity.to_lowercase()).count() as f64;
-        score += freq_count * 0.3;
+        let freq_count = text.to_lowercase().matches(&lower).count() as f64;
+        score += (freq_count * 0.4).min(2.0);
 
-        // Pattern bonuses
-        if entity.contains('-') || entity.contains('_') {
-            score += 0.4;
-        }
-        if entity.chars().any(|c| c.is_uppercase()) {
-            score += 0.3;
+        let tech_suffixes = ["api", "db", "sql", "json", "xml", "http", "tcp", "udp", "rpc", "sdk"];
+        if tech_suffixes.iter().any(|&suffix| lower.ends_with(suffix)) {
+            score += 1.0;
         }
 
-        // Technical term indicators
-        let tech_suffixes = ["api", "db", "sql", "json", "xml", "http", "tcp", "udp"];
-        if tech_suffixes.iter().any(|&suffix| entity.ends_with(suffix)) {
-            score += 0.5;
-        }
-
-        let tech_prefixes = ["micro", "multi", "auto", "async", "sync"];
-        if tech_prefixes
-            .iter()
-            .any(|&prefix| entity.starts_with(prefix))
-        {
-            score += 0.4;
-        }
-
-        // Architecture/process terms
-        let important_patterns = [
-            "system",
-            "service",
-            "protocol",
-            "framework",
-            "library",
-            "engine",
-            "platform",
-            "server",
-            "client",
-            "cache",
-            "storage",
-            "database",
-            "memory",
-            "thread",
-            "process",
+        let component_suffixes = [
+            "watcher", "client", "server", "engine", "manager", "handler", "service",
+            "registry", "storage", "context", "session", "system", "processor", "extractor",
+            "controller", "scheduler", "dispatcher", "executor", "listener", "observer",
+            "provider", "factory", "builder", "parser", "formatter", "writer", "reader",
+            "loop", "runtime", "pool", "cache", "queue", "store",
         ];
-        if important_patterns
-            .iter()
-            .any(|&pattern| entity.contains(pattern))
-        {
-            score += 0.6;
+        if component_suffixes.iter().any(|&s| lower.ends_with(s)) {
+            score += 2.0;
         }
 
-        // Penalize very common words
-        let somewhat_common = ["thing", "stuff", "something", "anything", "everything"];
-        if somewhat_common.contains(&entity) {
-            score *= 0.1;
+        if ENGLISH_STOP_WORDS.contains(lower.as_str())
+            || PROGRAMMING_KEYWORDS.contains(lower.as_str())
+            || COMMON_ENGLISH_WORDS.contains(lower.as_str())
+        {
+            score *= 0.05;
         }
 
         score

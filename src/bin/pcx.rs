@@ -1518,6 +1518,17 @@ async fn rebuild_entities(session_id: Option<String>, all: bool) -> Result<(), S
         .await
         .map_err(|e| format!("Failed to initialize: {}", e))?;
 
+    // Pre-load GLiNER2 NER engine so entity extraction uses the model, not pattern fallback
+    #[cfg(feature = "embeddings")]
+    {
+        use post_cortex::session::active_session::preload_ner_engine;
+        if preload_ner_engine().await {
+            println!("NER engine loaded (GLiNER2)");
+        } else {
+            eprintln!("WARNING: NER engine failed to load — falling back to pattern extraction");
+        }
+    }
+
     let session_ids: Vec<uuid::Uuid> = if all {
         let ids = system.list_sessions().await?;
         println!("Found {} sessions to rebuild", ids.len());
