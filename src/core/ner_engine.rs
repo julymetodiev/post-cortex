@@ -606,7 +606,6 @@ fn score_spans_sigmoid(span_rep: &Array2<f32>, prompt_rep: &Array2<f32>) -> Arra
     span_rep.dot(&prompt_rep.t()).mapv(sigmoid)
 }
 
-
 // ─── NMS entity extraction ───────────────────────────────────────────────
 
 #[cfg(feature = "embeddings")]
@@ -698,8 +697,22 @@ fn extract_entities_from_scores(
 #[cfg(feature = "embeddings")]
 const GENERIC_PHRASES: &[&str] = &[
     // Pronouns and common false positives (single words)
-    "it", "we", "he", "she", "they", "i", "you", "us", "them",
-    "this", "that", "these", "those", "the", "a", "an",
+    "it",
+    "we",
+    "he",
+    "she",
+    "they",
+    "i",
+    "you",
+    "us",
+    "them",
+    "this",
+    "that",
+    "these",
+    "those",
+    "the",
+    "a",
+    "an",
     // PCX internal labels that appear in content_text
     "incremental update",
     // ML/AI generic
@@ -1056,7 +1069,7 @@ pub struct NEREngine {
     pair_rep: Option<Mlp>,
     tokenizer: Option<Arc<Tokenizer>>,
     is_loaded: Arc<AtomicBool>,
-    cache: Arc<DashMap<String, Vec<RecognizedEntity>>>,
+    cache: Arc<DashMap<String, (Vec<RecognizedEntity>, Vec<RecognizedRelation>)>>,
 }
 
 #[cfg(feature = "embeddings")]
@@ -1182,9 +1195,10 @@ impl NEREngine {
             return Err(anyhow::anyhow!("model not loaded"));
         }
 
-        // Check entity cache (relations are not cached separately)
+        // Check cache (entities + relations)
         if let Some(cached) = self.cache.get(text) {
-            return Ok((cached.clone(), vec![]));
+            let (entities, relations) = cached.clone();
+            return Ok((entities, relations));
         }
 
         let (mut entities, relations) = self.run_inference(text)?;
@@ -1195,7 +1209,7 @@ impl NEREngine {
             correct_entity_type(e);
         }
 
-        // Cache entities with bounded eviction
+        // Cache with bounded eviction
         if self.cache.len() >= NER_CACHE_MAX_SIZE {
             let keys_to_remove: Vec<String> = self
                 .cache
@@ -1207,7 +1221,8 @@ impl NEREngine {
                 self.cache.remove(&key);
             }
         }
-        self.cache.insert(text.to_string(), entities.clone());
+        self.cache
+            .insert(text.to_string(), (entities.clone(), relations.clone()));
 
         Ok((entities, relations))
     }
@@ -1369,7 +1384,10 @@ impl NEREngine {
         }
 
         if pair_indices.is_empty() {
-            debug!("No entity pairs above adjacency threshold {}", ADJACENCY_THRESHOLD);
+            debug!(
+                "No entity pairs above adjacency threshold {}",
+                ADJACENCY_THRESHOLD
+            );
             return Ok((entities, vec![]));
         }
 
@@ -1414,7 +1432,10 @@ impl NEREngine {
     pub fn extract_for_graph(
         &self,
         text: &str,
-    ) -> Result<(Vec<(String, crate::core::context_update::EntityType)>, Vec<crate::core::context_update::EntityRelationship>)> {
+    ) -> Result<(
+        Vec<(String, crate::core::context_update::EntityType)>,
+        Vec<crate::core::context_update::EntityRelationship>,
+    )> {
         let (entities, relations) = self.extract_entities_and_relations(text)?;
 
         let pcx_entities: Vec<(String, crate::core::context_update::EntityType)> = entities
@@ -1430,7 +1451,10 @@ impl NEREngine {
                 relation_type: ner_to_pcx_relation_type(&r.relation_type),
                 context: format!(
                     "{} --[{}]--> {} ({:.0}%)",
-                    r.head.text, r.relation_type, r.tail.text, r.confidence * 100.0
+                    r.head.text,
+                    r.relation_type,
+                    r.tail.text,
+                    r.confidence * 100.0
                 ),
             })
             .collect();
