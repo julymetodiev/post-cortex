@@ -19,6 +19,7 @@
 // SOFTWARE.
 pub mod cache;
 pub mod content_vectorizer;
+pub mod context_assembly;
 pub mod context_update;
 pub mod embeddings;
 pub mod error;

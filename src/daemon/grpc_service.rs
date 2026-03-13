@@ -752,6 +752,96 @@ impl PostCortex for PcxGrpcService {
         Ok(Response::new(TextResponse { text }))
     }
 
+    // --- Graph-Aware Context Assembly ---
+
+    async fn assemble_context(
+        &self,
+        request: Request<AssembleContextRequest>,
+    ) -> Result<Response<AssembleContextResponse>, Status> {
+        let req = request.into_inner();
+        debug!("gRPC AssembleContext: session_id={}, query={}", req.session_id, req.query);
+
+        let session_id = parse_uuid(&req.session_id)?;
+        let session_arc = self.memory.get_session(session_id).await
+            .map_err(|e| Status::not_found(e))?;
+        let session = session_arc.load();
+
+        let token_budget = if req.token_budget == 0 { 4000 } else { req.token_budget as usize };
+
+        // Collect all context updates from hot + warm context
+        let updates: Vec<_> = session.hot_context.iter().iter()
+            .chain(session.warm_context.iter().map(|c| &c.update))
+            .cloned()
+            .collect();
+
+        use crate::core::context_assembly;
+
+        let assembled = context_assembly::assemble_context(
+            &req.query,
+            &session.entity_graph,
+            &updates,
+            token_budget,
+        );
+
+        let formatted_text = context_assembly::format_for_llm(&assembled);
+
+        // Convert to proto types
+        let items: Vec<AssembledContextItem> = assembled.items.iter().map(|item| {
+            let (source, via_entity) = match &item.source {
+                context_assembly::ContextSource::SemanticMatch => ("semantic_match".to_string(), String::new()),
+                context_assembly::ContextSource::GraphTraversal { via_entity } => ("graph_traversal".to_string(), via_entity.clone()),
+                context_assembly::ContextSource::RecentUpdate => ("recent_update".to_string(), String::new()),
+            };
+            AssembledContextItem {
+                text: item.text.clone(),
+                score: item.score,
+                source,
+                via_entity,
+                entities: item.entities.clone(),
+                token_estimate: item.token_estimate as u32,
+            }
+        }).collect();
+
+        let entity_context: Vec<AssembledEntityContext> = assembled.entity_context.iter().map(|ec| {
+            let (relevance, via_entity, via_relation) = match &ec.relevance {
+                context_assembly::EntityRelevance::DirectMention => ("direct_mention".to_string(), String::new(), String::new()),
+                context_assembly::EntityRelevance::GraphNeighbor { via, relation } => ("graph_neighbor".to_string(), via.clone(), relation.clone()),
+            };
+            let relationships: Vec<EntityRelation> = ec.relationships.iter().map(|r| {
+                EntityRelation {
+                    from_entity: r.from_entity.clone(),
+                    to_entity: r.to_entity.clone(),
+                    relation_type: format!("{:?}", r.relation_type),
+                    context: r.context.clone(),
+                }
+            }).collect();
+            AssembledEntityContext {
+                name: ec.name.clone(),
+                relevance,
+                via_entity,
+                via_relation,
+                relationships,
+            }
+        }).collect();
+
+        let impact: Vec<pb::ImpactEntry> = assembled.impact.iter().map(|i| {
+            pb::ImpactEntry {
+                entity: i.entity.clone(),
+                depends_on: i.depends_on.clone(),
+                relation_type: format!("{:?}", i.relation_type),
+                context: i.context.clone(),
+            }
+        }).collect();
+
+        Ok(Response::new(AssembleContextResponse {
+            items,
+            entity_context,
+            impact,
+            total_tokens: assembled.total_tokens as u32,
+            formatted_text,
+        }))
+    }
+
     // --- Workspace Management ---
 
     async fn create_workspace(

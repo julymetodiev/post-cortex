@@ -116,6 +116,12 @@ pub enum ContextQuery {
     AnalyzeEntityTrends {
         time_window_days: i64,
     },
+
+    // Graph-aware context assembly
+    AssembleContext {
+        query: String,
+        token_budget: usize,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -139,6 +145,7 @@ pub enum ContextResponse {
     EntityClusters(String),
     EntityTimeline(String),
     EntityTrends(String),
+    AssembledContext(crate::core::context_assembly::AssembledContext),
 }
 
 // Lock-free global system with lazy initialization using ArcSwap + LazyLock
@@ -576,6 +583,14 @@ pub async fn query_conversation_context_with_system(
             "search_updates" => {
                 let query = parameters.get("query").cloned().unwrap_or_default();
                 ContextQuery::SearchUpdates { query }
+            }
+            "assemble_context" => {
+                let query = parameters.get("query").cloned().unwrap_or_default();
+                let token_budget = parameters
+                    .get("token_budget")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(4000);
+                ContextQuery::AssembleContext { query, token_budget }
             }
             _ => {
                 return Ok(MCPToolResult::error(format!(
@@ -1110,6 +1125,14 @@ pub async fn query_conversation_context(
         "search_updates" => {
             let query = parameters.get("query").cloned().unwrap_or_default();
             ContextQuery::SearchUpdates { query }
+        }
+        "assemble_context" => {
+            let query = parameters.get("query").cloned().unwrap_or_default();
+            let token_budget = parameters
+                .get("token_budget")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(4000);
+            ContextQuery::AssembleContext { query, token_budget }
         }
         _ => {
             return Ok(MCPToolResult::error(format!(
@@ -1861,6 +1884,24 @@ async fn query_context(session: &ActiveSession, query: ContextQuery) -> Result<C
                 .filter(|u| matches!(u.update_type, UpdateType::CodeChanged))
                 .collect();
             Ok(ContextResponse::ChangeHistory(changes))
+        }
+        ContextQuery::AssembleContext { query, token_budget } => {
+            use crate::core::context_assembly;
+
+            // Collect all context updates from hot + warm context
+            let updates: Vec<_> = session.hot_context.iter().iter()
+                .chain(session.warm_context.iter().map(|c| &c.update))
+                .cloned()
+                .collect();
+
+            let assembled = context_assembly::assemble_context(
+                &query,
+                &session.entity_graph,
+                &updates,
+                token_budget,
+            );
+
+            Ok(ContextResponse::AssembledContext(assembled))
         }
         _ => Ok(ContextResponse::Entities(vec![
             "Not implemented".to_string(),

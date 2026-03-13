@@ -30,6 +30,9 @@ service PostCortex {
   rpc GetEntityNetwork(GetEntityNetworkRequest) returns (TextResponse);
   rpc GetSessionStatistics(GetSessionStatisticsRequest) returns (TextResponse);
 
+  // --- Graph-Aware Context Assembly ---
+  rpc AssembleContext(AssembleContextRequest) returns (AssembleContextResponse);
+
   // --- Workspace Management ---
   rpc CreateWorkspace(CreateWorkspaceRequest) returns (CreateWorkspaceResponse);
   rpc GetWorkspace(GetWorkspaceRequest) returns (GetWorkspaceResponse);
@@ -295,6 +298,53 @@ message GetEntityNetworkRequest {
 
 message GetSessionStatisticsRequest {
   string session_id = 1;
+}
+
+// ============ Graph-Aware Context Assembly ============
+
+message AssembleContextRequest {
+  string session_id = 1;
+  string query = 2;           // Query/hint to assemble context for
+  uint32 token_budget = 3;    // Max tokens for assembled context (default: 4000)
+}
+
+message AssembledContextItem {
+  string text = 1;
+  float score = 2;
+  string source = 3;          // "semantic_match", "graph_traversal", "recent_update"
+  string via_entity = 4;      // For graph_traversal source, the entity it was found through
+  repeated string entities = 5;
+  uint32 token_estimate = 6;
+}
+
+message AssembledEntityContext {
+  string name = 1;
+  string relevance = 2;       // "direct_mention" or "graph_neighbor"
+  string via_entity = 3;      // For graph_neighbor, the entity connected through
+  string via_relation = 4;    // For graph_neighbor, the relation type
+  repeated EntityRelation relationships = 5;
+}
+
+message EntityRelation {
+  string from_entity = 1;
+  string to_entity = 2;
+  string relation_type = 3;   // DependsOn, RelatedTo, RequiredBy, LeadsTo, etc.
+  string context = 4;
+}
+
+message ImpactEntry {
+  string entity = 1;
+  string depends_on = 2;
+  string relation_type = 3;
+  string context = 4;
+}
+
+message AssembleContextResponse {
+  repeated AssembledContextItem items = 1;
+  repeated AssembledEntityContext entity_context = 2;
+  repeated ImpactEntry impact = 3;
+  uint32 total_tokens = 4;
+  string formatted_text = 5;  // Pre-formatted text for direct LLM injection
 }
 
 // ============ Workspace Management ============
