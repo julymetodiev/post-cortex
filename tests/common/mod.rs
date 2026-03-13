@@ -24,11 +24,15 @@ use anyhow::Result;
 use post_cortex::core::memory_system::{
     ConversationMemorySystem, SystemConfig,
 };
+#[cfg(feature = "surrealdb-storage")]
+use post_cortex::storage::traits::StorageBackendType;
 use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
 use uuid::Uuid;
 
-/// Test fixture builder pattern for creating test systems with content
+/// Test fixture builder pattern for creating test systems with content.
+/// Uses SurrealDB kv-mem backend (same storage path as production) when
+/// the `surrealdb-storage` feature is enabled, otherwise falls back to RocksDB.
 pub struct TestFixture {
     pub system: Arc<ConversationMemorySystem>,
     pub session_id: Uuid,
@@ -43,6 +47,15 @@ impl TestFixture {
         config.data_directory = temp_dir.path().to_str().unwrap().to_string();
         config.enable_embeddings = true;
         config.auto_vectorize_on_update = true;
+
+        // Use SurrealDB kv-mem backend — same storage path as production daemon
+        #[cfg(feature = "surrealdb-storage")]
+        {
+            config.storage_backend = StorageBackendType::SurrealDB;
+            config.surrealdb_endpoint = Some("mem://".to_string());
+            config.surrealdb_namespace = Some("test".to_string());
+            config.surrealdb_database = Some("test".to_string());
+        }
 
         let system = Arc::new(
             ConversationMemorySystem::new(config)

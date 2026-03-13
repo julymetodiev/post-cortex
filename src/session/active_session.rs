@@ -1316,12 +1316,25 @@ impl ActiveSession {
         let mut ner_used = false;
 
         if extracted_entities.is_empty() && referenced_entities.is_empty() {
-            let content_text = format!(
-                "{} {} {}",
-                update.content.title,
-                update.content.description,
-                update.content.details.join(" ")
-            );
+            // For NER: skip generic titles like "Incremental Update" that pollute entity extraction.
+            // Use description + details as the content text.
+            let content_text = {
+                let mut parts = Vec::new();
+                let title = update.content.title.trim();
+                if !title.is_empty() && title != "Incremental Update" {
+                    parts.push(title.to_string());
+                }
+                let desc = update.content.description.trim();
+                if !desc.is_empty() {
+                    parts.push(desc.to_string());
+                }
+                let details = update.content.details.join(" ");
+                let details = details.trim();
+                if !details.is_empty() {
+                    parts.push(details.to_string());
+                }
+                parts.join(" ")
+            };
             info!("Extracting entities from text: '{}'", content_text);
 
             // Use NER for entity + relation extraction (no heuristic fallback when NER is loaded)

@@ -602,9 +602,10 @@ fn sigmoid(x: f32) -> f32 {
 }
 
 #[cfg(feature = "embeddings")]
-fn score_spans(span_rep: &Array2<f32>, prompt_rep: &Array2<f32>) -> Array2<f32> {
+fn score_spans_sigmoid(span_rep: &Array2<f32>, prompt_rep: &Array2<f32>) -> Array2<f32> {
     span_rep.dot(&prompt_rep.t()).mapv(sigmoid)
 }
+
 
 // ─── NMS entity extraction ───────────────────────────────────────────────
 
@@ -1301,7 +1302,7 @@ impl NEREngine {
         let (span_reps, valid_mask) = span_marker.forward(&word_embs_rnn, MAX_WIDTH);
 
         // Stage 8: Entity scores = sigmoid(span_reps @ processed_ent_prompts.T)
-        let entity_scores = score_spans(&span_reps, &processed_ent_prompts);
+        let entity_scores = score_spans_sigmoid(&span_reps, &processed_ent_prompts);
 
         // Stage 9: NMS + entity extraction
         let entities = extract_entities_from_scores(
@@ -1349,6 +1350,7 @@ impl NEREngine {
 
         // Stage 12: Build entity pairs where adj_final[i,j] > adjacency threshold
         let num_ents = entities.len();
+
         let mut pair_head_reps: Vec<Array1<f32>> = Vec::new();
         let mut pair_tail_reps: Vec<Array1<f32>> = Vec::new();
         let mut pair_indices: Vec<(usize, usize)> = Vec::new();
@@ -1367,6 +1369,7 @@ impl NEREngine {
         }
 
         if pair_indices.is_empty() {
+            debug!("No entity pairs above adjacency threshold {}", ADJACENCY_THRESHOLD);
             return Ok((entities, vec![]));
         }
 
@@ -1381,7 +1384,7 @@ impl NEREngine {
         let pair_reps = pair_rep.forward(&concat);
 
         // Stage 14: Relation scores = sigmoid(pair_reps @ rel_prompt_embs.T)
-        let relation_scores = score_spans(&pair_reps, &embs.rel_prompt_embeddings);
+        let relation_scores = score_spans_sigmoid(&pair_reps, &embs.rel_prompt_embeddings);
 
         // Stage 15: Collect relations above threshold
         let mut relations: Vec<RecognizedRelation> = Vec::new();
