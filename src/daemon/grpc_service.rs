@@ -1159,19 +1159,43 @@ impl PostCortex for PcxGrpcService {
         let req = request.into_inner();
         debug!("gRPC Invalidate: checking source path {}", req.file_path);
 
-        match self
-            .memory
-            .storage_actor
-            .invalidate_source(&req.file_path)
-            .await
-        {
-            Ok(count) => Ok(Response::new(InvalidateAck {
-                entries_invalidated: count,
-            })),
-            Err(e) => {
-                error!("gRPC Invalidate failed for file {}: {}", req.file_path, e);
-                let e_msg: String = e.to_string();
-                Err(Status::internal(e_msg))
+        // If session_id is provided, also rebuild entity graph
+        if !req.session_id.is_empty() {
+            let session_id = uuid::Uuid::parse_str(&req.session_id)
+                .map_err(|e| Status::invalid_argument(format!("Invalid session_id: {}", e)))?;
+
+            match self
+                .memory
+                .invalidate_and_rebuild_entity_graph(session_id, &req.file_path)
+                .await
+            {
+                Ok((entries_invalidated, entities_after)) => {
+                    Ok(Response::new(InvalidateAck {
+                        entries_invalidated,
+                        entities_rebuilt: entities_after as u32,
+                    }))
+                }
+                Err(e) => {
+                    error!("gRPC Invalidate+rebuild failed for file {}: {}", req.file_path, e);
+                    Err(Status::internal(e.to_string()))
+                }
+            }
+        } else {
+            // Legacy path: only invalidate source references
+            match self
+                .memory
+                .storage_actor
+                .invalidate_source(&req.file_path)
+                .await
+            {
+                Ok(count) => Ok(Response::new(InvalidateAck {
+                    entries_invalidated: count,
+                    entities_rebuilt: 0,
+                })),
+                Err(e) => {
+                    error!("gRPC Invalidate failed for file {}: {}", req.file_path, e);
+                    Err(Status::internal(e.to_string()))
+                }
             }
         }
     }

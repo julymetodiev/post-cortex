@@ -1051,6 +1051,30 @@ impl ActiveSession {
         Ok(())
     }
 
+    /// Remove incremental updates whose `related_code.file_path` matches `file_path`.
+    /// Also removes the corresponding code_references entry.
+    /// Returns the number of updates removed.
+    pub fn remove_updates_for_file(&mut self, file_path: &str) -> usize {
+        let before = self.incremental_updates.len();
+        let updates = Arc::make_mut(&mut self.incremental_updates);
+        updates.retain(|u| {
+            u.related_code
+                .as_ref()
+                .map_or(true, |cr| cr.file_path != file_path)
+        });
+        let removed = before - updates.len();
+        if removed > 0 {
+            // Also clean up the code_references index
+            let code_refs = Arc::make_mut(&mut self.code_references);
+            code_refs.remove(file_path);
+            info!(
+                "Removed {} updates referencing file: {}",
+                removed, file_path
+            );
+        }
+        removed
+    }
+
     /// Rebuild the entity graph by clearing it and replaying all updates through NER extraction.
     /// Returns (entities_before, entities_after) counts.
     pub async fn rebuild_entity_graph_from_updates(&mut self) -> anyhow::Result<(usize, usize)> {

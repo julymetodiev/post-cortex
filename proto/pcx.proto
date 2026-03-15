@@ -499,10 +499,12 @@ enum FreshnessStatus {
 message InvalidateRequest {
   string file_path = 1;
   bytes new_hash = 2;
+  string session_id = 3;  // Optional: rebuild entity graph for this session
 }
 
 message InvalidateAck {
   uint32 entries_invalidated = 1;
+  uint32 entities_rebuilt = 2;  // Entity graph rebuild count (0 if no session_id)
 }
 
 // ============ Symbol Dependencies (Phase 9.2) ============

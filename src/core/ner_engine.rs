@@ -24,7 +24,8 @@
 //! knowledgator/gliner-relex-large-v0.5 model (UniEncoderSpanRelexGLiNER,
 //! 467.8M params, DeBERTa-v3-large).
 //!
-//! Pipeline: DeBERTa encoder → BiLSTM → SpanMarkerV0 → GCN → pair MLP
+//! Pipeline: backbone.onnx (DeBERTa encoder + BiLSTM + SpanMarker + prompt MLP
+//! + entity scoring) → GCN → pair MLP → relation scoring
 //! Entity types and relation labels are specified at inference time.
 
 #[cfg(feature = "embeddings")]
@@ -235,6 +236,9 @@ const RELATION_LABELS: &[&str] = &[
     "based on",
     "connects to",
     "part of",
+    "depends on",
+    "required by",
+    "implements",
 ];
 
 // Special token IDs for the RelEx tokenizer
@@ -252,11 +256,11 @@ const TOK_REL: u32 = 128003; // <<REL>>
 #[cfg(feature = "embeddings")]
 const MAX_WIDTH: usize = 12;
 #[cfg(feature = "embeddings")]
-const ENTITY_THRESHOLD: f32 = 0.6;
+const ENTITY_THRESHOLD: f32 = 0.7;
 #[cfg(feature = "embeddings")]
 const ADJACENCY_THRESHOLD: f32 = 0.5;
 #[cfg(feature = "embeddings")]
-const RELATION_THRESHOLD: f32 = 0.85;
+const RELATION_THRESHOLD: f32 = 0.7;
 #[cfg(feature = "embeddings")]
 const NER_CACHE_MAX_SIZE: usize = 1000;
 
@@ -295,70 +299,6 @@ impl Mlp {
     fn forward(&self, x: &Array2<f32>) -> Array2<f32> {
         let h = self.linear1.forward(x).mapv(|v| v.max(0.0));
         self.linear2.forward(&h)
-    }
-}
-
-/// SpanMarkerV0: projects word embeddings into span representations by
-/// concatenating projected start and end word embeddings, then applying ReLU
-/// and a final output projection.
-#[cfg(feature = "embeddings")]
-struct SpanMarkerV0 {
-    project_start: Mlp,
-    project_end: Mlp,
-    out_project: Mlp,
-}
-
-#[cfg(feature = "embeddings")]
-impl SpanMarkerV0 {
-    fn load(dir: &str) -> Result<Self> {
-        Ok(Self {
-            project_start: Mlp {
-                linear1: Linear::load(dir, "span.project_start.linear0")?,
-                linear2: Linear::load(dir, "span.project_start.linear1")?,
-            },
-            project_end: Mlp {
-                linear1: Linear::load(dir, "span.project_end.linear0")?,
-                linear2: Linear::load(dir, "span.project_end.linear1")?,
-            },
-            out_project: Mlp {
-                linear1: Linear::load(dir, "span.out_project.linear0")?,
-                linear2: Linear::load(dir, "span.out_project.linear1")?,
-            },
-        })
-    }
-
-    /// Returns (span_reps [W*max_width, hidden], valid_mask [W*max_width]).
-    fn forward(&self, word_embs: &Array2<f32>, max_width: usize) -> (Array2<f32>, Vec<bool>) {
-        let num_words = word_embs.nrows();
-        let hidden = word_embs.ncols();
-
-        let start_proj = self.project_start.forward(word_embs);
-        let end_proj = self.project_end.forward(word_embs);
-
-        let num_spans = num_words * max_width;
-        let mut concat = Array2::<f32>::zeros((num_spans, hidden * 2));
-        let mut valid = vec![false; num_spans];
-
-        for start in 0..num_words {
-            for w in 0..max_width {
-                let end = start + w;
-                let idx = start * max_width + w;
-                if end < num_words {
-                    concat
-                        .slice_mut(s![idx, ..hidden])
-                        .assign(&start_proj.row(start));
-                    concat
-                        .slice_mut(s![idx, hidden..])
-                        .assign(&end_proj.row(end));
-                    valid[idx] = true;
-                }
-            }
-        }
-
-        // ReLU before out_project (as in the Python reference)
-        concat.mapv_inplace(|v| v.max(0.0));
-        let span_rep = self.out_project.forward(&concat);
-        (span_rep, valid)
     }
 }
 
@@ -449,18 +389,16 @@ fn tokenize_text(text: &str) -> Vec<TextToken> {
 
 /// Tokenized input for the RelEx model.
 ///
-/// Format: [BOS] <<ENT>> label_desc <<ENT>> label_desc ... <<SEP>>
+/// Format: [BOS] <<ENT>> label_name <<ENT>> label_name ... <<SEP>>
 ///         <<REL>> rel1 <<REL>> rel2 ... <<SEP>> word1 word2 ... [EOS]
 #[cfg(feature = "embeddings")]
 struct TokenizedInput {
     input_ids: Vec<u32>,
-    /// Index into input_ids for each <<ENT>> marker token position.
-    ent_marker_positions: Vec<usize>,
-    /// Index into input_ids for each <<REL>> marker token position.
-    rel_marker_positions: Vec<usize>,
-    /// For each token in the text section: (token_idx_in_input_ids, word_idx).
-    /// Only the first subword token per word is used for first-subword pooling.
-    word_first_subword: Vec<usize>,
+    /// Position of the first subword token for EVERY "word" in the entire input
+    /// sequence (BOS excluded; special tokens like <<ENT>>, <<SEP>>, <<REL>>
+    /// each count as one word with mask=1 at their own position).
+    /// Used to build the `words_mask` input to backbone.onnx.
+    all_first_subword: Vec<usize>,
     /// Original whitespace-tokenized text words.
     text_tokens: Vec<TextToken>,
 }
@@ -468,128 +406,93 @@ struct TokenizedInput {
 #[cfg(feature = "embeddings")]
 fn tokenize_prompt(tokenizer: &Tokenizer, text_tokens: Vec<TextToken>) -> TokenizedInput {
     let mut input_ids: Vec<u32> = Vec::new();
-    let mut ent_marker_positions: Vec<usize> = Vec::new();
-    let mut rel_marker_positions: Vec<usize> = Vec::new();
+    // Tracks first-subword positions for ALL words (prompt + text) — words_mask.
+    let mut all_first_subword: Vec<usize> = Vec::new();
 
-    // BOS
+    // BOS — not counted as a "word" in the is_split_into_words sense; the Python
+    // tokenizer wraps the whole sequence and BOS appears at position 0 without a
+    // corresponding word_id. We skip it in all_first_subword.
     input_ids.push(TOK_BOS);
 
-    // Entity section: <<ENT>> label_name for each entity type
+    // Entity section: <<ENT>> label_name for each entity type.
     // NOTE: Only the label name goes into the prompt (e.g. "library"),
     // NOT the description. The description is used by the Python dict-label
     // API to guide the model's internal matching, but the actual tokenized
     // prompt must match what the model was trained on: <<ENT>> label_name.
     for (label, _description) in ENTITY_LABELS {
-        // <<ENT>> marker
-        ent_marker_positions.push(input_ids.len());
+        // <<ENT>> is a single-token word
+        all_first_subword.push(input_ids.len());
         input_ids.push(TOK_ENT);
 
-        // Tokenize just the label name
+        // Tokenize the label name — each label text is one "word" in the
+        // is_split_into_words sense; mark its first subword token.
         let enc = tokenizer
             .encode(*label, false)
             .expect("tokenize entity label");
-        for &id in enc.get_ids() {
-            input_ids.push(id);
+        let ids = enc.get_ids();
+        if !ids.is_empty() {
+            all_first_subword.push(input_ids.len());
+            for &id in ids {
+                input_ids.push(id);
+            }
         }
     }
 
     // <<SEP>> between entity section and relation section
+    all_first_subword.push(input_ids.len());
     input_ids.push(TOK_SEP);
 
-    // Relation section: <<REL>> relation_label for each relation type
+    // Relation section: <<REL>> relation_label for each relation type.
     for rel in RELATION_LABELS {
-        // <<REL>> marker
-        rel_marker_positions.push(input_ids.len());
+        // <<REL>> is a single-token word
+        all_first_subword.push(input_ids.len());
         input_ids.push(TOK_REL);
 
-        // Tokenize the relation label text
+        // Tokenize the relation label text.  Relation labels can be multi-word
+        // (e.g. "built with"), but in the is_split_into_words model each space-
+        // separated piece is a distinct "word".  We tokenize the full label as a
+        // single string here; the first token of the whole encoded label is what
+        // gets words_mask=1 (matching how Python encodes it as a single element
+        // in the pre-tokenized word list).
         let enc = tokenizer
             .encode(*rel, false)
             .expect("tokenize relation label");
-        for &id in enc.get_ids() {
-            input_ids.push(id);
+        let ids = enc.get_ids();
+        if !ids.is_empty() {
+            all_first_subword.push(input_ids.len());
+            for &id in ids {
+                input_ids.push(id);
+            }
         }
     }
 
     // <<SEP>> between relation section and text section
+    all_first_subword.push(input_ids.len());
     input_ids.push(TOK_SEP);
 
-    // Text section: first-subword pooling — track the index of the first
-    // subword token for each whitespace word.
-    let mut word_first_subword: Vec<usize> = Vec::with_capacity(text_tokens.len());
+    // Text section: mark the first subword token for each whitespace word.
     for text_tok in &text_tokens {
         let word_start_idx = input_ids.len();
         let enc = tokenizer
             .encode(text_tok.text.as_str(), false)
             .expect("tokenize text token");
-        for &id in enc.get_ids() {
-            input_ids.push(id);
+        let ids = enc.get_ids();
+        if !ids.is_empty() {
+            all_first_subword.push(word_start_idx);
+            for &id in ids {
+                input_ids.push(id);
+            }
         }
-        // Record position of the first subword for this word
-        word_first_subword.push(word_start_idx);
     }
 
-    // EOS
+    // EOS — not a user word, skip from all_first_subword (matches Python where
+    // the trailing [EOS] token has word_id=None).
     input_ids.push(TOK_EOS);
 
     TokenizedInput {
         input_ids,
-        ent_marker_positions,
-        rel_marker_positions,
-        word_first_subword,
+        all_first_subword,
         text_tokens,
-    }
-}
-
-// ─── Embedding extraction ────────────────────────────────────────────────
-
-#[cfg(feature = "embeddings")]
-struct ExtractedEmbeddings {
-    /// Word embeddings from first-subword pooling: (W, 768)
-    word_embeddings: Array2<f32>,
-    /// Entity prompt embeddings at <<ENT>> positions: (C_ent, 768)
-    ent_prompt_embeddings: Array2<f32>,
-    /// Relation prompt embeddings at <<REL>> positions: (C_rel, 768)
-    rel_prompt_embeddings: Array2<f32>,
-}
-
-#[cfg(feature = "embeddings")]
-fn extract_embeddings(hidden_states: &Array2<f32>, input: &TokenizedInput) -> ExtractedEmbeddings {
-    let hidden_size = hidden_states.ncols();
-    let num_words = input.text_tokens.len();
-    let c_ent = input.ent_marker_positions.len();
-    let c_rel = input.rel_marker_positions.len();
-
-    // Word embeddings: first subword per word
-    let mut word_embs = Array2::<f32>::zeros((num_words, hidden_size));
-    for (word_idx, &tok_pos) in input.word_first_subword.iter().enumerate() {
-        if tok_pos < hidden_states.nrows() {
-            word_embs
-                .row_mut(word_idx)
-                .assign(&hidden_states.row(tok_pos));
-        }
-    }
-
-    // Entity prompt embeddings at <<ENT>> marker positions
-    let mut ent_embs = Array2::<f32>::zeros((c_ent, hidden_size));
-    for (i, &pos) in input.ent_marker_positions.iter().enumerate() {
-        if pos < hidden_states.nrows() {
-            ent_embs.row_mut(i).assign(&hidden_states.row(pos));
-        }
-    }
-
-    // Relation prompt embeddings at <<REL>> marker positions
-    let mut rel_embs = Array2::<f32>::zeros((c_rel, hidden_size));
-    for (i, &pos) in input.rel_marker_positions.iter().enumerate() {
-        if pos < hidden_states.nrows() {
-            rel_embs.row_mut(i).assign(&hidden_states.row(pos));
-        }
-    }
-
-    ExtractedEmbeddings {
-        word_embeddings: word_embs,
-        ent_prompt_embeddings: ent_embs,
-        rel_prompt_embeddings: rel_embs,
     }
 }
 
@@ -601,13 +504,10 @@ fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
 
-#[cfg(feature = "embeddings")]
-fn score_spans_sigmoid(span_rep: &Array2<f32>, prompt_rep: &Array2<f32>) -> Array2<f32> {
-    span_rep.dot(&prompt_rep.t()).mapv(sigmoid)
-}
-
 // ─── NMS entity extraction ───────────────────────────────────────────────
 
+/// Extract entities from backbone entity_logits [L*K, C] (already sigmoid-applied).
+/// `valid_mask` is [L*K] — 1 for valid spans (end < num_words).
 #[cfg(feature = "embeddings")]
 fn extract_entities_from_scores(
     scores: &Array2<f32>,
@@ -900,16 +800,25 @@ const TYPE_CORRECTIONS: &[(&str, &str)] = &[
 
 /// Returns true if the entity text looks like a genuine named entity
 /// (not a code fragment, generic phrase, or internal identifier).
-#[cfg(feature = "embeddings")]
+/// Convenience wrapper without confidence — used in tests.
+#[cfg(all(feature = "embeddings", test))]
 fn is_valid_entity(text: &str) -> bool {
+    is_valid_entity_with_confidence(text, 0.0)
+}
+
+/// Like `is_valid_entity`, but high-confidence NER entities (≥ 0.85) bypass
+/// the generic suffix/prefix heuristic filters. The model already decided this
+/// is a named entity — code-fragment and length checks still apply.
+#[cfg(feature = "embeddings")]
+fn is_valid_entity_with_confidence(text: &str, confidence: f32) -> bool {
     let t = text.trim();
 
-    // Length bounds
+    // Length bounds — always enforced
     if t.len() < 2 || t.len() > 40 {
         return false;
     }
 
-    // Code fragments: double underscores, brackets, Rust paths, snake_case, method calls
+    // Code fragments — always enforced (model can't override these)
     if t.contains("__") {
         return false;
     }
@@ -942,6 +851,14 @@ fn is_valid_entity(text: &str) -> bool {
     // Pure numbers
     if t.chars().all(|c| c.is_ascii_digit()) {
         return false;
+    }
+
+    // High-confidence NER entities skip the generic phrase/suffix/prefix filters.
+    // The model is confident this is a named entity (e.g. "ONNX Runtime", "NER cache"),
+    // not a generic description like "async runtime" or "embedding model".
+    const HIGH_CONFIDENCE: f32 = 0.85;
+    if confidence >= HIGH_CONFIDENCE {
+        return true;
     }
 
     // Generic phrases (case-insensitive exact match)
@@ -987,8 +904,10 @@ fn is_valid_relation(rel: &RecognizedRelation) -> bool {
         return false;
     }
 
-    // Both entities must individually pass the entity filter
-    if !is_valid_entity(&rel.head.text) || !is_valid_entity(&rel.tail.text) {
+    // Both entities must individually pass the entity filter (with confidence)
+    if !is_valid_entity_with_confidence(&rel.head.text, rel.head.confidence)
+        || !is_valid_entity_with_confidence(&rel.tail.text, rel.tail.confidence)
+    {
         return false;
     }
 
@@ -1022,33 +941,6 @@ fn is_valid_relation(rel: &RecognizedRelation) -> bool {
     true
 }
 
-// ─── BiLSTM ONNX session ─────────────────────────────────────────────────
-
-/// Runs the BiLSTM ONNX session on word embeddings.
-/// Input: words_embedding[B, W, 768] → Output: words_embedding_rnn[B, W, 768]
-#[cfg(feature = "embeddings")]
-fn run_bilstm(bilstm: &mut Session, word_embs: &Array2<f32>) -> Result<Array2<f32>> {
-    let (num_words, hidden_size) = (word_embs.nrows(), word_embs.ncols());
-    let data: Vec<f32> = word_embs.iter().copied().collect();
-    let input = TensorRef::from_array_view(([1usize, num_words, hidden_size], data.as_slice()))
-        .map_err(|e| anyhow::anyhow!("bilstm input tensor: {e}"))?;
-
-    let outputs = bilstm
-        .run(ort::inputs!["words_embedding" => input])
-        .map_err(|e| anyhow::anyhow!("bilstm run: {e}"))?;
-
-    let result = outputs[0]
-        .try_extract_tensor::<f32>()
-        .map_err(|e| anyhow::anyhow!("bilstm extract: {e}"))?;
-    let (shape, result_data) = result;
-
-    // Shape is [1, W, 768] → reshape to [W, 768]
-    let w = shape[1] as usize;
-    let h = shape[2] as usize;
-    Array2::from_shape_vec((w, h), result_data.to_vec())
-        .map_err(|e| anyhow::anyhow!("bilstm reshape: {e}"))
-}
-
 // ─── Public NER Engine ───────────────────────────────────────────────────
 
 /// GLiNER-RelEx ONNX engine for joint NER and Relation Extraction.
@@ -1056,15 +948,15 @@ fn run_bilstm(bilstm: &mut Session, word_embs: &Array2<f32>) -> Result<Array2<f3
 /// Model: knowledgator/gliner-relex-large-v0.5 (DeBERTa-v3-large, 467.8M params)
 /// Entity types and relation labels are specified at inference time.
 ///
-/// ONNX sessions are wrapped in `parking_lot::Mutex` because `ort::Session::run`
-/// requires `&mut self`. The lock is held ONLY during `Session::run` and released
-/// immediately after — all downstream ndarray work is lock-free.
+/// The backbone ONNX session is wrapped in `parking_lot::Mutex` because
+/// `ort::Session::run` requires `&mut self`. The lock is held ONLY during
+/// `Session::run` and released immediately after — all downstream ndarray
+/// work is lock-free.
 #[cfg(feature = "embeddings")]
 pub struct NEREngine {
-    encoder: Mutex<Option<Session>>,
-    bilstm: Mutex<Option<Session>>,
-    span_marker: Option<SpanMarkerV0>,
-    prompt_rep: Option<Mlp>,
+    /// Single backbone ONNX session covering DeBERTa encoder + BiLSTM +
+    /// SpanMarker + prompt MLP + entity scoring.
+    backbone: Mutex<Option<Session>>,
     gcn: Option<Gcn>,
     pair_rep: Option<Mlp>,
     tokenizer: Option<Arc<Tokenizer>>,
@@ -1076,10 +968,7 @@ pub struct NEREngine {
 impl NEREngine {
     pub fn new() -> Self {
         Self {
-            encoder: Mutex::new(None),
-            bilstm: Mutex::new(None),
-            span_marker: None,
-            prompt_rep: None,
+            backbone: Mutex::new(None),
             gcn: None,
             pair_rep: None,
             tokenizer: None,
@@ -1089,27 +978,24 @@ impl NEREngine {
     }
 
     /// Get the model directory path.
-    /// Checks: $PCX_GLINER_MODEL, then ~/.post-cortex/models/gliner-relex-large-v0.5
+    /// Checks $PCX_GLINER_MODEL/backbone.onnx, then
+    /// ~/.cache/gliner-relex-onnx/backbone.onnx
     fn model_dir() -> Result<String> {
         if let Ok(path) = std::env::var("PCX_GLINER_MODEL") {
-            if std::path::Path::new(&path)
-                .join("onnx/encoder.onnx")
-                .exists()
-            {
+            if std::path::Path::new(&path).join("backbone.onnx").exists() {
                 return Ok(path);
             }
         }
 
         let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home directory"))?;
-        let default_path = home.join(".post-cortex/models/gliner-relex-large-v0.5");
-        if default_path.join("onnx/encoder.onnx").exists() {
-            return Ok(default_path.to_string_lossy().to_string());
+        let cache_path = home.join(".cache/gliner-relex-onnx");
+        if cache_path.join("backbone.onnx").exists() {
+            return Ok(cache_path.to_string_lossy().to_string());
         }
 
         Err(anyhow::anyhow!(
-            "GLiNER-RelEx model not found. Expected at \
-             ~/.post-cortex/models/gliner-relex-large-v0.5/ \
-             or set PCX_GLINER_MODEL env var."
+            "GLiNER-RelEx model not found. Expected backbone.onnx at \
+             ~/.cache/gliner-relex-onnx/ or set PCX_GLINER_MODEL env var."
         ))
     }
 
@@ -1127,32 +1013,16 @@ impl NEREngine {
         let tokenizer = Tokenizer::from_file(format!("{model_dir}/tokenizer.json"))
             .map_err(|e| anyhow::anyhow!("load tokenizer: {e}"))?;
 
-        // Load ONNX encoder (DeBERTa-v3-large + projection 1024→768)
-        let encoder = Session::builder()
+        // Load single backbone ONNX session (DeBERTa encoder + BiLSTM +
+        // SpanMarker + prompt MLP + entity scoring, ~1.7 GB).
+        let backbone = Session::builder()
             .map_err(|e| anyhow::anyhow!("ort session builder: {e}"))?
             .with_intra_threads(4)
             .map_err(|e| anyhow::anyhow!("ort threads: {e}"))?
-            .commit_from_file(format!("{model_dir}/onnx/encoder.onnx"))
-            .map_err(|e| anyhow::anyhow!("load encoder: {e}"))?;
+            .commit_from_file(format!("{model_dir}/backbone.onnx"))
+            .map_err(|e| anyhow::anyhow!("load backbone: {e}"))?;
 
-        // Load ONNX BiLSTM (BiLSTM 768→384*2=768)
-        let bilstm = Session::builder()
-            .map_err(|e| anyhow::anyhow!("ort session builder bilstm: {e}"))?
-            .with_intra_threads(2)
-            .map_err(|e| anyhow::anyhow!("ort threads bilstm: {e}"))?
-            .commit_from_file(format!("{model_dir}/onnx/rnn.onnx"))
-            .map_err(|e| anyhow::anyhow!("load bilstm: {e}"))?;
-
-        let weights_dir = format!("{model_dir}/onnx/weights");
-
-        // Load SpanMarkerV0 weights
-        let span_marker = SpanMarkerV0::load(&weights_dir)?;
-
-        // Load prompt_rep_layer MLP (768→3072→768)
-        let prompt_rep = Mlp {
-            linear1: Linear::load(&weights_dir, "prompt_rep.linear0")?,
-            linear2: Linear::load(&weights_dir, "prompt_rep.linear1")?,
-        };
+        let weights_dir = format!("{model_dir}/weights");
 
         // Load GCN weights
         let gcn = Gcn::load(&weights_dir)?;
@@ -1163,10 +1033,7 @@ impl NEREngine {
             linear2: Linear::load(&weights_dir, "pair_rep.linear1")?,
         };
 
-        *self.encoder.lock() = Some(encoder);
-        *self.bilstm.lock() = Some(bilstm);
-        self.span_marker = Some(span_marker);
-        self.prompt_rep = Some(prompt_rep);
+        *self.backbone.lock() = Some(backbone);
         self.gcn = Some(gcn);
         self.pair_rep = Some(pair_rep);
         self.tokenizer = Some(Arc::new(tokenizer));
@@ -1203,8 +1070,10 @@ impl NEREngine {
 
         let (mut entities, relations) = self.run_inference(text)?;
 
-        // Apply entity post-filter and type corrections
-        entities.retain(|e| is_valid_entity(&e.text));
+        // Apply entity post-filter and type corrections.
+        // High-confidence NER entities (≥ 0.85) bypass the generic suffix/prefix filter —
+        // the model is confident enough that it's a named entity, not a generic phrase.
+        entities.retain(|e| is_valid_entity_with_confidence(&e.text, e.confidence));
         for e in &mut entities {
             correct_entity_type(e);
         }
@@ -1235,14 +1104,6 @@ impl NEREngine {
             .tokenizer
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("tokenizer not loaded"))?;
-        let span_marker = self
-            .span_marker
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("span_marker not loaded"))?;
-        let prompt_rep = self
-            .prompt_rep
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("prompt_rep not loaded"))?;
         let gcn = self
             .gcn
             .as_ref()
@@ -1258,71 +1119,156 @@ impl NEREngine {
             return Ok((vec![], vec![]));
         }
 
-        // Stage 2: Build full prompt input
+        // Stage 2: Build full prompt input (also records all_first_subword)
         let input = tokenize_prompt(tokenizer, text_tokens);
         let seq_len = input.input_ids.len();
-        let input_ids_i64: Vec<i64> = input.input_ids.iter().map(|&id| id as i64).collect();
-        let attention_mask_i64: Vec<i64> = vec![1i64; seq_len];
+        let num_words = input.text_tokens.len();
 
-        // Stage 3: Run encoder — hold lock only for Session::run
-        let input_ids_tensor =
-            TensorRef::from_array_view(([1usize, seq_len], input_ids_i64.as_slice()))
-                .map_err(|e| anyhow::anyhow!("input tensor: {e}"))?;
-        let attn_mask_tensor =
-            TensorRef::from_array_view(([1usize, seq_len], attention_mask_i64.as_slice()))
-                .map_err(|e| anyhow::anyhow!("attn tensor: {e}"))?;
-
-        let token_embeds = {
-            let mut enc = self.encoder.lock();
-            let encoder = enc
-                .as_mut()
-                .ok_or_else(|| anyhow::anyhow!("encoder not loaded"))?;
-            let outputs = encoder
-                .run(ort::inputs![
-                    "input_ids" => input_ids_tensor,
-                    "attention_mask" => attn_mask_tensor
-                ])
-                .map_err(|e| anyhow::anyhow!("encoder run: {e}"))?;
-
-            let hs = outputs[0]
-                .try_extract_tensor::<f32>()
-                .map_err(|e| anyhow::anyhow!("extract hidden: {e}"))?;
-            let (shape, data) = hs;
-            let hidden_size = shape[2] as usize;
-            let seq_actual = shape[1] as usize;
-            Array2::from_shape_vec((seq_actual, hidden_size), data.to_vec())
-                .map_err(|e| anyhow::anyhow!("reshape hidden: {e}"))?
-        };
-
-        // Stage 4: Extract word, entity-prompt, and relation-prompt embeddings
-        let embs = extract_embeddings(&token_embeds, &input);
-        let num_words = embs.word_embeddings.nrows();
         if num_words == 0 {
             return Ok((vec![], vec![]));
         }
 
-        // Stage 5: BiLSTM on word embeddings — hold lock only for Session::run
-        let word_embs_rnn = {
-            let mut lstm = self.bilstm.lock();
-            let bilstm = lstm
+        let input_ids_i64: Vec<i64> = input.input_ids.iter().map(|&id| id as i64).collect();
+        let attention_mask_i64: Vec<i64> = vec![1i64; seq_len];
+
+        // Stage 3: Build words_mask — 1-indexed word indices for TEXT words only.
+        // Python's prepare_word_mask skips prompt words (skip_first_words) and
+        // assigns 1, 2, 3, ... to the first subword of each text word.
+        // all_first_subword includes prompt + text positions; only the last
+        // num_words entries are text words.
+        let num_prompt_words = input.all_first_subword.len() - num_words;
+        let mut words_mask_i64 = vec![0i64; seq_len];
+        for (i, &pos) in input.all_first_subword.iter().skip(num_prompt_words).enumerate() {
+            if pos < seq_len {
+                words_mask_i64[pos] = (i + 1) as i64; // 1-indexed
+            }
+        }
+
+        // Stage 4: text_lengths — number of text words
+        let text_lengths_i64: Vec<i64> = vec![num_words as i64];
+
+        // Stage 5: span_idx [num_spans, 2] — (start_word, end_word) pairs
+        // Stage 6: span_mask [num_spans] — 1 where span is valid
+        let num_spans = num_words * MAX_WIDTH;
+        let mut span_idx_flat: Vec<i64> = vec![0i64; num_spans * 2];
+        let mut span_mask_bool: Vec<bool> = vec![false; num_spans];
+
+        for start in 0..num_words {
+            for w in 0..MAX_WIDTH {
+                let end = start + w;
+                let flat_idx = start * MAX_WIDTH + w;
+                if end < num_words {
+                    span_idx_flat[flat_idx * 2] = start as i64;
+                    span_idx_flat[flat_idx * 2 + 1] = end as i64;
+                    span_mask_bool[flat_idx] = true;
+                }
+                // padding entries remain [0, 0] / false
+            }
+        }
+
+        // Stage 7: Run backbone.onnx — hold lock only for Session::run
+        // Outputs: entity_logits [1, L, K, C], span_reps [1, L*K, D],
+        //          rel_prompt_embeds [1, R, D]
+        let (entity_logits_flat, entity_logits_shape, span_reps_2d, rel_prompt_embeds_2d) = {
+            let input_ids_tensor =
+                TensorRef::from_array_view(([1usize, seq_len], input_ids_i64.as_slice()))
+                    .map_err(|e| anyhow::anyhow!("backbone input_ids tensor: {e}"))?;
+            let attn_mask_tensor =
+                TensorRef::from_array_view(([1usize, seq_len], attention_mask_i64.as_slice()))
+                    .map_err(|e| anyhow::anyhow!("backbone attention_mask tensor: {e}"))?;
+            let words_mask_tensor =
+                TensorRef::from_array_view(([1usize, seq_len], words_mask_i64.as_slice()))
+                    .map_err(|e| anyhow::anyhow!("backbone words_mask tensor: {e}"))?;
+            let text_lengths_tensor =
+                TensorRef::from_array_view(([1usize, 1usize], text_lengths_i64.as_slice()))
+                    .map_err(|e| anyhow::anyhow!("backbone text_lengths tensor: {e}"))?;
+            let span_idx_tensor =
+                TensorRef::from_array_view(([1usize, num_spans, 2usize], span_idx_flat.as_slice()))
+                    .map_err(|e| anyhow::anyhow!("backbone span_idx tensor: {e}"))?;
+            let span_mask_tensor =
+                TensorRef::from_array_view(([1usize, num_spans], span_mask_bool.as_slice()))
+                    .map_err(|e| anyhow::anyhow!("backbone span_mask tensor: {e}"))?;
+
+            let mut bb = self.backbone.lock();
+            let backbone = bb
                 .as_mut()
-                .ok_or_else(|| anyhow::anyhow!("bilstm not loaded"))?;
-            run_bilstm(bilstm, &embs.word_embeddings)?
+                .ok_or_else(|| anyhow::anyhow!("backbone not loaded"))?;
+
+            let outputs = backbone
+                .run(ort::inputs![
+                    "input_ids"      => input_ids_tensor,
+                    "attention_mask" => attn_mask_tensor,
+                    "words_mask"     => words_mask_tensor,
+                    "text_lengths"   => text_lengths_tensor,
+                    "span_idx"       => span_idx_tensor,
+                    "span_mask"      => span_mask_tensor
+                ])
+                .map_err(|e| anyhow::anyhow!("backbone run: {e}"))?;
+
+            // entity_logits [1, L, K, C]
+            let logits_raw = outputs[0]
+                .try_extract_tensor::<f32>()
+                .map_err(|e| anyhow::anyhow!("extract entity_logits: {e}"))?;
+            let (logits_shape, logits_data) = logits_raw;
+            let logits_shape_owned: Vec<usize> =
+                logits_shape.iter().map(|&d| d as usize).collect();
+            let logits_flat: Vec<f32> = logits_data.to_vec();
+
+            // span_reps [1, L*K, D]
+            let span_raw = outputs[1]
+                .try_extract_tensor::<f32>()
+                .map_err(|e| anyhow::anyhow!("extract span_reps: {e}"))?;
+            let (span_shape, span_data) = span_raw;
+            let span_lk = span_shape[1] as usize;
+            let span_d = span_shape[2] as usize;
+            let span_2d = Array2::from_shape_vec((span_lk, span_d), span_data.to_vec())
+                .map_err(|e| anyhow::anyhow!("reshape span_reps: {e}"))?;
+
+            // rel_prompt_embeds [1, R, D]
+            let rel_raw = outputs[2]
+                .try_extract_tensor::<f32>()
+                .map_err(|e| anyhow::anyhow!("extract rel_prompt_embeds: {e}"))?;
+            let (rel_shape, rel_data) = rel_raw;
+            let rel_r = rel_shape[1] as usize;
+            let rel_d = rel_shape[2] as usize;
+            let rel_2d = Array2::from_shape_vec((rel_r, rel_d), rel_data.to_vec())
+                .map_err(|e| anyhow::anyhow!("reshape rel_prompt_embeds: {e}"))?;
+
+            (logits_flat, logits_shape_owned, span_2d, rel_2d)
         };
 
-        // Stage 6: prompt_rep_layer MLP on entity prompt embeddings
-        let processed_ent_prompts = prompt_rep.forward(&embs.ent_prompt_embeddings);
+        // Stage 8: Reshape entity_logits [1, L, K, C] → [L*K, C], apply sigmoid
+        // entity_logits_shape = [1, L, K, C]
+        let l = entity_logits_shape[1]; // num_words
+        let k = entity_logits_shape[2]; // MAX_WIDTH
+        let c = entity_logits_shape[3]; // num_entity_labels
+        let lk = l * k;
 
-        // Stage 7: SpanMarkerV0 → span representations
-        let (span_reps, valid_mask) = span_marker.forward(&word_embs_rnn, MAX_WIDTH);
+        if lk != num_spans || c != ENTITY_LABELS.len() {
+            return Err(anyhow::anyhow!(
+                "backbone entity_logits shape mismatch: expected [{}, {}, {}], got [{}, {}, {}]",
+                num_words,
+                MAX_WIDTH,
+                ENTITY_LABELS.len(),
+                l,
+                k,
+                c
+            ));
+        }
 
-        // Stage 8: Entity scores = sigmoid(span_reps @ processed_ent_prompts.T)
-        let entity_scores = score_spans_sigmoid(&span_reps, &processed_ent_prompts);
+        // entity_logits_flat is in row-major order [1, L, K, C]:
+        // flat index = l_idx * K * C + k_idx * C + c_idx
+        // We want [L*K, C]: row = l_idx * K + k_idx, col = c_idx — same memory layout.
+        let entity_scores_raw =
+            Array2::from_shape_vec((lk, c), entity_logits_flat)
+                .map_err(|e| anyhow::anyhow!("reshape entity_logits to [L*K, C]: {e}"))?;
+        // Apply sigmoid to get probabilities
+        let entity_scores = entity_scores_raw.mapv(sigmoid);
 
         // Stage 9: NMS + entity extraction
         let entities = extract_entities_from_scores(
             &entity_scores,
-            &valid_mask,
+            &span_mask_bool,
             &input.text_tokens,
             text,
             ENTITY_THRESHOLD,
@@ -1332,13 +1278,11 @@ impl NEREngine {
             return Ok((entities, vec![]));
         }
 
-        // Stage 10: Collect span_reps for detected entities
-        // Map each entity to its span_rep index (start_word * MAX_WIDTH + 0 is the
-        // single-word span; for multi-word spans start * MAX_WIDTH + width).
+        // Stage 10: Collect span_reps for detected entities from backbone output.
+        // span_reps [L*K, D]: flat index = start_word * MAX_WIDTH + width
         let entity_span_reps: Array2<f32> = {
             let mut rows: Vec<Array1<f32>> = Vec::with_capacity(entities.len());
             for ent in &entities {
-                // Find the word index for this entity's start char position
                 let start_word = input
                     .text_tokens
                     .iter()
@@ -1350,8 +1294,9 @@ impl NEREngine {
                     .position(|t| t.end == ent.end)
                     .unwrap_or(start_word);
                 let width = end_word.saturating_sub(start_word);
-                let span_idx = (start_word * MAX_WIDTH + width).min(span_reps.nrows() - 1);
-                rows.push(span_reps.row(span_idx).to_owned());
+                let flat_idx =
+                    (start_word * MAX_WIDTH + width).min(span_reps_2d.nrows() - 1);
+                rows.push(span_reps_2d.row(flat_idx).to_owned());
             }
             let e = rows.len();
             let h = rows[0].len();
@@ -1395,21 +1340,42 @@ impl NEREngine {
         let num_pairs = pair_indices.len();
         let hidden = entity_span_reps.ncols();
         let mut concat = Array2::<f32>::zeros((num_pairs, hidden * 2));
-        for k in 0..num_pairs {
-            concat.slice_mut(s![k, ..hidden]).assign(&pair_head_reps[k]);
-            concat.slice_mut(s![k, hidden..]).assign(&pair_tail_reps[k]);
+        for k_idx in 0..num_pairs {
+            concat
+                .slice_mut(s![k_idx, ..hidden])
+                .assign(&pair_head_reps[k_idx]);
+            concat
+                .slice_mut(s![k_idx, hidden..])
+                .assign(&pair_tail_reps[k_idx]);
         }
         let pair_reps = pair_rep.forward(&concat);
 
-        // Stage 14: Relation scores = sigmoid(pair_reps @ rel_prompt_embs.T)
-        let relation_scores = score_spans_sigmoid(&pair_reps, &embs.rel_prompt_embeddings);
+        // Stage 14: Relation scores = sigmoid(pair_reps @ rel_prompt_embeds.T)
+        let relation_scores = pair_reps
+            .dot(&rel_prompt_embeds_2d.t())
+            .mapv(sigmoid);
 
         // Stage 15: Collect relations above threshold
         let mut relations: Vec<RecognizedRelation> = Vec::new();
-        for k in 0..num_pairs {
-            let (head_idx, tail_idx) = pair_indices[k];
+        for k_idx in 0..num_pairs {
+            let (head_idx, tail_idx) = pair_indices[k_idx];
             for (rel_idx, &rel_label) in RELATION_LABELS.iter().enumerate() {
-                let score = relation_scores[[k, rel_idx]];
+                let score = relation_scores[[k_idx, rel_idx]];
+                // Debug: log near-threshold scores to calibrate RELATION_THRESHOLD
+                if score >= 0.5 {
+                    debug!(
+                        "REL_SCORE: '{}' --[{}]--> '{}' = {:.3}  {}",
+                        entities[head_idx].text,
+                        rel_label,
+                        entities[tail_idx].text,
+                        score,
+                        if score >= RELATION_THRESHOLD {
+                            "✓"
+                        } else {
+                            "✗ (below threshold)"
+                        }
+                    );
+                }
                 if score >= RELATION_THRESHOLD {
                     let rel = RecognizedRelation {
                         head: entities[head_idx].clone(),
@@ -1587,6 +1553,30 @@ mod tests {
     }
 
     #[test]
+    fn test_high_confidence_bypasses_suffix_filter() {
+        // Without confidence, suffix filter kills these
+        assert!(!is_valid_entity("ONNX Runtime"));
+        assert!(!is_valid_entity("NER cache"));
+        assert!(!is_valid_entity("NER engine"));
+        assert!(!is_valid_entity("async runtime"));
+
+        // With high confidence (≥ 0.85), NER model overrides suffix filter
+        assert!(is_valid_entity_with_confidence("ONNX Runtime", 0.90));
+        assert!(is_valid_entity_with_confidence("NER cache", 0.85));
+        assert!(is_valid_entity_with_confidence("NER engine", 0.88));
+
+        // But code fragments are ALWAYS rejected regardless of confidence
+        assert!(!is_valid_entity_with_confidence("db.select()", 0.99));
+        assert!(!is_valid_entity_with_confidence("axon::tools", 0.95));
+        assert!(!is_valid_entity_with_confidence("serde_json", 0.92));
+        assert!(!is_valid_entity_with_confidence("&str", 0.99));
+
+        // Low confidence still gets suffix-filtered
+        assert!(!is_valid_entity_with_confidence("async runtime", 0.60));
+        assert!(!is_valid_entity_with_confidence("embedding model", 0.70));
+    }
+
+    #[test]
     fn test_correct_entity_type_conll() {
         let mut e = RecognizedEntity {
             text: "CoNLL".to_string(),
@@ -1685,7 +1675,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires model files at ~/.post-cortex/models/gliner-relex-large-v0.5/
+    #[ignore] // Requires model files at ~/.cache/gliner-relex-onnx/backbone.onnx
     async fn test_relex_model_loading() {
         let mut engine = NEREngine::new();
         let result = engine.load_model().await;
@@ -1696,9 +1686,16 @@ mod tests {
     #[tokio::test]
     #[ignore] // Requires model files
     async fn test_software_entity_extraction() {
+        // Enable debug logging to see REL_SCORE lines
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_test_writer()
+            .try_init();
+
         let mut engine = NEREngine::new();
         engine.load_model().await.unwrap();
 
+        // Short sentences — basic entity extraction
         let test_cases = vec![
             "Post-Cortex is an intelligent conversation memory system built with Rust.",
             "It uses RocksDB for persistent storage and HNSW for vector similarity search.",
@@ -1707,7 +1704,7 @@ mod tests {
             "PostgreSQL and Redis are used with axum and tower for the HTTP API.",
         ];
 
-        for text in test_cases {
+        for text in &test_cases {
             println!("\n--- Testing: {} ---", text);
             let (entities, relations) = engine.extract_entities_and_relations(text).unwrap();
             println!("Entities ({}):", entities.len());
@@ -1730,5 +1727,94 @@ mod tests {
                 );
             }
         }
+
+        // Rich multi-sentence texts from test_context_assembly_pipeline — these
+        // produce typed entity relations when the model sees explicit dependency
+        // language ("depends on", "connects to", "required by", etc.)
+        let pipeline_texts = vec![
+            (
+                "Axon architecture",
+                "Axon is a coding agent built in Rust that connects to Post-Cortex via gRPC \
+                 using tonic. Post-Cortex provides semantic search and entity graph storage. \
+                 Axon depends on Post-Cortex for context assembly and knowledge recall. \
+                 The gRPC service is implemented with tonic on port 3738.",
+            ),
+            (
+                "Storage architecture",
+                "Post-Cortex uses RocksDB for entity graph persistence and SurrealDB for \
+                 relational queries. The FreshnessStorage trait depends on RocksDB for \
+                 AST hash storage. SurrealDB implements the GraphStorage trait. \
+                 Both storage backends are required by Post-Cortex for full functionality.",
+            ),
+            (
+                "GLiNER-RelEx integration",
+                "Replaced GLiNER2 with GLiNER-RelEx for joint NER and relation extraction. \
+                 GLiNER-RelEx depends on the DeBERTa-v3-large encoder and ONNX Runtime for \
+                 inference. The NER engine implements entity extraction which is required by \
+                 the entity graph. The entity graph depends on NER engine for typed edges. \
+                 ONNX Runtime is required by GLiNER-RelEx for model inference.",
+            ),
+            (
+                "NER cache bug fix",
+                "Fixed a critical bug in the NER cache. The NER cache previously stored only \
+                 entities and lost all relations on cache hits. This caused the entity graph \
+                 to have empty relationships. The fix changes the cache to store both entities \
+                 and relations together. The NER cache depends on NER engine for extraction \
+                 results. The entity graph depends on NER cache for cached lookups.",
+            ),
+            (
+                "Tokio runtime decision",
+                "Decided to use tokio multi-threaded runtime for all async operations in Axon. \
+                 Key reasons: mature ecosystem, excellent performance, wide library support. \
+                 tokio is required by tonic for the gRPC transport layer.",
+            ),
+            (
+                "AssembleContext RPC",
+                "Added graph-aware context assembly to Post-Cortex. The AssembleContext RPC \
+                 traverses the entity graph, performs impact analysis on dependencies, and \
+                 packs context items within a token budget using greedy knapsack.",
+            ),
+            (
+                "Token budget strategy",
+                "Context assembly uses a greedy knapsack algorithm to pack items within the \
+                 token budget. Items are scored by recency and semantic relevance, then packed \
+                 highest-score-first. The ContextAssembler depends on AssembleContext RPC. \
+                 The token budget defaults to 4000 tokens for regular calls and 8000 for \
+                 extended context requests.",
+            ),
+        ];
+
+        let mut total_entities = 0;
+        let mut total_relations = 0;
+
+        for (title, text) in &pipeline_texts {
+            println!("\n=== Pipeline text: {} ===", title);
+            let (entities, relations) = engine.extract_entities_and_relations(text).unwrap();
+            println!("Entities ({}):", entities.len());
+            for e in &entities {
+                println!(
+                    "  '{}' => {:?} ({:.0}%)",
+                    e.text,
+                    e.entity_type,
+                    e.confidence * 100.0
+                );
+            }
+            println!("Relations ({}):", relations.len());
+            for r in &relations {
+                println!(
+                    "  '{}' --[{}]--> '{}' ({:.0}%)",
+                    r.head.text,
+                    r.relation_type,
+                    r.tail.text,
+                    r.confidence * 100.0
+                );
+            }
+            total_entities += entities.len();
+            total_relations += relations.len();
+        }
+
+        println!("\n=== TOTALS: {} entities, {} relations ===", total_entities, total_relations);
+        assert!(total_entities > 0, "Pipeline texts should produce entities");
+        assert!(total_relations > 0, "Pipeline texts should produce at least some relations");
     }
 }

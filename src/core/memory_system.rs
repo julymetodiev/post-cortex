@@ -1083,6 +1083,7 @@ impl ConversationMemorySystem {
 
                 // Background entity graph update (non-blocking, non-critical)
                 let session_arc_bg = Arc::clone(&session_arc);
+                let storage_actor_bg = self.storage_actor.clone();
                 let update_for_graph = context_update;
                 tokio::spawn(async move {
                     let current = session_arc_bg.load();
@@ -1096,11 +1097,16 @@ impl ConversationMemorySystem {
                         return;
                     }
 
-                    // CAS-swap the graph update back. If another update raced,
-                    // this CAS fails silently — the next update will catch up.
+                    // CAS-swap the graph update back and persist only on success.
                     let new_arc = Arc::new(new_session);
-                    let prev = session_arc_bg.compare_and_swap(&current, new_arc);
-                    if !Arc::ptr_eq(&prev, &current) {
+                    let prev = session_arc_bg.compare_and_swap(&current, Arc::clone(&new_arc));
+                    if Arc::ptr_eq(&prev, &current) {
+                        // CAS succeeded — persist session with updated entity graph
+                        storage_actor_bg.persist_session_and_update_nowait(
+                            (*new_arc).clone(),
+                            vec![],
+                        );
+                    } else {
                         debug!("Background entity graph CAS failed (concurrent update), skipping");
                     }
                 });
@@ -3291,6 +3297,66 @@ impl ConversationMemorySystem {
     pub async fn set_embedding_model(&mut self, model_type: String) -> Result<(), String> {
         self.config.embeddings_model_type = model_type;
         Ok(())
+    }
+
+    /// Invalidate a source file and rebuild the entity graph for the given session.
+    ///
+    /// 1. Removes SourceReference entries for the file (storage layer)
+    /// 2. Removes incremental updates referencing the file from the session
+    /// 3. Rebuilds entity graph from remaining updates
+    /// 4. Persists the updated session
+    ///
+    /// Returns (entries_invalidated, entities_after_rebuild).
+    pub async fn invalidate_and_rebuild_entity_graph(
+        &self,
+        session_id: Uuid,
+        file_path: &str,
+    ) -> Result<(u32, usize), String> {
+        // Step 1: invalidate source references in storage
+        let entries_invalidated = self.storage_actor.invalidate_source(file_path).await?;
+
+        // Step 2-4: update session (remove stale updates, rebuild graph, persist)
+        let session_arc = self
+            .session_manager
+            .get_or_create_session(session_id)
+            .await?;
+
+        let current = session_arc.load();
+        let mut new_session = (**current).clone();
+
+        let removed = new_session.remove_updates_for_file(file_path);
+        if removed > 0 {
+            match new_session.rebuild_entity_graph_from_updates().await {
+                Ok((before, after)) => {
+                    info!(
+                        "Invalidate+rebuild for {}: {} source refs, {} updates removed, entities {} -> {}",
+                        file_path, entries_invalidated, removed, before, after,
+                    );
+                    let entities_after = after;
+                    let new_arc = Arc::new(new_session);
+                    let prev = session_arc.compare_and_swap(&current, Arc::clone(&new_arc));
+                    if Arc::ptr_eq(&prev, &current) {
+                        self.storage_actor.persist_session_and_update_nowait(
+                            (*new_arc).clone(),
+                            vec![],
+                        );
+                    } else {
+                        warn!("CAS failed during invalidate+rebuild for session {}", session_id);
+                    }
+                    Ok((entries_invalidated, entities_after))
+                }
+                Err(e) => {
+                    warn!("Entity graph rebuild failed after invalidation: {}", e);
+                    Ok((entries_invalidated, 0))
+                }
+            }
+        } else {
+            debug!(
+                "No updates reference file {}, skipping entity graph rebuild",
+                file_path
+            );
+            Ok((entries_invalidated, new_session.entity_graph.entity_count()))
+        }
     }
 
     /// Clear query cache to prevent stale vector IDs after restart
