@@ -597,6 +597,7 @@ mod tests {
                 creates_entities: vec![],
                 creates_relationships: vec![],
                 references_entities: vec![],
+                typed_entities: vec![],
             },
             ContextUpdate {
                 id: uuid::Uuid::new_v4(),
@@ -615,6 +616,7 @@ mod tests {
                 creates_entities: vec![],
                 creates_relationships: vec![],
                 references_entities: vec![],
+                typed_entities: vec![],
             },
         ];
 
@@ -653,6 +655,7 @@ mod tests {
             creates_entities: vec![],
             creates_relationships: vec![],
             references_entities: vec![],
+            typed_entities: vec![],
         }];
 
         let result = assemble_context("changing RocksDB", &graph, &updates, 2000);

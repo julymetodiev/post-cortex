@@ -2985,6 +2985,7 @@ mod tests {
             creates_entities: vec!["SurrealDB".to_string()],
             creates_relationships: vec![],
             references_entities: vec![],
+            typed_entities: vec![],
         };
 
         let update2 = ContextUpdate {
@@ -3004,6 +3005,7 @@ mod tests {
             creates_entities: vec!["NormalizedStorage".to_string()],
             creates_relationships: vec![],
             references_entities: vec!["SurrealDB".to_string()],
+            typed_entities: vec![],
         };
 
         // Create session with updates
@@ -3172,6 +3174,7 @@ mod tests {
                 creates_entities: vec![],
                 creates_relationships: vec![],
                 references_entities: vec![],
+                typed_entities: vec![],
             },
             ContextUpdate {
                 id: Uuid::new_v4(),
@@ -3198,6 +3201,7 @@ mod tests {
                 creates_entities: vec![],
                 creates_relationships: vec![],
                 references_entities: vec![],
+                typed_entities: vec![],
             },
             ContextUpdate {
                 id: Uuid::new_v4(),
@@ -3216,6 +3220,7 @@ mod tests {
                 creates_entities: vec![],
                 creates_relationships: vec![],
                 references_entities: vec![],
+                typed_entities: vec![],
             },
         ];
 
@@ -3265,6 +3270,7 @@ mod tests {
                 creates_entities: vec![],
                 creates_relationships: vec![],
                 references_entities: vec![],
+                typed_entities: vec![],
             },
             ContextUpdate {
                 id: Uuid::new_v4(),
@@ -3283,6 +3289,7 @@ mod tests {
                 creates_entities: vec![],
                 creates_relationships: vec![],
                 references_entities: vec![],
+                typed_entities: vec![],
             },
             ContextUpdate {
                 id: Uuid::new_v4(),
@@ -3301,6 +3308,7 @@ mod tests {
                 creates_entities: vec![],
                 creates_relationships: vec![],
                 references_entities: vec![],
+                typed_entities: vec![],
             },
         ];
 
@@ -3339,6 +3347,7 @@ mod tests {
                 creates_entities: vec!["SurrealDB".to_string()],
                 creates_relationships: vec![],
                 references_entities: vec![],
+                typed_entities: vec![],
             },
             ContextUpdate {
                 id: Uuid::new_v4(),
@@ -3357,6 +3366,7 @@ mod tests {
                 creates_entities: vec![],
                 creates_relationships: vec![],
                 references_entities: vec!["SurrealDB".to_string()],
+                typed_entities: vec![],
             },
         ];
 
@@ -3434,6 +3444,7 @@ mod tests {
             creates_entities: vec!["TestEntity".to_string()],
             creates_relationships: vec![],
             references_entities: vec![],
+            typed_entities: vec![],
         };
 
         // Create session with update and entity graph

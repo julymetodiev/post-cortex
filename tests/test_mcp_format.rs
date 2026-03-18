@@ -51,6 +51,7 @@ async fn test_mcp_format_semantic_search() -> Result<()> {
         creates_entities: vec![],
         creates_relationships: vec![],
         references_entities: vec![],
+        typed_entities: vec![],
     };
 
     // Add with metadata (like MCP tool does)

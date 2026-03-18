@@ -832,7 +832,14 @@ impl VectorDB {
 
     /// Search for similar vectors
     pub fn search(&self, query_vector: &[f32], k: usize) -> Result<Vec<SearchMatch>> {
-        self.search_with_mode(query_vector, k, SearchMode::default(), None)
+        // Use exact (linear) scan for small-to-medium DBs — HNSW post-filter
+        // misses sparse clusters and is only worth it for very large DBs.
+        let mode = if self.vectors.len() <= 10_000 {
+            SearchMode::Exact
+        } else {
+            SearchMode::default()
+        };
+        self.search_with_mode(query_vector, k, mode, None)
     }
 
     /// Search for similar vectors with configurable mode and parameters
@@ -1454,7 +1461,7 @@ impl VectorDB {
 
         // For small databases or when filtering, use exact search to ensure we find all matches
         // This is more accurate for session-scoped queries where filtered results may be sparse
-        let (search_limit, search_mode, ef_override) = if total_vectors <= 100 {
+        let (search_limit, search_mode, ef_override) = if total_vectors <= 10_000 {
             // Small database: use exact search for guaranteed accuracy
             debug!(
                 "search_with_filter: using Exact mode for small database ({} vectors)",

@@ -34,6 +34,12 @@ pub enum UpdateType {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TypedEntity {
+    pub name: String,
+    pub entity_type: EntityType,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ContextUpdate {
     pub id: Uuid,
     pub timestamp: DateTime<Utc>,
@@ -47,6 +53,10 @@ pub struct ContextUpdate {
     pub creates_entities: Vec<String>,
     pub creates_relationships: Vec<EntityRelationship>,
     pub references_entities: Vec<String>,
+
+    // Claude-provided typed entities (skip NER when non-empty)
+    #[serde(default)]
+    pub typed_entities: Vec<TypedEntity>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

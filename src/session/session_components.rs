@@ -365,6 +365,7 @@ mod tests {
                 creates_entities: vec![],
                 creates_relationships: vec![],
                 references_entities: vec![],
+                typed_entities: vec![],
             };
             hot.push(update);
         }

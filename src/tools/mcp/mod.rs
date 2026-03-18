@@ -1734,6 +1734,7 @@ fn interaction_to_context_update(
         creates_entities: vec![],
         creates_relationships: vec![],
         references_entities: vec![],
+        typed_entities: vec![],
     })
 }
 

@@ -128,6 +128,18 @@ message DeleteSessionResponse {
 
 // ============ Context Update ============
 
+message EntityInfo {
+  string name = 1;
+  string entity_type = 2;  // "technology", "concept", "problem", "solution", "decision", "code_component"
+}
+
+message RelationInfo {
+  string from_entity = 1;
+  string to_entity = 2;
+  string relation_type = 3;  // "required_by", "leads_to", "related_to", "conflicts_with", "depends_on", "implements", "caused_by", "solves"
+  string context = 4;        // short explanation of the relation
+}
+
 message UpdateContextRequest {
   string session_id = 1;
   // Interaction type: qa, code_change, problem_solved, decision_made,
@@ -136,6 +148,8 @@ message UpdateContextRequest {
   ContextContent content = 3;
   // Optional source file reference (for freshness tracking)
   SourceReference source_ref = 4;
+  repeated EntityInfo entities = 5;
+  repeated RelationInfo relations = 6;
 }
 
 message ContextContent {
@@ -168,6 +182,8 @@ message UpdateContextResponse {
 message ContextUpdateItem {
   string interaction_type = 1;
   ContextContent content = 2;
+  repeated EntityInfo entities = 3;
+  repeated RelationInfo relations = 4;
 }
 
 message BulkUpdateContextRequest {

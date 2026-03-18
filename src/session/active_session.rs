@@ -1316,6 +1316,31 @@ impl ActiveSession {
             update.id
         );
 
+        // When typed entities are provided (from Claude), use them directly — skip NER entirely.
+        if !update.typed_entities.is_empty() {
+            let entity_graph = Arc::make_mut(&mut self.entity_graph);
+
+            for typed_entity in &update.typed_entities {
+                entity_graph.add_or_update_entity(
+                    typed_entity.name.clone(),
+                    typed_entity.entity_type.clone(),
+                    update.timestamp,
+                    &format!("Provided by caller: {}", update.content.title),
+                );
+            }
+
+            for rel in &update.creates_relationships {
+                entity_graph.add_relationship(rel.clone());
+            }
+
+            info!(
+                "update_entity_graph: Used {} caller-provided entities, {} relationships (NER skipped)",
+                update.typed_entities.len(),
+                update.creates_relationships.len(),
+            );
+            return Ok(());
+        }
+
         // Extract entities from update content if not explicitly provided
         let mut extracted_entities = update.creates_entities.clone();
         let mut referenced_entities = update.references_entities.clone();

@@ -238,12 +238,16 @@ impl PostCortex for PcxGrpcService {
 
         let session_id = parse_uuid(&req.session_id)?;
 
+        // Validate caller-provided entities and relations.
+        validate_entities_and_relations(&req.entities, &req.relations)?;
+
         // Build the description from ContextContent
         let content = req.content.unwrap_or_default();
         let description = format_context_description(&req.interaction_type, &content);
 
-        // Build metadata JSON matching what MCP tools produce
-        let metadata = build_update_metadata(&req.interaction_type, &content);
+        // Build metadata JSON with entities and relations injected.
+        let metadata =
+            build_update_metadata(&req.interaction_type, &content, &req.entities, &req.relations);
 
         match self
             .memory
@@ -279,9 +283,24 @@ impl PostCortex for PcxGrpcService {
         let mut failure_count = 0u32;
 
         for item in req.updates {
+            // Validate entities and relations for each bulk item.
+            if let Err(status) = validate_entities_and_relations(&item.entities, &item.relations) {
+                warn!(
+                    "gRPC BulkUpdateContext item validation failed: {}",
+                    status.message()
+                );
+                failure_count += 1;
+                continue;
+            }
+
             let content = item.content.unwrap_or_default();
             let description = format_context_description(&item.interaction_type, &content);
-            let metadata = build_update_metadata(&item.interaction_type, &content);
+            let metadata = build_update_metadata(
+                &item.interaction_type,
+                &content,
+                &item.entities,
+                &item.relations,
+            );
 
             match self
                 .memory
@@ -1329,8 +1348,117 @@ fn format_context_description(interaction_type: &str, content: &ContextContent) 
     desc
 }
 
-fn build_update_metadata(interaction_type: &str, content: &ContextContent) -> serde_json::Value {
-    use crate::core::context_update::{ContextUpdate, UpdateContent, UpdateType};
+/// Validate entities and relations provided by the caller (Claude-driven extraction).
+/// Returns `Err(Status)` with a precise message on the first validation failure.
+fn validate_entities_and_relations(
+    entities: &[EntityInfo],
+    relations: &[RelationInfo],
+) -> Result<(), Status> {
+    use std::collections::HashSet;
+
+    if entities.is_empty() {
+        return Err(Status::invalid_argument(
+            "entities field is required and must not be empty",
+        ));
+    }
+
+    if relations.is_empty() {
+        return Err(Status::invalid_argument(
+            "relations field is required and must not be empty",
+        ));
+    }
+
+    // Build a set of known entity names for referential-integrity checks.
+    let entity_names: HashSet<&str> = entities.iter().map(|e| e.name.as_str()).collect();
+
+    for (i, rel) in relations.iter().enumerate() {
+        if rel.from_entity.is_empty() {
+            return Err(Status::invalid_argument(format!(
+                "relation[{i}]: from_entity must not be empty"
+            )));
+        }
+        if rel.to_entity.is_empty() {
+            return Err(Status::invalid_argument(format!(
+                "relation[{i}]: to_entity must not be empty"
+            )));
+        }
+        if rel.from_entity == rel.to_entity {
+            return Err(Status::invalid_argument(format!(
+                "relation[{i}]: self-relations are not allowed (from_entity == to_entity == {:?})",
+                rel.from_entity
+            )));
+        }
+        if rel.context.is_empty() {
+            return Err(Status::invalid_argument(format!(
+                "relation[{i}]: context must not be empty — every relation requires an explanation"
+            )));
+        }
+        // Validate relation_type is a known variant.
+        if parse_relation_type(&rel.relation_type).is_none() {
+            return Err(Status::invalid_argument(format!(
+                "relation[{i}]: unknown relation_type {:?}; valid values are: \
+                 required_by, leads_to, related_to, conflicts_with, depends_on, implements, caused_by, solves",
+                rel.relation_type
+            )));
+        }
+        // Referential integrity: both endpoints must be declared in entities.
+        if !entity_names.contains(rel.from_entity.as_str()) {
+            return Err(Status::invalid_argument(format!(
+                "relation[{i}]: from_entity {:?} is not declared in the entities list",
+                rel.from_entity
+            )));
+        }
+        if !entity_names.contains(rel.to_entity.as_str()) {
+            return Err(Status::invalid_argument(format!(
+                "relation[{i}]: to_entity {:?} is not declared in the entities list",
+                rel.to_entity
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// Parse a relation_type string (case-insensitive) into a `RelationType`, returning `None` for
+/// unknown values.
+fn parse_relation_type(s: &str) -> Option<crate::core::context_update::RelationType> {
+    use crate::core::context_update::RelationType;
+    match s.to_lowercase().as_str() {
+        "required_by" | "requiredby" => Some(RelationType::RequiredBy),
+        "leads_to" | "leadsto" => Some(RelationType::LeadsTo),
+        "related_to" | "relatedto" => Some(RelationType::RelatedTo),
+        "conflicts_with" | "conflictswith" => Some(RelationType::ConflictsWith),
+        "depends_on" | "dependson" => Some(RelationType::DependsOn),
+        "implements" => Some(RelationType::Implements),
+        "caused_by" | "causedby" => Some(RelationType::CausedBy),
+        "solves" => Some(RelationType::Solves),
+        _ => None,
+    }
+}
+
+/// Parse an entity_type string (case-insensitive) into an `EntityType`, defaulting to `Concept`.
+fn parse_entity_type(s: &str) -> crate::core::context_update::EntityType {
+    use crate::core::context_update::EntityType;
+    match s.to_lowercase().as_str() {
+        "technology" => EntityType::Technology,
+        "concept" => EntityType::Concept,
+        "problem" => EntityType::Problem,
+        "solution" => EntityType::Solution,
+        "decision" => EntityType::Decision,
+        "code_component" | "codecomponent" => EntityType::CodeComponent,
+        _ => EntityType::Concept,
+    }
+}
+
+fn build_update_metadata(
+    interaction_type: &str,
+    content: &ContextContent,
+    entities: &[EntityInfo],
+    relations: &[RelationInfo],
+) -> serde_json::Value {
+    use crate::core::context_update::{
+        ContextUpdate, EntityRelationship, TypedEntity, UpdateContent, UpdateType,
+    };
 
     let update_type = match interaction_type {
         "decision_made" => UpdateType::DecisionMade,
@@ -1347,11 +1475,42 @@ fn build_update_metadata(interaction_type: &str, content: &ContextContent) -> se
             start_line: c.start_line,
             end_line: c.end_line,
             code_snippet: c.code_snippet.clone(),
-            commit_hash: if c.commit_hash.is_empty() { None } else { Some(c.commit_hash.clone()) },
-            branch: if c.branch.is_empty() { None } else { Some(c.branch.clone()) },
+            commit_hash: if c.commit_hash.is_empty() {
+                None
+            } else {
+                Some(c.commit_hash.clone())
+            },
+            branch: if c.branch.is_empty() {
+                None
+            } else {
+                Some(c.branch.clone())
+            },
             change_description: c.change_description.clone(),
         }
     });
+
+    // Map proto EntityInfo → TypedEntity and collect entity names for creates_entities.
+    let typed_entities: Vec<TypedEntity> = entities
+        .iter()
+        .map(|e| TypedEntity {
+            name: e.name.clone(),
+            entity_type: parse_entity_type(&e.entity_type),
+        })
+        .collect();
+    let creates_entities: Vec<String> = typed_entities.iter().map(|e| e.name.clone()).collect();
+
+    // Map proto RelationInfo → EntityRelationship.
+    let creates_relationships: Vec<EntityRelationship> = relations
+        .iter()
+        .filter_map(|r| {
+            parse_relation_type(&r.relation_type).map(|rt| EntityRelationship {
+                from_entity: r.from_entity.clone(),
+                to_entity: r.to_entity.clone(),
+                relation_type: rt,
+                context: r.context.clone(),
+            })
+        })
+        .collect();
 
     let update = ContextUpdate {
         id: Uuid::new_v4(),
@@ -1367,9 +1526,10 @@ fn build_update_metadata(interaction_type: &str, content: &ContextContent) -> se
         related_code,
         parent_update: None,
         user_marked_important: false,
-        creates_entities: Vec::new(),
-        creates_relationships: Vec::new(),
+        creates_entities,
+        creates_relationships,
         references_entities: Vec::new(),
+        typed_entities,
     };
 
     serde_json::to_value(update).expect("ContextUpdate serialization cannot fail")

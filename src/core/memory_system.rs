@@ -2544,6 +2544,7 @@ impl ConversationMemorySystem {
                 creates_entities: Vec::new(),
                 creates_relationships: Vec::new(),
                 references_entities: Vec::new(),
+                typed_entities: Vec::new(),
             }
         };
 
