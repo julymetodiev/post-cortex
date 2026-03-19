@@ -21,13 +21,11 @@
 //! Common test utilities and fixtures
 
 use anyhow::Result;
-use post_cortex::core::memory_system::{
-    ConversationMemorySystem, SystemConfig,
-};
+use post_cortex::core::memory_system::{ConversationMemorySystem, SystemConfig};
 #[cfg(feature = "surrealdb-storage")]
 use post_cortex::storage::traits::StorageBackendType;
 use std::sync::Arc;
-use tempfile::{tempdir, TempDir};
+use tempfile::{TempDir, tempdir};
 use uuid::Uuid;
 
 /// Test fixture builder pattern for creating test systems with content.
@@ -64,7 +62,10 @@ impl TestFixture {
         );
 
         let session_id = system
-            .create_session(Some("test-session".to_string()), Some("Test session".to_string()))
+            .create_session(
+                Some("test-session".to_string()),
+                Some("Test session".to_string()),
+            )
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
@@ -93,23 +94,6 @@ impl TestFixture {
         Ok(fixture)
     }
 
-    /// Create fixture with named session
-    pub async fn with_session_name(name: &str, description: &str) -> Result<Self> {
-        let fixture = Self::new().await?;
-
-        let session_id = fixture
-            .system
-            .create_session(Some(name.to_string()), Some(description.to_string()))
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-
-        Ok(Self {
-            system: fixture.system,
-            session_id,
-            _temp_dir: fixture._temp_dir,
-        })
-    }
-
     /// Search with recency bias
     pub async fn search_with_bias(
         &self,
@@ -128,34 +112,5 @@ impl TestFixture {
             .map_err(|e| anyhow::anyhow!(e))?;
 
         Ok(results)
-    }
-
-    /// Search without recency bias (default)
-    pub async fn search(
-        &self,
-        query: &str,
-    ) -> Result<Vec<post_cortex::core::content_vectorizer::SemanticSearchResult>> {
-        self.search_with_bias(query, 0.0).await
-    }
-
-    /// Add content to existing session
-    pub async fn add_content(&mut self, text: &str) -> Result<()> {
-        self.system
-            .add_incremental_update(self.session_id, text.to_string(), None)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
-
-        // Wait for vectorization
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-        Ok(())
-    }
-
-    /// Get semantic engine
-    pub async fn engine(&self) -> Result<Arc<post_cortex::core::semantic_query_engine::SemanticQueryEngine>> {
-        self.system
-            .ensure_semantic_engine_initialized()
-            .await
-            .map_err(|e| anyhow::anyhow!(e))
     }
 }

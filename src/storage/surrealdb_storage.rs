@@ -132,13 +132,6 @@ struct SessionRecord {
     last_updated: String,
     // User preferences as JSON (small, queryable)
     user_preferences: JsonValue,
-    // Configuration (native scalars)
-    max_extracted_entities: u32,
-    max_referenced_entities: u32,
-    enable_smart_entity_ranking: bool,
-    // Metrics (native scalars)
-    total_entity_truncations: u32,
-    total_entities_truncated: u32,
     // Vectorization tracking
     vectorized_update_ids: Vec<String>,
     // Total updates count (for pagination)
@@ -605,11 +598,6 @@ impl Storage for SurrealDBStorage {
             created_at: session.created_at().to_rfc3339(),
             last_updated: Utc::now().to_rfc3339(),
             user_preferences: serde_json::to_value(session.user_preferences())?,
-            max_extracted_entities: session.max_extracted_entities as u32,
-            max_referenced_entities: session.max_referenced_entities as u32,
-            enable_smart_entity_ranking: session.enable_smart_entity_ranking,
-            total_entity_truncations: session.total_entity_truncations as u32,
-            total_entities_truncated: session.total_entities_truncated as u32,
             vectorized_update_ids: session
                 .vectorized_update_ids
                 .iter()
@@ -806,11 +794,6 @@ impl Storage for SurrealDBStorage {
             code_references,
             change_history,
             entity_graph,
-            r.max_extracted_entities as usize,
-            r.max_referenced_entities as usize,
-            r.enable_smart_entity_ranking,
-            r.total_entity_truncations as usize,
-            r.total_entities_truncated as usize,
             vectorized_ids,
         );
 
@@ -2948,11 +2931,6 @@ mod tests {
             HashMap::new(), // code_references
             Vec::new(),     // change_history
             entity_graph,
-            100,        // max_extracted_entities
-            50,         // max_referenced_entities
-            true,       // enable_smart_entity_ranking
-            0,          // total_entity_truncations
-            0,          // total_entities_truncated
             Vec::new(), // vectorized_update_ids
         )
     }

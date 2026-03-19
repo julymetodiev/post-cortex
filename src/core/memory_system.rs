@@ -385,10 +385,6 @@ pub struct SystemConfig {
     pub circuit_breaker_failure_threshold: u64,
     pub circuit_breaker_timeout_seconds: u64,
     pub data_directory: String,
-    // Entity extraction configuration
-    pub max_extracted_entities: usize,
-    pub max_referenced_entities: usize,
-    pub enable_smart_entity_ranking: bool,
     // Embeddings and vectorization configuration
     pub enable_embeddings: bool,
     pub embeddings_model_type: String,
@@ -425,10 +421,6 @@ impl Default for SystemConfig {
             circuit_breaker_failure_threshold: 5,
             circuit_breaker_timeout_seconds: 300, // 5 minutes
             data_directory: "./post_cortex_data".to_string(),
-            // Entity extraction defaults
-            max_extracted_entities: 15,
-            max_referenced_entities: 15,
-            enable_smart_entity_ranking: true, // Enable by default for better quality
             // Embeddings defaults
             enable_embeddings: true, // Enabled for semantic search functionality
             embeddings_model_type: "MultilingualMiniLM".to_string(),
@@ -1697,21 +1689,12 @@ impl StorageActorHandle {
         .await
     }
 
-    /// Rebuild entity graph for a session by clearing it and replaying all updates through NER.
+    /// Rebuild entity graph for a session by clearing it and replaying all stored updates.
     /// Returns (entities_before, entities_after) counts.
     pub async fn rebuild_entity_graph(
         &self,
         session_id: Uuid,
     ) -> Result<(usize, usize), String> {
-        // Ensure NER engine is loaded
-        #[cfg(feature = "embeddings")]
-        {
-            use crate::session::active_session::preload_ner_engine;
-            if !preload_ner_engine().await {
-                return Err("Failed to load NER engine - cannot rebuild without it".to_string());
-            }
-        }
-
         // Load session
         let session = self
             .load_session(session_id)

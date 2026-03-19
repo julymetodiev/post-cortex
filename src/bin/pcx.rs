@@ -98,17 +98,6 @@ enum Commands {
     /// Vectorize all sessions
     VectorizeAll,
 
-    /// Rebuild entity graph using NER (replaces noisy pattern-matched entities)
-    RebuildEntities {
-        /// Session ID to rebuild (omit for all sessions)
-        #[arg(value_name = "SESSION_ID")]
-        session_id: Option<String>,
-
-        /// Rebuild all sessions
-        #[arg(long)]
-        all: bool,
-    },
-
     /// Manage workspaces
     Workspace {
         #[command(subcommand)]
@@ -448,11 +437,6 @@ async fn main() -> Result<(), String> {
         Some(Commands::VectorizeAll) => {
             init_logging(false, false);
             vectorize_all().await
-        }
-
-        Some(Commands::RebuildEntities { session_id, all }) => {
-            init_logging(false, false);
-            rebuild_entities(session_id, all).await
         }
 
         Some(Commands::Workspace { action }) => {
@@ -1475,112 +1459,6 @@ async fn vectorize_all() -> Result<(), String> {
 #[cfg(not(feature = "embeddings"))]
 async fn vectorize_all() -> Result<(), String> {
     eprintln!("Vectorization requires the 'embeddings' feature");
-    eprintln!("Rebuild with: cargo build --release --features embeddings");
-    Err("Embeddings feature not enabled".to_string())
-}
-
-// ============================================================================
-// Entity Graph Rebuild
-// ============================================================================
-
-#[cfg(feature = "embeddings")]
-async fn rebuild_entities(session_id: Option<String>, all: bool) -> Result<(), String> {
-    if session_id.is_none() && !all {
-        eprintln!("Usage: pcx rebuild-entities <SESSION_ID> or pcx rebuild-entities --all");
-        return Err("Must specify a session ID or --all".to_string());
-    }
-
-    println!("Initializing memory system...");
-
-    let daemon_config = DaemonConfig::load();
-    #[allow(unused_mut)]
-    let mut config = SystemConfig {
-        enable_embeddings: true,
-        auto_vectorize_on_update: false,
-        data_directory: daemon_config.data_directory.clone(),
-        ..SystemConfig::default()
-    };
-
-    #[cfg(feature = "surrealdb-storage")]
-    {
-        config.storage_backend = match daemon_config.storage_backend.as_str() {
-            "surrealdb" => StorageBackendType::SurrealDB,
-            _ => StorageBackendType::RocksDB,
-        };
-        config.surrealdb_endpoint = daemon_config.surrealdb_endpoint.clone();
-        config.surrealdb_username = daemon_config.surrealdb_username.clone();
-        config.surrealdb_password = daemon_config.surrealdb_password.clone();
-        config.surrealdb_namespace = Some(daemon_config.surrealdb_namespace.clone());
-        config.surrealdb_database = Some(daemon_config.surrealdb_database.clone());
-    }
-
-    let system = ConversationMemorySystem::new(config)
-        .await
-        .map_err(|e| format!("Failed to initialize: {}", e))?;
-
-    // Pre-load GLiNER2 NER engine so entity extraction uses the model, not pattern fallback
-    #[cfg(feature = "embeddings")]
-    {
-        use post_cortex::session::active_session::preload_ner_engine;
-        if preload_ner_engine().await {
-            println!("NER engine loaded (GLiNER2)");
-        } else {
-            eprintln!("WARNING: NER engine failed to load — falling back to pattern extraction");
-        }
-    }
-
-    let session_ids: Vec<uuid::Uuid> = if all {
-        let ids = system.list_sessions().await?;
-        println!("Found {} sessions to rebuild", ids.len());
-        ids
-    } else {
-        let id = uuid::Uuid::parse_str(session_id.as_ref().unwrap())
-            .map_err(|e| format!("Invalid session ID: {}", e))?;
-        vec![id]
-    };
-
-    let mut total_before = 0usize;
-    let mut total_after = 0usize;
-
-    for (i, sid) in session_ids.iter().enumerate() {
-        println!(
-            "\n[{}/{}] Rebuilding entity graph for session {}...",
-            i + 1,
-            session_ids.len(),
-            sid
-        );
-
-        match system.storage_actor.rebuild_entity_graph(*sid).await {
-            Ok((before, after)) => {
-                println!("  Before: {} entities", before);
-                println!("  After:  {} entities", after);
-                let removed = before.saturating_sub(after);
-                if removed > 0 {
-                    println!("  Removed {} noisy entities", removed);
-                }
-                total_before += before;
-                total_after += after;
-            }
-            Err(e) => {
-                eprintln!("  Error: {}", e);
-            }
-        }
-    }
-
-    println!("\n=== Rebuild Complete ===");
-    println!("  Total before: {} entities", total_before);
-    println!("  Total after:  {} entities", total_after);
-    println!(
-        "  Noise removed: {} entities",
-        total_before.saturating_sub(total_after)
-    );
-
-    Ok(())
-}
-
-#[cfg(not(feature = "embeddings"))]
-async fn rebuild_entities(_session_id: Option<String>, _all: bool) -> Result<(), String> {
-    eprintln!("Entity rebuild requires the 'embeddings' feature");
     eprintln!("Rebuild with: cargo build --release --features embeddings");
     Err("Embeddings feature not enabled".to_string())
 }

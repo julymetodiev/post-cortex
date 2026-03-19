@@ -24,7 +24,6 @@ pub mod context_update;
 pub mod embeddings;
 pub mod error;
 pub mod memory_system;
-pub mod ner_engine;
 pub mod performance;
 pub mod query_cache;
 pub mod scoring;
