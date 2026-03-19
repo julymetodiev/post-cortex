@@ -236,6 +236,10 @@ struct SourceReferenceRecord {
     ast_hash: Option<Vec<u8>>,
     #[serde(default)]
     imports: Option<Vec<String>>,
+    /// 0 = fresh (default), 1 = stale (marked by invalidate_source / cascade_invalidate).
+    /// Allows distinguishing "known stale" from "hash mismatch stale" vs "Unknown".
+    #[serde(default)]
+    status: i32,
 }
 
 /// Symbol dependency record for SurrealDB
@@ -485,6 +489,11 @@ impl SurrealDBStorage {
             DEFINE FIELD IF NOT EXISTS file_path ON source_reference TYPE string;
             DEFINE FIELD IF NOT EXISTS content_hash ON source_reference TYPE array;
             DEFINE FIELD IF NOT EXISTS captured_at_unix ON source_reference TYPE int;
+            DEFINE FIELD IF NOT EXISTS symbol_name ON source_reference TYPE option<string>;
+            DEFINE FIELD IF NOT EXISTS symbol_type ON source_reference TYPE option<string>;
+            DEFINE FIELD IF NOT EXISTS ast_hash ON source_reference TYPE option<array>;
+            DEFINE FIELD IF NOT EXISTS imports ON source_reference TYPE option<array>;
+            DEFINE FIELD IF NOT EXISTS status ON source_reference TYPE int DEFAULT 0;
             DEFINE INDEX IF NOT EXISTS idx_source_ref_entry ON source_reference FIELDS entry_id UNIQUE;
             DEFINE INDEX IF NOT EXISTS idx_source_ref_path ON source_reference FIELDS file_path;
         "#;
@@ -3494,11 +3503,13 @@ impl FreshnessStorage for SurrealDBStorage {
 
         // Use UPSERT WHERE instead of type::record() to avoid SurrealDB record ID
         // parsing issues with entry_ids containing special chars (/, ::).
+        // status = 0 resets any previous stale mark — re-registering a symbol means
+        // it is present in the file and its hashes are current.
         let query = "UPSERT source_reference SET \
             entry_id = $entry_id, file_path = $file_path, \
             content_hash = $content_hash, captured_at_unix = $captured_at_unix, \
             symbol_name = $symbol_name, symbol_type = $symbol_type, \
-            ast_hash = $ast_hash, imports = $imports \
+            ast_hash = $ast_hash, imports = $imports, status = 0 \
             WHERE entry_id = $entry_id;";
 
         self.db.query(query)
@@ -3532,8 +3543,19 @@ impl FreshnessStorage for SurrealDBStorage {
         
         match record {
             Some(r) => {
+                // Explicitly invalidated records short-circuit to Stale immediately.
+                if r.status == 1 {
+                    return Ok(FreshnessEntry {
+                        entry_id: r.entry_id,
+                        file_path: r.file_path,
+                        status: FreshnessStatus::Stale as i32,
+                        stored_hash: r.content_hash,
+                        current_hash,
+                    });
+                }
+
                 let is_fresh = r.content_hash == current_hash;
-                
+
                 let status = if is_fresh {
                     FreshnessStatus::Fresh as i32
                 } else {
@@ -3561,11 +3583,15 @@ impl FreshnessStorage for SurrealDBStorage {
     }
 
     async fn invalidate_source(&self, file_path: &str) -> Result<u32> {
-        let query = "DELETE source_reference WHERE file_path = $file_path;";
+        // Mark stale rather than delete so that:
+        // 1. check_freshness_* can return Stale (status=1) instead of Unknown.
+        // 2. Cascade invalidation still triggers for changed symbols.
+        // 3. Symbols that are deleted from the file stay as status=1 (not re-registered
+        //    by register_source_batch) and can be detected as orphans.
+        let query = "UPDATE source_reference SET status = 1 WHERE file_path = $file_path;";
         let mut response = self.db.query(query).bind(("file_path", file_path.to_string())).await?;
-        // Count deleted rows? Surrogate approach for SurrealDB. Take results.
-        let deleted: Vec<SourceReferenceRecord> = response.take(0)?;
-        Ok(deleted.len() as u32)
+        let updated: Vec<SourceReferenceRecord> = response.take(0)?;
+        Ok(updated.len() as u32)
     }
 
     async fn get_entries_by_source(&self, file_path: &str) -> Result<Vec<SourceReference>> {
@@ -3582,6 +3608,37 @@ impl FreshnessStorage for SurrealDBStorage {
             .collect();
 
         Ok(references)
+    }
+
+    async fn get_stale_entries_by_source(
+        &self,
+        file_path: &str,
+    ) -> Result<Vec<crate::storage::traits::StaleEntryInfo>> {
+        // Only return records that are still explicitly marked stale (status=1).
+        // Records re-registered after invalidation will have status=0 and are excluded.
+        let mut response = self.db
+            .query("SELECT entry_id, symbol_name, symbol_type FROM source_reference WHERE file_path = $file_path AND status = 1")
+            .bind(("file_path", file_path.to_string()))
+            .await?;
+
+        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, SurrealValue)]
+        struct StaleRow {
+            entry_id: String,
+            #[serde(default)]
+            symbol_name: Option<String>,
+            #[serde(default)]
+            symbol_type: Option<String>,
+        }
+
+        let rows: Vec<StaleRow> = response.take(0)?;
+        Ok(rows
+            .into_iter()
+            .map(|r| crate::storage::traits::StaleEntryInfo {
+                entry_id: r.entry_id,
+                symbol_name: r.symbol_name,
+                symbol_type: r.symbol_type,
+            })
+            .collect())
     }
 
     async fn check_freshness_semantic(
@@ -3602,6 +3659,19 @@ impl FreshnessStorage for SurrealDBStorage {
 
         match record {
             Some(r) => {
+                // If the record was explicitly marked stale by invalidate_source or
+                // cascade_invalidate (status=1), short-circuit immediately — no need
+                // to compare hashes.  The re-registration path resets status to 0.
+                if r.status == 1 {
+                    return Ok(FreshnessEntry {
+                        entry_id: r.entry_id,
+                        file_path: r.file_path,
+                        status: FreshnessStatus::Stale as i32,
+                        stored_hash: r.content_hash,
+                        current_hash,
+                    });
+                }
+
                 // Semantic: if both sides have ast_hash, compare that
                 let is_fresh = if let (Some(client_ast), Some(stored_ast)) =
                     (ast_hash, &r.ast_hash)
@@ -3668,6 +3738,19 @@ impl FreshnessStorage for SurrealDBStorage {
             let current_hash = file_hash.clone();
             match record_map.get(&entry_id) {
                 Some(r) => {
+                    // If explicitly marked stale by invalidate_source / cascade_invalidate,
+                    // short-circuit — no hash comparison needed.
+                    if r.status == 1 {
+                        results.push(FreshnessEntry {
+                            entry_id: r.entry_id.clone(),
+                            file_path: r.file_path.clone(),
+                            status: FreshnessStatus::Stale as i32,
+                            stored_hash: r.content_hash.clone(),
+                            current_hash,
+                        });
+                        continue;
+                    }
+
                     // Semantic: prefer ast_hash comparison when both sides have it
                     let is_fresh = if let (Some(client_ast), Some(stored_ast)) =
                         (ast_hash.as_deref(), r.ast_hash.as_deref())
@@ -3778,32 +3861,34 @@ impl FreshnessStorage for SurrealDBStorage {
             }
         }
 
-        // Invalidate source_reference entries
+        // Mark source_reference entries stale rather than deleting them.
+        // This preserves baseline records so freshness checks return Stale (status=1)
+        // instead of Unknown (no record), which is what triggers cascade invalidation.
         let direct_count: u32;
         let mut cascade_count = 0u32;
 
-        // Direct: entries for the changed symbol
-        let query = "DELETE source_reference WHERE file_path = $file AND symbol_name = $symbol;";
+        // Direct: mark entries for the changed symbol as stale
+        let query = "UPDATE source_reference SET status = 1 WHERE file_path = $file AND symbol_name = $symbol;";
         let mut response = self.db
             .query(query)
             .bind(("file", changed.file_path.clone()))
             .bind(("symbol", changed.symbol_name.clone()))
             .await?;
-        let deleted: Vec<SourceReferenceRecord> = response.take(0)?;
-        direct_count = deleted.len() as u32;
+        let updated: Vec<SourceReferenceRecord> = response.take(0)?;
+        direct_count = updated.len() as u32;
 
-        // Cascade: entries for dependent symbols
+        // Cascade: mark entries for dependent symbols as stale
         for dep_key in &dependent_symbols {
             if let Some((file, sym)) = dep_key.split_once("::") {
                 let query =
-                    "DELETE source_reference WHERE file_path = $file AND symbol_name = $symbol;";
+                    "UPDATE source_reference SET status = 1 WHERE file_path = $file AND symbol_name = $symbol;";
                 let mut response = self.db
                     .query(query)
                     .bind(("file", file.to_string()))
                     .bind(("symbol", sym.to_string()))
                     .await?;
-                let deleted: Vec<SourceReferenceRecord> = response.take(0)?;
-                cascade_count += deleted.len() as u32;
+                let updated: Vec<SourceReferenceRecord> = response.take(0)?;
+                cascade_count += updated.len() as u32;
             }
         }
 

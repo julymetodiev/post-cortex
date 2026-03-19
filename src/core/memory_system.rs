@@ -357,6 +357,10 @@ pub enum StorageMessage {
         max_depth: u32,
         response_tx: Sender<Result<CascadeInvalidateReport, String>>,
     },
+    GetStaleEntriesBySource {
+        file_path: String,
+        response_tx: Sender<Result<Vec<crate::storage::traits::StaleEntryInfo>, String>>,
+    },
     Shutdown,
 }
 
@@ -2086,6 +2090,27 @@ impl StorageActorHandle {
         )
         .await
     }
+
+    pub async fn get_stale_entries_by_source(
+        &self,
+        file_path: &str,
+    ) -> Result<Vec<crate::storage::traits::StaleEntryInfo>, String> {
+        let (response_tx, mut response_rx) = channel(1);
+
+        self.sender
+            .send(StorageMessage::GetStaleEntriesBySource {
+                file_path: file_path.to_string(),
+                response_tx,
+            })
+            .map_err(|_| "Storage actor unavailable".to_string())?;
+
+        self.execute_with_timeout(
+            OperationType::Medium,
+            "GetStaleEntriesBySource",
+            response_rx.recv(),
+        )
+        .await
+    }
 }
 
 impl StorageActor {
@@ -2445,6 +2470,17 @@ impl StorageActor {
                     .cascade_invalidate(changed, new_ast_hash, max_depth)
                     .await
                     .map_err(|e| e.to_string());
+                let _ = response_tx.send(result).await;
+            }
+            StorageMessage::GetStaleEntriesBySource {
+                file_path,
+                response_tx,
+            } => {
+                let result = self
+                    .storage
+                    .get_stale_entries_by_source(&file_path)
+                    .await
+                    .map_err(|e: anyhow::Error| e.to_string());
                 let _ = response_tx.send(result).await;
             }
             StorageMessage::Shutdown => {} // Handled in main loop

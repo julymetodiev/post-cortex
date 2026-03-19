@@ -41,6 +41,16 @@ use uuid::Uuid;
 pub struct FreshnessReportExt {
     pub entries: Vec<FreshnessEntry>,
 }
+
+/// A source_reference entry that is marked stale (status=1) — i.e. it was
+/// invalidated by `invalidate_source` or `cascade_invalidate` but has not yet
+/// been re-registered.  Returned by `get_stale_entries_by_source`.
+#[derive(Debug, Clone)]
+pub struct StaleEntryInfo {
+    pub entry_id: String,
+    pub symbol_name: Option<String>,
+    pub symbol_type: Option<String>,
+}
 ///
 /// This trait defines the fundamental storage operations required for
 /// session management, context updates, and workspace persistence.
@@ -302,6 +312,15 @@ pub trait FreshnessStorage: Send + Sync {
 
     /// Get all entries associated with a specific file path
     async fn get_entries_by_source(&self, file_path: &str) -> Result<Vec<SourceReference>>;
+
+    /// Return entry_ids (plus symbol metadata) for all source_reference records that
+    /// are still marked stale (status=1) for the given file.  Called by Axon after
+    /// `register_source_batch` to detect symbols that were deleted from the file
+    /// (they were marked stale by `invalidate_source` but never re-registered).
+    async fn get_stale_entries_by_source(
+        &self,
+        file_path: &str,
+    ) -> Result<Vec<StaleEntryInfo>>;
 
     /// Register symbol-level dependencies (e.g., fn foo depends on struct Bar).
     /// Used for cascade invalidation.
@@ -781,6 +800,21 @@ impl FreshnessStorage for StorageBackend {
             StorageBackend::RocksDB(storage) => storage.get_entries_by_source(file_path).await,
             #[cfg(feature = "surrealdb-storage")]
             StorageBackend::SurrealDB(storage) => storage.get_entries_by_source(file_path).await,
+        }
+    }
+
+    async fn get_stale_entries_by_source(
+        &self,
+        file_path: &str,
+    ) -> Result<Vec<StaleEntryInfo>> {
+        match self {
+            StorageBackend::RocksDB(storage) => {
+                storage.get_stale_entries_by_source(file_path).await
+            }
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => {
+                storage.get_stale_entries_by_source(file_path).await
+            }
         }
     }
 

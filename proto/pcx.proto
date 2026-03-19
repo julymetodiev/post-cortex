@@ -51,6 +51,12 @@ service PostCortex {
   rpc RegisterSymbolDependency(RegisterSymbolDependencyRequest) returns (RegisterSymbolDependencyAck);
   rpc CascadeInvalidate(CascadeInvalidateRequest) returns (CascadeInvalidateReport);
 
+  // --- Stale Entry Query ---
+  // Returns all source_reference entries for a file that are still marked stale
+  // (status=1).  Used by Axon after register_source_batch to detect deleted symbols
+  // (entries that were marked stale by invalidate_source but never re-registered).
+  rpc GetStaleEntriesBySource(GetStaleEntriesBySourceRequest) returns (GetStaleEntriesBySourceResponse);
+
   // --- Health ---
   rpc Health(HealthRequest) returns (HealthResponse);
 }
@@ -550,6 +556,22 @@ message CascadeInvalidateReport {
   uint32 direct_invalidations = 1;   // Entries for the changed symbol
   uint32 cascade_invalidations = 2;  // Entries invalidated via dependency graph
   repeated string invalidated_symbols = 3; // Names of cascade-invalidated symbols
+}
+
+// ============ Stale Entry Query ============
+
+message GetStaleEntriesBySourceRequest {
+  string file_path = 1;
+}
+
+message StaleEntryInfo {
+  string entry_id = 1;
+  string symbol_name = 2;  // May be empty for whole-file entries
+  string symbol_type = 3;  // May be empty
+}
+
+message GetStaleEntriesBySourceResponse {
+  repeated StaleEntryInfo entries = 1;
 }
 
 // ============ Health ============

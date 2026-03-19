@@ -285,6 +285,15 @@ impl FreshnessStorage for RealRocksDBStorage {
         .map_err(|e: tokio::task::JoinError| anyhow::anyhow!("Task join error: {}", e))?
     }
 
+    async fn get_stale_entries_by_source(
+        &self,
+        _file_path: &str,
+    ) -> Result<Vec<crate::storage::traits::StaleEntryInfo>> {
+        // RocksDB does not track per-record stale status; it DELETEs on invalidation.
+        // Return empty — deleted-symbol detection is only supported on SurrealDB.
+        Ok(Vec::new())
+    }
+
     async fn check_freshness_semantic(
         &self,
         entry_id: &str,

@@ -1280,6 +1280,40 @@ impl PostCortex for PcxGrpcService {
             }
         }
     }
+
+    async fn get_stale_entries_by_source(
+        &self,
+        request: Request<GetStaleEntriesBySourceRequest>,
+    ) -> Result<Response<GetStaleEntriesBySourceResponse>, Status> {
+        let req = request.into_inner();
+        debug!(
+            "gRPC GetStaleEntriesBySource: file_path={}",
+            req.file_path
+        );
+
+        match self
+            .memory
+            .storage_actor
+            .get_stale_entries_by_source(&req.file_path)
+            .await
+        {
+            Ok(stale) => {
+                let entries = stale
+                    .into_iter()
+                    .map(|s| StaleEntryInfo {
+                        entry_id: s.entry_id,
+                        symbol_name: s.symbol_name.unwrap_or_default(),
+                        symbol_type: s.symbol_type.unwrap_or_default(),
+                    })
+                    .collect();
+                Ok(Response::new(GetStaleEntriesBySourceResponse { entries }))
+            }
+            Err(e) => {
+                error!("gRPC GetStaleEntriesBySource failed: {}", e);
+                Err(Status::internal(e.to_string()))
+            }
+        }
+    }
 }
 
 // --- Helpers ---
