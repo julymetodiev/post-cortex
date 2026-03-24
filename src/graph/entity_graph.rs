@@ -406,6 +406,53 @@ impl SimpleEntityGraph {
         self.graph.add_edge(from_node, to_node, edge_data);
     }
 
+    /// Merge all entities and relationships from another graph into this one.
+    ///
+    /// Entities are added with `add_or_update_entity` (so counts accumulate for
+    /// entities that appear in multiple sessions). Edges are copied as-is.
+    pub fn merge_from(&mut self, other: &SimpleEntityGraph) {
+        // Merge entities first so all nodes exist before we add edges
+        for (name, data) in &other.entities {
+            self.add_or_update_entity(
+                name.clone(),
+                data.entity_type.clone(),
+                data.last_mentioned,
+                data.description.as_deref().unwrap_or(""),
+            );
+        }
+
+        // Merge entity mention lists
+        for (name, mentions) in &other.entity_mentions {
+            let entry = self.entity_mentions.entry(name.clone()).or_default();
+            for id in mentions {
+                if !entry.contains(id) {
+                    entry.push(*id);
+                }
+            }
+        }
+
+        // Merge edges
+        for edge in other.graph.edge_references() {
+            let from_name = match other.graph.node_weight(edge.source()) {
+                Some(n) => n.clone(),
+                None => continue,
+            };
+            let to_name = match other.graph.node_weight(edge.target()) {
+                Some(n) => n.clone(),
+                None => continue,
+            };
+            let edge_data = edge.weight().clone();
+
+            use crate::core::context_update::EntityRelationship;
+            self.add_relationship(EntityRelationship {
+                from_entity: from_name,
+                to_entity: to_name,
+                relation_type: edge_data.relation_type,
+                context: edge_data.context,
+            });
+        }
+    }
+
     /// Find related entities - now O(degree) instead of O(n)!
     /// Uses BTreeSet for automatic sorting, avoiding explicit sort() call
     /// Supports case-insensitive lookup with fallback

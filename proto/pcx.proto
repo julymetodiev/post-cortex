@@ -247,6 +247,8 @@ message SemanticSearchRequest {
   // Empty = global search across all sessions
   string session_id = 3;
   float min_score = 4;
+  // If set, search across ALL sessions in this workspace (takes precedence over session_id)
+  optional string workspace_id = 5;
 }
 
 message SearchResult {
@@ -328,6 +330,8 @@ message AssembleContextRequest {
   string session_id = 1;
   string query = 2;           // Query/hint to assemble context for
   uint32 token_budget = 3;    // Max tokens for assembled context (default: 4000)
+  // If set, assemble context across ALL sessions in this workspace (takes precedence over session_id)
+  optional string workspace_id = 4;
 }
 
 message AssembledContextItem {

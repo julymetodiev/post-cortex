@@ -442,8 +442,8 @@ impl PostCortex for PcxGrpcService {
     ) -> Result<Response<SemanticSearchResponse>, Status> {
         let req = request.into_inner();
         debug!(
-            "gRPC SemanticSearch: query='{}', session='{}'",
-            req.query, req.session_id
+            "gRPC SemanticSearch: query='{}', session='{}', workspace='{:?}'",
+            req.query, req.session_id, req.workspace_id
         );
 
         if req.query.is_empty() {
@@ -458,7 +458,42 @@ impl PostCortex for PcxGrpcService {
 
         #[cfg(feature = "embeddings")]
         {
-            let search_results = if req.session_id.is_empty() {
+            // workspace_id takes precedence: search each session independently and merge results
+            let workspace_id_str = req.workspace_id.as_deref().unwrap_or("");
+            let search_results = if !workspace_id_str.is_empty() {
+                // Workspace-scoped: search all sessions in the workspace and merge
+                let workspace_id = parse_uuid(workspace_id_str)?;
+                let workspace = self
+                    .memory
+                    .workspace_manager
+                    .get_workspace(&workspace_id)
+                    .ok_or_else(|| Status::not_found(format!("Workspace {workspace_id} not found")))?;
+
+                let session_ids: Vec<uuid::Uuid> = workspace
+                    .get_all_sessions()
+                    .into_iter()
+                    .map(|(sid, _)| sid)
+                    .collect();
+
+                let mut merged = Vec::new();
+                for sid in session_ids {
+                    match self
+                        .memory
+                        .semantic_search_session(sid, &req.query, Some(max_results), None, None)
+                        .await
+                    {
+                        Ok(results) => merged.extend(results),
+                        Err(e) => warn!(
+                            "SemanticSearch: session {} search failed: {}",
+                            sid, e
+                        ),
+                    }
+                }
+                // Sort by combined_score descending and cap at max_results
+                merged.sort_by(|a, b| b.combined_score.partial_cmp(&a.combined_score).unwrap_or(std::cmp::Ordering::Equal));
+                merged.truncate(max_results);
+                merged
+            } else if req.session_id.is_empty() {
                 // Global search
                 self.memory
                     .semantic_search_global(&req.query, Some(max_results), None, None)
@@ -778,26 +813,67 @@ impl PostCortex for PcxGrpcService {
         request: Request<AssembleContextRequest>,
     ) -> Result<Response<AssembleContextResponse>, Status> {
         let req = request.into_inner();
-        debug!("gRPC AssembleContext: session_id={}, query={}", req.session_id, req.query);
-
-        let session_id = parse_uuid(&req.session_id)?;
-        let session_arc = self.memory.get_session(session_id).await
-            .map_err(|e| Status::not_found(e))?;
-        let session = session_arc.load();
+        debug!(
+            "gRPC AssembleContext: session_id={}, workspace_id={:?}, query={}",
+            req.session_id, req.workspace_id, req.query
+        );
 
         let token_budget = if req.token_budget == 0 { 4000 } else { req.token_budget as usize };
 
-        // Collect all context updates from hot + warm context
-        let updates: Vec<_> = session.hot_context.iter().iter()
-            .chain(session.warm_context.iter().map(|c| &c.update))
-            .cloned()
-            .collect();
-
         use crate::core::context_assembly;
+        use crate::graph::entity_graph::SimpleEntityGraph;
+
+        // Resolve scope: workspace_id takes precedence over session_id
+        let (updates, graph) = if req.workspace_id.as_deref().map(|s| !s.is_empty()).unwrap_or(false) {
+            // Workspace-scoped: merge context from all sessions in the workspace
+            let workspace_id = parse_uuid(req.workspace_id.as_deref().unwrap_or(""))?;
+            let workspace = self
+                .memory
+                .workspace_manager
+                .get_workspace(&workspace_id)
+                .ok_or_else(|| Status::not_found(format!("Workspace {workspace_id} not found")))?;
+
+            let mut all_updates = Vec::new();
+            let mut merged_graph = SimpleEntityGraph::new();
+
+            for (ws_session_id, _role) in workspace.get_all_sessions() {
+                match self.memory.get_session(ws_session_id).await {
+                    Ok(session_arc) => {
+                        let session = session_arc.load();
+                        all_updates.extend(
+                            session.hot_context.iter().iter().cloned(),
+                        );
+                        all_updates.extend(
+                            session.warm_context.iter().map(|c| c.update.clone()),
+                        );
+                        merged_graph.merge_from(&session.entity_graph);
+                    }
+                    Err(e) => {
+                        warn!(
+                            "AssembleContext: could not load session {} from workspace {}: {}",
+                            ws_session_id, workspace_id, e
+                        );
+                    }
+                }
+            }
+
+            (all_updates, merged_graph)
+        } else {
+            // Single-session (existing behaviour)
+            let session_id = parse_uuid(&req.session_id)?;
+            let session_arc = self.memory.get_session(session_id).await
+                .map_err(|e| Status::not_found(e))?;
+            let session = session_arc.load();
+            let updates: Vec<_> = session.hot_context.iter().iter()
+                .chain(session.warm_context.iter().map(|c| &c.update))
+                .cloned()
+                .collect();
+            (updates, (*session.entity_graph).clone())
+        };
 
         let assembled = context_assembly::assemble_context(
             &req.query,
-            &session.entity_graph,
+            &graph,
             &updates,
             token_budget,
         );
