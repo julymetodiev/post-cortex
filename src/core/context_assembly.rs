@@ -93,24 +93,115 @@ fn estimate_tokens(text: &str) -> usize {
     (text.len() + 3) / 4
 }
 
-/// Extract entity names that appear in the query text (case-insensitive substring match).
-/// Returns entities from the graph that are mentioned in the query.
+/// Extract entity names that appear in the query text.
+///
+/// Uses two strategies:
+/// 1. **Exact substring** — entity name appears verbatim in query (case-insensitive)
+/// 2. **Token overlap** — split entity names on camelCase/snake_case/hyphens and match
+///    individual tokens against query words. Requires ≥50% of entity tokens to match
+///    (or all tokens if entity has ≤2 tokens) to avoid false positives.
+///
+/// Returns entities from the graph that are mentioned in the query, sorted by match quality.
 pub fn find_query_entities(query: &str, graph: &SimpleEntityGraph) -> Vec<String> {
     let query_lower = query.to_lowercase();
+    let query_tokens: std::collections::HashSet<&str> = query_lower
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|t| t.len() >= 3)
+        .collect();
+
     let all_entities = graph.get_all_entities();
-    let mut found: Vec<(String, usize)> = Vec::new();
+    let mut found: Vec<(String, usize, bool)> = Vec::new(); // (name, score, is_exact)
 
     for entity_data in &all_entities {
         let name_lower = entity_data.name.to_lowercase();
+
         // Skip very short entity names (< 2 chars) to avoid false matches
-        if name_lower.len() >= 2 && query_lower.contains(&name_lower) {
-            found.push((entity_data.name.clone(), name_lower.len()));
+        if name_lower.len() < 2 {
+            continue;
+        }
+
+        // Strategy 1: Exact substring match (highest confidence)
+        if query_lower.contains(&name_lower) {
+            found.push((entity_data.name.clone(), name_lower.len() * 10, true));
+            continue;
+        }
+
+        // Strategy 2: Token overlap — split entity name into tokens
+        let entity_tokens: Vec<String> = split_entity_tokens(&name_lower);
+        if entity_tokens.is_empty() {
+            continue;
+        }
+
+        let matched = entity_tokens.iter()
+            .filter(|et| {
+                if et.len() < 3 { return false; }
+                query_tokens.iter().any(|qt| {
+                    // Exact match or prefix match (stem-like):
+                    // "stream" matches "streaming", "chat" matches "chat"
+                    let (shorter, longer) = if et.len() <= qt.len() {
+                        (et.as_str(), *qt)
+                    } else {
+                        (*qt, et.as_str())
+                    };
+                    shorter.len() >= 3 && longer.starts_with(shorter)
+                })
+            })
+            .count();
+
+        if matched == 0 {
+            continue;
+        }
+
+        // Require sufficient overlap to avoid false positives.
+        // For short names (1-2 tokens), require all to match.
+        // For medium (3 tokens), at least 1.
+        // For longer names, at least 40%.
+        let threshold = if entity_tokens.len() <= 2 {
+            entity_tokens.len()
+        } else {
+            1.max((entity_tokens.len() * 2 + 4) / 5) // ceil(40%)
+        };
+
+        if matched >= threshold {
+            let score = matched * 5 + name_lower.len();
+            found.push((entity_data.name.clone(), score, false));
         }
     }
 
-    // Sort by name length descending (prefer longer matches)
-    found.sort_by(|a, b| b.1.cmp(&a.1));
-    found.into_iter().map(|(name, _)| name).collect()
+    // Sort: exact matches first, then by score descending
+    found.sort_by(|a, b| {
+        b.2.cmp(&a.2).then_with(|| b.1.cmp(&a.1))
+    });
+    found.into_iter().map(|(name, _, _)| name).collect()
+}
+
+/// Split an entity name into searchable tokens.
+///
+/// Handles camelCase, PascalCase, snake_case, kebab-case:
+///   "ChatRepositoryImpl" → ["chat", "repository", "impl"]
+///   "svc-social" → ["svc", "social"]
+///   "PG LISTEN/NOTIFY" → ["pg", "listen", "notify"]
+fn split_entity_tokens(name: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+
+    for c in name.chars() {
+        if c == '_' || c == '-' || c == '/' || c == ' ' || c == '.' {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+        } else if c.is_uppercase() && !current.is_empty() {
+            // camelCase boundary
+            tokens.push(std::mem::take(&mut current));
+            current.push(c.to_ascii_lowercase());
+        } else {
+            current.push(c.to_ascii_lowercase());
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
 }
 
 /// Build entity context: for each query entity, traverse the graph to find
