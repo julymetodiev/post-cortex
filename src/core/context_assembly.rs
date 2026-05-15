@@ -31,6 +31,10 @@ pub struct ContextItem {
     pub entities: Vec<String>,
     /// Approximate token count
     pub token_estimate: usize,
+    /// Stable ID of the ContextUpdate this item was sourced from.
+    /// Consumers can use this to track which entries were materialised
+    /// into a session's context window and later check their freshness.
+    pub entry_id: String,
 }
 
 /// How a context item was found
@@ -481,6 +485,7 @@ pub fn assemble_context(
             source,
             entities: matched_entities,
             token_estimate: tokens,
+            entry_id: update.id.to_string(),
         });
     }
 
@@ -711,6 +716,10 @@ mod tests {
             },
         ];
 
+        // Capture IDs so we can verify `entry_id` round-trips below.
+        let grpc_id = updates[0].id;
+        let css_id = updates[1].id;
+
         let result = assemble_context("working on gRPC", &graph, &updates, 1000);
 
         // gRPC-related update should rank higher than CSS bug
@@ -724,6 +733,19 @@ mod tests {
         // Impact: Axon depends on gRPC
         let impacted: Vec<&str> = result.impact.iter().map(|i| i.entity.as_str()).collect();
         assert!(impacted.contains(&"Axon"));
+
+        // Every assembled item should carry the underlying ContextUpdate's
+        // ID so consumers (e.g. Axon resume-freshness) can track which
+        // entries were materialised into the context window.
+        for item in &result.items {
+            assert!(!item.entry_id.is_empty(), "entry_id should be populated");
+            let id = uuid::Uuid::parse_str(&item.entry_id)
+                .expect("entry_id should parse as UUID");
+            assert!(
+                id == grpc_id || id == css_id,
+                "entry_id must match one of the input updates"
+            );
+        }
     }
 
     #[test]

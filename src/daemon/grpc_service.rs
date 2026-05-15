@@ -894,6 +894,7 @@ impl PostCortex for PcxGrpcService {
                 via_entity,
                 entities: item.entities.clone(),
                 token_estimate: item.token_estimate as u32,
+                entry_id: item.entry_id.clone(),
             }
         }).collect();
 

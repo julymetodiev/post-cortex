@@ -341,6 +341,12 @@ message AssembledContextItem {
   string via_entity = 4;      // For graph_traversal source, the entity it was found through
   repeated string entities = 5;
   uint32 token_estimate = 6;
+  // Stable ID of the underlying ContextUpdateEntry / SearchResult this
+  // item was sourced from. Empty when the item was synthesized rather
+  // than sourced from a stored entry. Consumers can use this to track
+  // which entries were materialised into a session's context window
+  // and later check their freshness on resume.
+  string entry_id = 7;
 }
 
 message AssembledEntityContext {
