@@ -226,6 +226,30 @@ impl PostCortex for PcxGrpcService {
         }
     }
 
+    async fn delete_entity(
+        &self,
+        request: Request<DeleteEntityRequest>,
+    ) -> Result<Response<DeleteEntityResponse>, Status> {
+        let req = request.into_inner();
+        debug!(
+            "gRPC DeleteEntity: session_id={} entity={}",
+            req.session_id, req.entity_name
+        );
+
+        if req.entity_name.is_empty() {
+            return Err(Status::invalid_argument("entity_name must not be empty"));
+        }
+        let session_id = parse_uuid(&req.session_id)?;
+
+        match self.memory.delete_entity(session_id, &req.entity_name).await {
+            Ok(existed) => Ok(Response::new(DeleteEntityResponse { existed })),
+            Err(e) => {
+                error!("gRPC DeleteEntity failed: {}", e);
+                Err(Status::internal(e))
+            }
+        }
+    }
+
     async fn update_context(
         &self,
         request: Request<UpdateContextRequest>,

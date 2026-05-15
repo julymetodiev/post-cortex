@@ -276,6 +276,33 @@ impl SimpleEntityGraph {
         self.node_to_entity.clear();
     }
 
+    /// Remove a single entity and all its incident edges. Returns true if
+    /// the entity existed and was removed.
+    ///
+    /// `DiGraph::remove_node` moves the LAST node into the vacated slot,
+    /// which invalidates the previous-last `NodeIndex`. We patch both
+    /// index maps for the swapped node so subsequent lookups stay correct.
+    pub fn remove_entity(&mut self, name: &str) -> bool {
+        let Some(&node_idx) = self.entity_to_node.get(name) else {
+            return false;
+        };
+
+        self.graph.remove_node(node_idx);
+        self.entity_to_node.remove(name);
+        self.node_to_entity.remove(&node_idx);
+
+        if let Some(swapped_name) = self.graph.node_weight(node_idx).cloned() {
+            if let Some(old_idx) = self.entity_to_node.insert(swapped_name.clone(), node_idx) {
+                self.node_to_entity.remove(&old_idx);
+            }
+            self.node_to_entity.insert(node_idx, swapped_name);
+        }
+
+        self.entities.remove(name);
+        self.entity_mentions.remove(name);
+        true
+    }
+
     /// Check if entity exists in the graph
     pub fn has_entity(&self, name: &str) -> bool {
         self.entities.contains_key(name)

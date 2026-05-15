@@ -1413,6 +1413,26 @@ impl GraphStorage for SurrealDBStorage {
 
     async fn delete_entity(&self, session_id: Uuid, name: &str) -> Result<()> {
         let entity_id = Self::entity_id(session_id, name);
+
+        // Cascade: drop every edge that references this entity in any of
+        // the 8 relation tables. Without this, deleted entities leave
+        // orphan edges (in/out pointing at non-existent nodes), which is
+        // what `pcx-inspect.py junk` had to clean up separately.
+        let entity_thing = format!("entity:`{}`", entity_id);
+        for table in [
+            "required_by", "leads_to", "related_to", "conflicts_with",
+            "depends_on", "implements", "caused_by", "solves",
+        ] {
+            let query = format!(
+                "DELETE {} WHERE session_id = $session_id AND (in = {} OR out = {})",
+                table, entity_thing, entity_thing,
+            );
+            self.db
+                .query(query)
+                .bind(("session_id", session_id.to_string()))
+                .await?;
+        }
+
         let _: Option<EntityRecord> = self.delete("entity", &entity_id).await?;
         Ok(())
     }

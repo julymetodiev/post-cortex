@@ -33,6 +33,12 @@ service PostCortex {
   // --- Graph-Aware Context Assembly ---
   rpc AssembleContext(AssembleContextRequest) returns (AssembleContextResponse);
 
+  // --- Graph Maintenance ---
+  // Delete a single entity and cascade-delete all its incident edges from
+  // the 8 relation tables. Atomic against in-memory session cache so the
+  // delete sticks even when the daemon has the session loaded.
+  rpc DeleteEntity(DeleteEntityRequest) returns (DeleteEntityResponse);
+
   // --- Workspace Management ---
   rpc CreateWorkspace(CreateWorkspaceRequest) returns (CreateWorkspaceResponse);
   rpc GetWorkspace(GetWorkspaceRequest) returns (GetWorkspaceResponse);
@@ -130,6 +136,17 @@ message DeleteSessionRequest {
 
 message DeleteSessionResponse {
   bool success = 1;
+}
+
+message DeleteEntityRequest {
+  string session_id = 1;
+  string entity_name = 2;
+}
+
+message DeleteEntityResponse {
+  // True if the entity existed and was removed; false if it was not
+  // present in the session (no-op).
+  bool existed = 1;
 }
 
 // ============ Context Update ============

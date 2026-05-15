@@ -203,7 +203,7 @@ pub struct SystemMetrics {
 
 /// Storage actor for handling all storage operations asynchronously
 pub struct StorageActor {
-    storage: Arc<dyn crate::storage::traits::Storage>,
+    storage: Arc<dyn crate::storage::traits::GraphStorage>,
     receiver: UnboundedReceiver<StorageMessage>,
     performance_monitor: Arc<PerformanceMonitor>,
     operation_count: AtomicU64,
@@ -262,6 +262,11 @@ pub enum StorageMessage {
     },
     ClearSessionEntities {
         session_id: Uuid,
+        response_tx: Sender<Result<(), String>>,
+    },
+    DeleteEntity {
+        session_id: Uuid,
+        entity_name: String,
         response_tx: Sender<Result<(), String>>,
     },
     ListSessions {
@@ -504,7 +509,7 @@ impl ConversationMemorySystem {
 
                 let storage_arc = Arc::new(storage);
                 return Self::new_with_trait_storage(
-                    storage_arc.clone() as Arc<dyn crate::storage::traits::Storage>,
+                    storage_arc.clone() as Arc<dyn crate::storage::traits::GraphStorage>,
                     storage_arc as Arc<dyn crate::storage::traits::VectorStorage>,
                     config,
                 ).await;
@@ -534,7 +539,7 @@ impl ConversationMemorySystem {
     ) -> Result<Self, String> {
         let storage_arc = Arc::new(storage);
         Self::new_with_trait_storage(
-            storage_arc.clone() as Arc<dyn crate::storage::traits::Storage>,
+            storage_arc.clone() as Arc<dyn crate::storage::traits::GraphStorage>,
             storage_arc as Arc<dyn crate::storage::traits::VectorStorage>,
             config,
         ).await
@@ -542,7 +547,7 @@ impl ConversationMemorySystem {
 
     /// Create system with trait object storage (supports both RocksDB and SurrealDB)
     async fn new_with_trait_storage(
-        storage: Arc<dyn crate::storage::traits::Storage>,
+        storage: Arc<dyn crate::storage::traits::GraphStorage>,
         vector_storage: Arc<dyn crate::storage::traits::VectorStorage>,
         config: SystemConfig,
     ) -> Result<Self, String> {
@@ -833,6 +838,33 @@ impl ConversationMemorySystem {
 
         session_arc.store(Arc::new(new_session));
         Ok(())
+    }
+
+    /// Delete a single entity from a session: removes the node + incident
+    /// edges from the in-memory graph (so cached writes don't resurrect it)
+    /// and cascades the same delete to storage (entity row + all 8 edge
+    /// tables). Returns whether the entity existed.
+    pub async fn delete_entity(
+        &self,
+        session_id: Uuid,
+        entity_name: &str,
+    ) -> Result<bool, String> {
+        let session_arc = self.get_session(session_id).await?;
+
+        let current = session_arc.load();
+        let existed = current.entity_graph.has_entity(entity_name);
+        if existed {
+            let mut new_session = (**current).clone();
+            let graph_mut = std::sync::Arc::make_mut(&mut new_session.entity_graph);
+            graph_mut.remove_entity(entity_name);
+            session_arc.store(Arc::new(new_session));
+        }
+
+        self.storage_actor
+            .delete_entity(session_id, entity_name)
+            .await?;
+
+        Ok(existed)
     }
 
     /// Find sessions by name or description compatibility method
@@ -1758,6 +1790,29 @@ impl StorageActorHandle {
         .await
     }
 
+    pub async fn delete_entity(
+        &self,
+        session_id: Uuid,
+        entity_name: &str,
+    ) -> Result<(), String> {
+        let (response_tx, mut response_rx) = channel::<Result<(), String>>(1);
+
+        self.sender
+            .send(StorageMessage::DeleteEntity {
+                session_id,
+                entity_name: entity_name.to_string(),
+                response_tx,
+            })
+            .map_err(|_| "Storage actor unavailable".to_string())?;
+
+        self.execute_with_timeout(
+            OperationType::Medium,
+            &format!("DeleteEntity {}/{}", session_id, entity_name),
+            response_rx.recv(),
+        )
+        .await
+    }
+
     pub async fn list_sessions(&self) -> Result<Vec<Uuid>, String> {
         let (response_tx, mut response_rx) = channel::<Result<Vec<Uuid>, String>>(1);
 
@@ -2115,7 +2170,7 @@ impl StorageActorHandle {
 
 impl StorageActor {
     pub async fn spawn(
-        storage: Arc<dyn crate::storage::traits::Storage>,
+        storage: Arc<dyn crate::storage::traits::GraphStorage>,
         performance_monitor: Arc<PerformanceMonitor>,
     ) -> Result<StorageActorHandle, String> {
         let (sender, receiver) = unbounded_channel();
@@ -2217,6 +2272,19 @@ impl StorageActor {
                 let result = self
                     .storage
                     .clear_session_entities(session_id)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = response_tx.send(result).await;
+            }
+            StorageMessage::DeleteEntity {
+                session_id,
+                entity_name,
+                response_tx,
+            } => {
+                self.delete_count.fetch_add(1, Ordering::Relaxed);
+                let result = self
+                    .storage
+                    .delete_entity(session_id, &entity_name)
                     .await
                     .map_err(|e| e.to_string());
                 let _ = response_tx.send(result).await;
