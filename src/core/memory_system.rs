@@ -840,6 +840,17 @@ impl ConversationMemorySystem {
         Ok(())
     }
 
+    /// Delete a session: evicts both in-memory caches before tearing down the
+    /// persisted row. Without the cache evict step, `get_session` (used by
+    /// `session action=load`) would still hand out the cached ActiveSession
+    /// after the underlying storage row was already gone.
+    pub async fn delete_session(&self, session_id: Uuid) -> Result<bool, String> {
+        self.session_manager.sessions.remove(&session_id);
+        self.session_manager.active_sessions.remove(&session_id);
+
+        self.storage_actor.delete_session(session_id).await
+    }
+
     /// Delete a single entity from a session: removes the node + incident
     /// edges from the in-memory graph (so cached writes don't resurrect it)
     /// and cascades the same delete to storage (entity row + all 8 edge

@@ -333,7 +333,7 @@ pub struct SessionMetadata {
 }
 
 impl SessionMetadata {
-    /// Create new session metadata
+    /// Create new session metadata (uses current time as `created_at`).
     pub fn new(
         id: Uuid,
         name: Option<String>,
@@ -345,6 +345,25 @@ impl SessionMetadata {
             name,
             description,
             created_at: Utc::now(),
+            user_preferences,
+        }
+    }
+
+    /// Rebuild session metadata while preserving an existing `created_at`.
+    /// Used by set_name/set_description/update_metadata so renames don't lie
+    /// about when the session was actually created.
+    pub fn with_created_at(
+        id: Uuid,
+        name: Option<String>,
+        description: Option<String>,
+        user_preferences: UserPreferences,
+        created_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            description,
+            created_at,
             user_preferences,
         }
     }

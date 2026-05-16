@@ -823,31 +823,34 @@ impl ActiveSession {
         Ok(())
     }
 
-    /// Update the session name
+    /// Update the session name (preserves `created_at`).
     pub fn set_name(&mut self, name: Option<String>) {
-        let new_metadata = Arc::new(SessionMetadata::new(
+        let new_metadata = Arc::new(SessionMetadata::with_created_at(
             self.metadata.id,
             name,
             self.metadata.description.clone(),
             self.metadata.user_preferences.clone(),
+            self.metadata.created_at,
         ));
         self.metadata = new_metadata;
         self.last_updated = Utc::now();
     }
 
-    /// Update the session description
+    /// Update the session description (preserves `created_at`).
     pub fn set_description(&mut self, description: Option<String>) {
-        let new_metadata = Arc::new(SessionMetadata::new(
+        let new_metadata = Arc::new(SessionMetadata::with_created_at(
             self.metadata.id,
             self.metadata.name.clone(),
             description,
             self.metadata.user_preferences.clone(),
+            self.metadata.created_at,
         ));
         self.metadata = new_metadata;
         self.last_updated = Utc::now();
     }
 
-    /// Update both name and description (preserves existing values if None provided)
+    /// Update both name and description (preserves existing values if None
+    /// provided, and always preserves the original `created_at`).
     pub fn update_metadata(&mut self, name: Option<String>, description: Option<String>) {
         let final_name = if name.is_some() {
             name
@@ -860,11 +863,12 @@ impl ActiveSession {
             self.metadata.description.clone()
         };
 
-        let new_metadata = Arc::new(SessionMetadata::new(
+        let new_metadata = Arc::new(SessionMetadata::with_created_at(
             self.metadata.id,
             final_name,
             final_description,
             self.metadata.user_preferences.clone(),
+            self.metadata.created_at,
         ));
         self.metadata = new_metadata;
         self.last_updated = Utc::now();

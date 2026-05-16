@@ -848,7 +848,7 @@ impl PostCortexService {
             }
             "delete" => {
                 let session_id = require_session_id(&req, "delete")?;
-                match self.memory_system.storage_actor.delete_session(session_id).await {
+                match self.memory_system.delete_session(session_id).await {
                     Ok(true) => Ok(CallToolResult::success(vec![Content::text(format!(
                         "Deleted session {}",
                         session_id

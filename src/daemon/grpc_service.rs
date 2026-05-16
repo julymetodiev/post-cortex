@@ -217,7 +217,7 @@ impl PostCortex for PcxGrpcService {
 
         let session_id = parse_uuid(&req.session_id)?;
 
-        match self.memory.storage_actor.delete_session(session_id).await {
+        match self.memory.delete_session(session_id).await {
             Ok(success) => Ok(Response::new(DeleteSessionResponse { success })),
             Err(e) => {
                 error!("gRPC DeleteSession failed: {}", e);
