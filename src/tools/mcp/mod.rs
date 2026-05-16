@@ -680,9 +680,8 @@ pub async fn create_session_checkpoint_with_system(
     let checkpoint = create_comprehensive_checkpoint(&session).await?;
 
     // Save checkpoint
-    let storage_wrapper = system.storage();
-    let storage = storage_wrapper.write().await;
-    storage
+    system
+        .storage_actor
         .save_checkpoint(&checkpoint)
         .await
         .map_err(string_to_anyhow)?;
@@ -702,13 +701,11 @@ pub async fn load_session_checkpoint_with_system(
     let checkpoint_id = Uuid::parse_str(&checkpoint_id)?;
 
     eprintln!("Loading checkpoint - step 2: Loading checkpoint from storage");
-    let storage_wrapper = system.storage();
-    let storage = storage_wrapper.read().await;
-    let checkpoint = storage
+    let checkpoint = system
+        .storage_actor
         .load_checkpoint(checkpoint_id)
         .await
         .map_err(string_to_anyhow)?;
-    let _ = storage; // Release storage lock
 
     eprintln!("Loading checkpoint - step 3: Checkpoint loaded successfully");
 
@@ -1208,9 +1205,8 @@ pub async fn create_session_checkpoint(session_id: Uuid) -> Result<MCPToolResult
         let checkpoint = create_comprehensive_checkpoint(&session).await?;
 
         // Save checkpoint
-        let storage_wrapper = system.storage();
-        let storage = storage_wrapper.write().await;
-        storage
+        system
+            .storage_actor
             .save_checkpoint(&checkpoint)
             .await
             .map_err(string_to_anyhow)?;
@@ -1246,13 +1242,11 @@ pub async fn load_session_checkpoint(
         let checkpoint_id = Uuid::parse_str(&checkpoint_id)?;
 
         // Load checkpoint from storage
-        let storage_wrapper = system.storage();
-        let storage = storage_wrapper.read().await;
-        let checkpoint = storage
+        let checkpoint = system
+            .storage_actor
             .load_checkpoint(checkpoint_id)
             .await
             .map_err(string_to_anyhow)?;
-        let _ = storage; // Release storage lock
 
         // Restore session from checkpoint
         let mut session = ActiveSession::new(session_id, None, None);
@@ -3422,7 +3416,7 @@ pub async fn create_workspace(name: String, description: String) -> Result<MCPTo
 
     // Persist workspace to RocksDB
     if let Err(e) = system
-        .storage()
+        .storage_actor
         .save_workspace_metadata(
             workspace_id,
             &name,
@@ -3563,7 +3557,7 @@ pub async fn delete_workspace(workspace_id: Uuid) -> Result<MCPToolResult> {
     match system.workspace_manager.delete_workspace(&workspace_id) {
         Some(workspace) => {
             // Delete from RocksDB
-            if let Err(e) = system.storage().delete_workspace(workspace_id).await {
+            if let Err(e) = system.storage_actor.delete_workspace(workspace_id).await {
                 error!("Failed to delete workspace from storage: {}", e);
                 return Ok(MCPToolResult::error(format!(
                     "Failed to delete workspace from storage: {}",
@@ -3635,7 +3629,7 @@ pub async fn add_session_to_workspace(
 
     // Persist to RocksDB
     if let Err(e) = system
-        .storage()
+        .storage_actor
         .add_session_to_workspace(workspace_id, session_id, session_role)
         .await
     {
@@ -3680,7 +3674,7 @@ pub async fn remove_session_from_workspace(
         Ok(Some(role)) => {
             // Remove from RocksDB
             if let Err(e) = system
-                .storage()
+                .storage_actor
                 .remove_session_from_workspace(workspace_id, session_id)
                 .await
             {

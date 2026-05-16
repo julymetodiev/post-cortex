@@ -881,4 +881,59 @@ impl ActiveSession {
             self.metadata.description.clone(),
         )
     }
+
+    /// Build a `ContextUpdate` from a description (or deserialize one from caller metadata)
+    /// and append it via `add_incremental_update_fast`. Returns `(update_id, update)`.
+    pub async fn add_context_update(
+        &mut self,
+        description: String,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<(String, ContextUpdate), String> {
+        use crate::core::context_update::{UpdateContent, UpdateType};
+
+        let update = if let Some(metadata) = metadata {
+            serde_json::from_value::<ContextUpdate>(metadata)
+                .map_err(|e| format!("Invalid ContextUpdate metadata: {e}"))?
+        } else {
+            ContextUpdate {
+                id: Uuid::new_v4(),
+                update_type: UpdateType::ConceptDefined,
+                content: UpdateContent {
+                    title: "Incremental Update".to_string(),
+                    description,
+                    details: Vec::new(),
+                    examples: Vec::new(),
+                    implications: Vec::new(),
+                },
+                timestamp: chrono::Utc::now(),
+                related_code: None,
+                parent_update: None,
+                user_marked_important: false,
+                creates_entities: Vec::new(),
+                creates_relationships: Vec::new(),
+                references_entities: Vec::new(),
+                typed_entities: Vec::new(),
+            }
+        };
+
+        let update_id = update.id;
+        let update_clone = update.clone();
+        self.add_incremental_update_fast(update)
+            .await
+            .map_err(|e| format!("Failed to add update: {e}"))?;
+        Ok((update_id.to_string(), update_clone))
+    }
+
+    /// Recent updates from hot context as a human-readable bullet list.
+    pub fn context_summary(&self) -> String {
+        let mut summary = Vec::new();
+        for update in self.hot_context.iter().iter().rev().take(10) {
+            summary.push(format!("- {}", update.content.description));
+        }
+        if summary.is_empty() {
+            "No context available".to_string()
+        } else {
+            summary.join("\n")
+        }
+    }
 }
