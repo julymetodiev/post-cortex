@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
+#[cfg(feature = "embeddings")]
 use tokio::sync::OnceCell;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
@@ -233,11 +234,9 @@ impl ConversationMemorySystem {
             };
 
         #[cfg(not(feature = "embeddings"))]
-        let (_content_vectorizer, _semantic_query_engine) = {
-            if config.enable_embeddings {
-                warn!("Embeddings requested but 'embeddings' feature not enabled");
-            }
-        };
+        if config.enable_embeddings {
+            warn!("Embeddings requested but 'embeddings' feature not enabled");
+        }
 
         Ok(Self {
             session_manager,
@@ -444,23 +443,39 @@ impl ConversationMemorySystem {
         session_id: Uuid,
         entry_id: Uuid,
     ) -> Result<bool, String> {
+        const MAX_CAS_ATTEMPTS: u32 = 20;
         let session_arc = self.get_session(session_id).await?;
-        let current = session_arc.load();
-        let mut new_session = (**current).clone();
-        let existed = new_session.remove_update_by_id(&entry_id);
 
-        if existed {
+        for attempt in 1..=MAX_CAS_ATTEMPTS {
+            let current = session_arc.load();
+            let mut new_session = (**current).clone();
+            let existed = new_session.remove_update_by_id(&entry_id);
+
+            if !existed {
+                return Ok(false);
+            }
+
             let new_arc = Arc::new(new_session);
             let prev = session_arc.compare_and_swap(&current, Arc::clone(&new_arc));
             if Arc::ptr_eq(&prev, &current) {
                 self.storage_actor
                     .persist_session_and_update_nowait((*new_arc).clone(), vec![]);
+                return Ok(true);
+            }
+
+            if attempt > 3 {
+                tokio::time::sleep(std::time::Duration::from_micros(
+                    100 * (1 << (attempt - 3).min(5)),
+                ))
+                .await;
             } else {
-                warn!("CAS failed during delete_update for session {}", session_id);
+                tokio::task::yield_now().await;
             }
         }
 
-        Ok(existed)
+        Err(format!(
+            "delete_update: high contention ({MAX_CAS_ATTEMPTS} CAS attempts exhausted) for session {session_id}"
+        ))
     }
 
     /// Find sessions by name or description compatibility method
@@ -473,22 +488,16 @@ impl ConversationMemorySystem {
         let mut matching_sessions = Vec::new();
 
         for session_id in &session_ids {
-            // Try in-memory cache first, then fall back to storage
-            let session_arc = if let Some(cached) = self.session_manager.sessions.get(session_id) {
-                cached
-            } else if let Ok(loaded) = self.get_session(*session_id).await {
-                loaded
-            } else {
+            // get_session already does cache-then-storage lookup
+            let Ok(session_arc) = self.get_session(*session_id).await else {
                 continue;
             };
-
             let session = session_arc.load();
 
             let name_match = session
                 .name()
                 .as_ref()
                 .is_some_and(|n| n.to_lowercase().contains(&query_lower));
-
             let desc_match = session
                 .description()
                 .as_ref()
@@ -531,7 +540,7 @@ impl ConversationMemorySystem {
         description: String,
         metadata: Option<serde_json::Value>,
     ) -> Result<String, String> {
-        tracing::info!("add_incremental_update START for session {}", session_id);
+        debug!("add_incremental_update START for session {}", session_id);
         let _timer = self
             .performance_monitor
             .start_timer("add_incremental_update");
@@ -542,8 +551,6 @@ impl ConversationMemorySystem {
             .active_operations
             .fetch_add(1, Ordering::Relaxed);
 
-        tracing::info!("Metrics updated, checking circuit breaker...");
-
         // Circuit breaker check - atomic
         if self.circuit_breaker.is_open() {
             warn!("Circuit breaker is open - rejecting request");
@@ -553,11 +560,9 @@ impl ConversationMemorySystem {
             return Err("System temporarily unavailable - circuit breaker open".to_string());
         }
 
-        tracing::info!("Calling internal implementation...");
         let result = self
             .add_incremental_update_internal(session_id, description, metadata)
             .await;
-        tracing::info!("Internal implementation returned: {:?}", result.is_ok());
 
         // Update circuit breaker based on result
         match &result {
@@ -587,7 +592,6 @@ impl ConversationMemorySystem {
         mut description: String,
         metadata: Option<serde_json::Value>,
     ) -> Result<String, String> {
-        tracing::info!("Internal: Processing session {}", session_id);
         // Content size limit to prevent timeouts
         if description.len() > 2000 {
             // Truncate at nearest UTF-8 boundary at or before 1800 bytes
@@ -600,13 +604,11 @@ impl ConversationMemorySystem {
             debug!("Truncated long description to prevent timeout (UTF-8 safe)");
         }
 
-        tracing::info!("Internal: Getting or creating session...");
         // Get or create session
         let session_arc = self
             .session_manager
             .get_or_create_session(session_id)
             .await?;
-        tracing::info!("Internal: Session obtained successfully");
 
         // Update session atomically using CAS loop to prevent race conditions
         let update_result = {

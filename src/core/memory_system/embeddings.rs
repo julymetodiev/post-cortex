@@ -547,116 +547,9 @@ impl ConversationMemorySystem {
             .await
         {
             Ok(results) => {
-                // Helper to extract potential entity names from text
-                // Extract all words > 3 chars (will be validated against graph)
-                let extract_entities = |text: &str| -> Vec<String> {
-                    text.split_whitespace()
-                        .filter_map(|w| {
-                            let clean = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
-                            if clean.len() > 3 {
-                                Some(clean.to_lowercase())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
-                };
-
-                // ADVANCED GRAPH-RAG LOGIC
-                // Use the already-loaded session's entity graph directly (no async message passing)
                 let session = session_arc.load();
-                let entity_graph = &session.entity_graph;
-                let graph_size = entity_graph.entity_count();
-
-                tracing::debug!("Graph-RAG: Starting enrichment for {} results (graph has {} entities)",
-                    results.len(), graph_size);
-
-                // 1. Identify core concepts in the QUERY
-                let query_entities = extract_entities(query);
-                tracing::debug!("Graph-RAG: Extracted {} query entities: {:?}", query_entities.len(), query_entities);
-                let mut global_graph_map = std::collections::HashMap::new();
-
-                // 2. Expand Query Context via Graph Traversal (direct graph access - O(degree) per entity)
-                for q_entity in &query_entities {
-                    let relations = entity_graph.find_related_entities(q_entity);
-                    if !relations.is_empty() {
-                        tracing::debug!("Graph-RAG: Entity '{}' -> {} relations: {:?}",
-                            q_entity, relations.len(), relations.iter().take(3).collect::<Vec<_>>());
-                        global_graph_map.insert(q_entity.clone(), relations);
-                    } else {
-                        tracing::debug!("Graph-RAG: Entity '{}' not found in graph", q_entity);
-                    }
-                }
-
-                // 3. Synthesize Global Insights
-                let mut graph_insights = String::new();
-                if !global_graph_map.is_empty() {
-                    graph_insights.push_str("\n[System Knowledge Map]:\n");
-                    for (entity, rels) in &global_graph_map {
-                        graph_insights.push_str(&format!("- {} is central to: {}\n", entity, rels.join(", ")));
-                    }
-                }
-
-                // 4. Enrich results and analyze cross-references (direct graph access)
-                let mut enriched_results = Vec::new();
-                for mut result in results.into_iter() {
-                    // Local enrichment (neighbors of entities in this specific chunk)
-                    let chunk_entities = extract_entities(&result.text_content);
-                    // De-duplicate
-                    let mut unique_chunk_entities = chunk_entities.clone();
-                    unique_chunk_entities.sort();
-                    unique_chunk_entities.dedup();
-
-                    let mut local_rels = Vec::new();
-                    for entity in unique_chunk_entities.iter().take(2) {
-                        // Skip if already in global map
-                        if global_graph_map.contains_key(entity) { continue; }
-
-                        // Direct graph access instead of async message
-                        let relations = entity_graph.find_related_entities(entity);
-                        if !relations.is_empty() {
-                            // Limit relations
-                            let limited_rels: Vec<_> = relations.iter().take(5).cloned().collect();
-                            local_rels.push(format!("{}: {}", entity, limited_rels.join(", ")));
-                        }
-                    }
-
-                    if !local_rels.is_empty() {
-                        result.text_content = format!("{}\n(Graph expansion: {})", result.text_content, local_rels.join(" | "));
-                    }
-
-                    enriched_results.push(result);
-                }
-
-                // 5. Deep Graph Analysis (Pathfinding between top results) - direct graph access
-                // If we have at least 2 results, check if they are connected
-                if enriched_results.len() >= 2 {
-                    let top1_entities = extract_entities(&enriched_results[0].text_content);
-                    let top2_entities = extract_entities(&enriched_results[1].text_content);
-
-                    if let (Some(e1), Some(e2)) = (top1_entities.first(), top2_entities.first()) {
-                        if e1 != e2 {
-                            // Direct pathfinding call
-                            if let Some(path) = entity_graph.find_shortest_path(e1, e2) {
-                                if path.len() > 2 { // Valid path found (more than just start/end)
-                                    tracing::debug!("Graph-RAG: Found path {} -> {}: {:?}", e1, e2, path);
-                                    graph_insights.push_str(&format!("\n[Structural Insight]: Found connection: {}\n", path.join(" -> ")));
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Prepend insights to the first result
-                if !graph_insights.is_empty() && !enriched_results.is_empty() {
-                    tracing::debug!("Graph-RAG: Adding insights to first result: {} chars", graph_insights.len());
-                    enriched_results[0].text_content = format!("{}{}\n---\n", graph_insights, enriched_results[0].text_content);
-                } else {
-                    tracing::debug!("Graph-RAG: No insights generated (global_map: {} entries)", global_graph_map.len());
-                }
-
-                Ok(enriched_results)
-            },
+                Ok(enrich_results_with_graph(&session, query, results))
+            }
             Err(e) => Err(format!("Session semantic search failed: {e}")),
         }
     }
@@ -855,4 +748,118 @@ impl ConversationMemorySystem {
         }
         Ok(())
     }
+}
+
+/// Extract candidate entity names from text: lowercase words >3 chars, stripped of
+/// non-alphanumeric edge characters (preserving `_` and `-`).
+#[cfg(feature = "embeddings")]
+fn extract_entities(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .filter_map(|w| {
+            let clean = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
+            (clean.len() > 3).then(|| clean.to_lowercase())
+        })
+        .collect()
+}
+
+/// Graph-RAG enrichment of semantic search results using the session's entity graph.
+///
+/// Steps:
+/// 1. Map query entities → their graph neighbors (global insights).
+/// 2. For each result, enrich text with local entity neighborhoods.
+/// 3. If the top two results contain distinct entities, surface any shortest path
+///    between them as a "Structural Insight".
+/// 4. Prepend the synthesized insights to the first result.
+#[cfg(feature = "embeddings")]
+fn enrich_results_with_graph(
+    session: &crate::session::active_session::ActiveSession,
+    query: &str,
+    results: Vec<crate::core::content_vectorizer::SemanticSearchResult>,
+) -> Vec<crate::core::content_vectorizer::SemanticSearchResult> {
+    let entity_graph = &session.entity_graph;
+
+    tracing::debug!(
+        "Graph-RAG: enrichment for {} results (graph has {} entities)",
+        results.len(),
+        entity_graph.entity_count()
+    );
+
+    // Step 1: query → neighbors map
+    let query_entities = extract_entities(query);
+    let mut global_graph_map: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for q_entity in &query_entities {
+        let relations = entity_graph.find_related_entities(q_entity);
+        if !relations.is_empty() {
+            global_graph_map.insert(q_entity.clone(), relations);
+        }
+    }
+
+    let mut graph_insights = String::new();
+    if !global_graph_map.is_empty() {
+        graph_insights.push_str("\n[System Knowledge Map]:\n");
+        for (entity, rels) in &global_graph_map {
+            graph_insights.push_str(&format!(
+                "- {} is central to: {}\n",
+                entity,
+                rels.join(", ")
+            ));
+        }
+    }
+
+    // Step 2: per-result local enrichment
+    let mut enriched: Vec<_> = results
+        .into_iter()
+        .map(|mut result| {
+            let mut chunk_entities = extract_entities(&result.text_content);
+            chunk_entities.sort();
+            chunk_entities.dedup();
+
+            let mut local_rels = Vec::new();
+            for entity in chunk_entities.iter().take(2) {
+                if global_graph_map.contains_key(entity) {
+                    continue;
+                }
+                let relations = entity_graph.find_related_entities(entity);
+                if !relations.is_empty() {
+                    let limited: Vec<_> = relations.iter().take(5).cloned().collect();
+                    local_rels.push(format!("{}: {}", entity, limited.join(", ")));
+                }
+            }
+            if !local_rels.is_empty() {
+                result.text_content = format!(
+                    "{}\n(Graph expansion: {})",
+                    result.text_content,
+                    local_rels.join(" | ")
+                );
+            }
+            result
+        })
+        .collect();
+
+    // Step 3: shortest-path insight between top two results
+    if enriched.len() >= 2 {
+        let top1 = extract_entities(&enriched[0].text_content);
+        let top2 = extract_entities(&enriched[1].text_content);
+        if let (Some(e1), Some(e2)) = (top1.first(), top2.first()) {
+            if e1 != e2 {
+                if let Some(path) = entity_graph.find_shortest_path(e1, e2) {
+                    if path.len() > 2 {
+                        graph_insights.push_str(&format!(
+                            "\n[Structural Insight]: Found connection: {}\n",
+                            path.join(" -> ")
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 4: prepend insights to first result
+    if !graph_insights.is_empty() && !enriched.is_empty() {
+        enriched[0].text_content =
+            format!("{}{}\n---\n", graph_insights, enriched[0].text_content);
+    }
+
+    enriched
 }

@@ -79,14 +79,3 @@ pub struct CircuitBreakerStats {
     pub last_failure_timestamp: u64,
     pub last_success_timestamp: u64,
 }
-
-/// Storage operations statistics
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StorageStats {
-    pub total_operations: u64,
-    pub load_operations: u64,
-    pub save_operations: u64,
-    pub delete_operations: u64,
-    pub avg_operation_time_ns: u64,
-    pub last_operation_timestamp: u64,
-}

@@ -24,9 +24,7 @@ pub mod system;
 pub use circuit_breaker::CircuitBreaker;
 pub use config::{EmbeddingConfigHolder, OperationType, SystemConfig};
 pub use managers::{IncrementalContextProcessor, SimpleGraphManager};
-pub use metrics::{
-    CircuitBreakerStats, SessionManagerMetrics, StorageStats, SystemHealth, SystemMetrics,
-};
+pub use metrics::{CircuitBreakerStats, SessionManagerMetrics, SystemHealth, SystemMetrics};
 pub use session_manager::SessionManager;
 pub use storage_actor::{StorageActor, StorageActorHandle, StorageMessage};
 pub use system::ConversationMemorySystem;

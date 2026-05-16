@@ -1,11 +1,11 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use tokio::sync::mpsc::{channel, unbounded_channel, Sender, UnboundedReceiver, UnboundedSender};
-use tokio::sync::oneshot;
+use dashmap::DashMap;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::{Mutex, oneshot};
 use tokio::time::timeout;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use crate::core::performance::PerformanceMonitor;
@@ -15,17 +15,16 @@ use crate::daemon::grpc_service::pb::{
 use crate::session::active_session::ActiveSession;
 
 use super::config::OperationType;
-use super::metrics::StorageStats;
 
 /// Storage actor for handling all storage operations asynchronously
 pub struct StorageActor {
     storage: Arc<dyn crate::storage::traits::GraphStorage>,
     receiver: UnboundedReceiver<StorageMessage>,
     performance_monitor: Arc<PerformanceMonitor>,
-    operation_count: AtomicU64,
-    load_count: AtomicU64,
-    save_count: AtomicU64,
-    delete_count: AtomicU64,
+    /// Per-session locks for background persists. Ensures `PersistSessionAndUpdate`
+    /// writes for the same session are serialized even though each runs in its
+    /// own spawned task, preventing out-of-order session-blob writes.
+    persist_locks: Arc<DashMap<Uuid, Arc<Mutex<()>>>>,
 }
 
 /// Handle for communicating with storage actor
@@ -40,68 +39,65 @@ pub struct StorageActorHandle {
 pub enum StorageMessage {
     LoadSession {
         session_id: Uuid,
-        response_tx: Sender<Result<Option<ActiveSession>, String>>,
+        response_tx: oneshot::Sender<Result<Option<ActiveSession>, String>>,
     },
     SaveSession {
         session: Box<ActiveSession>,
-        response_tx: Sender<Result<(), String>>,
+        response_tx: oneshot::Sender<Result<(), String>>,
     },
     DeleteSession {
         session_id: Uuid,
-        response_tx: Sender<Result<bool, String>>,
+        response_tx: oneshot::Sender<Result<bool, String>>,
     },
     ClearSessionEntities {
         session_id: Uuid,
-        response_tx: Sender<Result<(), String>>,
+        response_tx: oneshot::Sender<Result<(), String>>,
     },
     DeleteEntity {
         session_id: Uuid,
         entity_name: String,
-        response_tx: Sender<Result<(), String>>,
+        response_tx: oneshot::Sender<Result<(), String>>,
     },
     ListSessions {
-        response_tx: Sender<Result<Vec<Uuid>, String>>,
-    },
-    GetStats {
-        response_tx: Sender<StorageStats>,
+        response_tx: oneshot::Sender<Result<Vec<Uuid>, String>>,
     },
     SaveCheckpoint {
         checkpoint: crate::storage::rocksdb_storage::SessionCheckpoint,
-        response_tx: Sender<Result<(), String>>,
+        response_tx: oneshot::Sender<Result<(), String>>,
     },
     LoadCheckpoint {
         checkpoint_id: Uuid,
-        response_tx: Sender<Result<crate::storage::rocksdb_storage::SessionCheckpoint, String>>,
+        response_tx: oneshot::Sender<Result<crate::storage::rocksdb_storage::SessionCheckpoint, String>>,
     },
     SaveWorkspaceMetadata {
         workspace_id: Uuid,
         name: String,
         description: String,
         session_ids: Vec<Uuid>,
-        response_tx: Sender<Result<(), String>>,
+        response_tx: oneshot::Sender<Result<(), String>>,
     },
     DeleteWorkspace {
         workspace_id: Uuid,
-        response_tx: Sender<Result<(), String>>,
+        response_tx: oneshot::Sender<Result<(), String>>,
     },
     AddSessionToWorkspace {
         workspace_id: Uuid,
         session_id: Uuid,
         role: crate::workspace::SessionRole,
-        response_tx: Sender<Result<(), String>>,
+        response_tx: oneshot::Sender<Result<(), String>>,
     },
     RemoveSessionFromWorkspace {
         workspace_id: Uuid,
         session_id: Uuid,
-        response_tx: Sender<Result<(), String>>,
+        response_tx: oneshot::Sender<Result<(), String>>,
     },
     ListAllWorkspaces {
-        response_tx: Sender<Result<Vec<crate::storage::rocksdb_storage::StoredWorkspace>, String>>,
+        response_tx: oneshot::Sender<Result<Vec<crate::storage::rocksdb_storage::StoredWorkspace>, String>>,
     },
     BatchSaveUpdates {
         session_id: Uuid,
         updates: Vec<crate::core::context_update::ContextUpdate>,
-        response_tx: Sender<Result<(), String>>,
+        response_tx: oneshot::Sender<Result<(), String>>,
     },
     /// Fire-and-forget: persist session + updates without blocking caller.
     PersistSessionAndUpdate {
@@ -109,159 +105,128 @@ pub enum StorageMessage {
         session_id: Uuid,
         updates: Vec<crate::core::context_update::ContextUpdate>,
     },
-    FindRelatedEntities {
-        session_id: Uuid,
-        entity_name: String,
-        response_tx: Sender<Result<Vec<String>, String>>,
-    },
-    FindShortestPath {
-        session_id: Uuid,
-        from_entity: String,
-        to_entity: String,
-        response_tx: Sender<Result<Option<Vec<String>>, String>>,
-    },
     RegisterSource {
         session_id: Uuid,
         source_ref: SourceReference,
-        response_tx: Sender<Result<(), String>>,
+        response_tx: oneshot::Sender<Result<(), String>>,
     },
     CheckFreshness {
         entry_id: String,
         file_hash: Vec<u8>,
         ast_hash: Option<Vec<u8>>,
         symbol_name: Option<String>,
-        response_tx: Sender<Result<FreshnessEntry, String>>,
+        response_tx: oneshot::Sender<Result<FreshnessEntry, String>>,
     },
     CheckFreshnessBatch {
         entries: Vec<(String, Vec<u8>, Option<Vec<u8>>, Option<String>)>,
-        response_tx: Sender<Result<Vec<FreshnessEntry>, String>>,
+        response_tx: oneshot::Sender<Result<Vec<FreshnessEntry>, String>>,
     },
     InvalidateSource {
         file_path: String,
-        response_tx: Sender<Result<u32, String>>,
+        response_tx: oneshot::Sender<Result<u32, String>>,
     },
     RegisterSymbolDependencies {
         from: SymbolId,
         to_symbols: Vec<SymbolId>,
-        response_tx: Sender<Result<u32, String>>,
+        response_tx: oneshot::Sender<Result<u32, String>>,
     },
     CascadeInvalidate {
         changed: SymbolId,
         new_ast_hash: Vec<u8>,
         max_depth: u32,
-        response_tx: Sender<Result<CascadeInvalidateReport, String>>,
+        response_tx: oneshot::Sender<Result<CascadeInvalidateReport, String>>,
     },
     GetStaleEntriesBySource {
         file_path: String,
-        response_tx: Sender<Result<Vec<crate::storage::traits::StaleEntryInfo>, String>>,
+        response_tx: oneshot::Sender<Result<Vec<crate::storage::traits::StaleEntryInfo>, String>>,
     },
     Shutdown,
 }
 
-
 impl StorageActorHandle {
-    /// Execute an operation with the specified timeout type
-    async fn execute_with_timeout<T, F>(
+    /// Send a request message and await its `Result<T, String>` response with a timeout.
+    ///
+    /// `op_name` is only invoked on the timeout error path — keeps allocations
+    /// off the hot success path.
+    async fn send_request<T, B, N>(
         &self,
         op_type: OperationType,
-        op_name: &str,
-        future: F,
+        op_name: N,
+        build_msg: B,
     ) -> Result<T, String>
     where
-        F: std::future::Future<Output = Option<Result<T, String>>>,
+        B: FnOnce(oneshot::Sender<Result<T, String>>) -> StorageMessage,
+        N: FnOnce() -> String,
     {
-        let timeout = op_type.timeout();
-        debug!(
-            "StorageHandle: {} with {:?} timeout ({}s)",
-            op_name,
-            op_type,
-            timeout.as_secs()
-        );
+        let (response_tx, response_rx) = oneshot::channel::<Result<T, String>>();
+        self.sender
+            .send(build_msg(response_tx))
+            .map_err(|_| "Storage actor unavailable".to_string())?;
 
-        tokio::time::timeout(timeout, future)
-            .await
-            .map_err(|_| format!("{} timed out after {}s", op_name, timeout.as_secs()))?
-            .ok_or_else(|| "Storage actor response channel closed".to_string())?
+        let timeout_duration = op_type.timeout();
+        match tokio::time::timeout(timeout_duration, response_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err("Storage actor response channel closed".to_string()),
+            Err(_) => Err(format!(
+                "{} timed out after {}s",
+                op_name(),
+                timeout_duration.as_secs()
+            )),
+        }
     }
 
     pub async fn load_session(&self, session_id: Uuid) -> Result<Option<ActiveSession>, String> {
-        let (response_tx, mut response_rx) = channel::<Result<Option<ActiveSession>, String>>(1);
-
-        self.sender
-            .send(StorageMessage::LoadSession {
+        self.send_request(
+            OperationType::Fast,
+            || format!("LoadSession {session_id}"),
+            |response_tx| StorageMessage::LoadSession {
                 session_id,
                 response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
-            OperationType::Fast,
-            &format!("LoadSession {}", session_id),
-            response_rx.recv(),
+            },
         )
         .await
     }
 
     pub async fn save_session(&self, session: ActiveSession) -> Result<(), String> {
-        let (response_tx, mut response_rx) = channel::<Result<(), String>>(1);
         let session_id = session.id();
-
-        self.sender
-            .send(StorageMessage::SaveSession {
+        self.send_request(
+            OperationType::Medium,
+            || format!("SaveSession {session_id}"),
+            |response_tx| StorageMessage::SaveSession {
                 session: Box::new(session),
                 response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
-            OperationType::Medium,
-            &format!("SaveSession {}", session_id),
-            response_rx.recv(),
+            },
         )
         .await
     }
 
     /// Clear all entities and relationships for a session from storage.
     async fn clear_session_entities(&self, session_id: Uuid) -> Result<(), String> {
-        let (response_tx, mut response_rx) = channel::<Result<(), String>>(1);
-
-        self.sender
-            .send(StorageMessage::ClearSessionEntities {
+        self.send_request(
+            OperationType::Medium,
+            || format!("ClearSessionEntities {session_id}"),
+            |response_tx| StorageMessage::ClearSessionEntities {
                 session_id,
                 response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
-            OperationType::Medium,
-            &format!("ClearSessionEntities {}", session_id),
-            response_rx.recv(),
+            },
         )
         .await
     }
 
     /// Rebuild entity graph for a session by clearing it and replaying all stored updates.
     /// Returns (entities_before, entities_after) counts.
-    pub async fn rebuild_entity_graph(
-        &self,
-        session_id: Uuid,
-    ) -> Result<(usize, usize), String> {
-        // Load session
-        let session = self
+    pub async fn rebuild_entity_graph(&self, session_id: Uuid) -> Result<(usize, usize), String> {
+        let mut session = self
             .load_session(session_id)
             .await?
-            .ok_or_else(|| format!("Session {} not found", session_id))?;
+            .ok_or_else(|| format!("Session {session_id} not found"))?;
 
-        let mut session = session;
         let stats = session
             .rebuild_entity_graph_from_updates()
             .await
-            .map_err(|e| format!("Rebuild failed: {}", e))?;
+            .map_err(|e| format!("Rebuild failed: {e}"))?;
 
-        // Clear old entities/relationships from storage before saving rebuilt graph
         self.clear_session_entities(session_id).await?;
-
-        // Save rebuilt session (with clean entity graph)
         self.save_session(session).await?;
 
         Ok(stats)
@@ -288,19 +253,13 @@ impl StorageActorHandle {
     }
 
     pub async fn delete_session(&self, session_id: Uuid) -> Result<bool, String> {
-        let (response_tx, mut response_rx) = channel::<Result<bool, String>>(1);
-
-        self.sender
-            .send(StorageMessage::DeleteSession {
+        self.send_request(
+            OperationType::Medium,
+            || format!("DeleteSession {session_id}"),
+            |response_tx| StorageMessage::DeleteSession {
                 session_id,
                 response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
-            OperationType::Medium,
-            &format!("DeleteSession {}", session_id),
-            response_rx.recv(),
+            },
         )
         .await
     }
@@ -310,70 +269,56 @@ impl StorageActorHandle {
         session_id: Uuid,
         entity_name: &str,
     ) -> Result<(), String> {
-        let (response_tx, mut response_rx) = channel::<Result<(), String>>(1);
-
-        self.sender
-            .send(StorageMessage::DeleteEntity {
-                session_id,
-                entity_name: entity_name.to_string(),
-                response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
+        let entity_name = entity_name.to_string();
+        let entity_name_for_err = entity_name.clone();
+        self.send_request(
             OperationType::Medium,
-            &format!("DeleteEntity {}/{}", session_id, entity_name),
-            response_rx.recv(),
+            || format!("DeleteEntity {session_id}/{entity_name_for_err}"),
+            |response_tx| StorageMessage::DeleteEntity {
+                session_id,
+                entity_name,
+                response_tx,
+            },
         )
         .await
     }
 
     pub async fn list_sessions(&self) -> Result<Vec<Uuid>, String> {
-        let (response_tx, mut response_rx) = channel::<Result<Vec<Uuid>, String>>(1);
-
-        self.sender
-            .send(StorageMessage::ListSessions { response_tx })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(OperationType::Slow, "ListSessions", response_rx.recv())
-            .await
+        self.send_request(
+            OperationType::Slow,
+            || "ListSessions".to_string(),
+            |response_tx| StorageMessage::ListSessions { response_tx },
+        )
+        .await
     }
 
     pub async fn save_checkpoint(
         &self,
         checkpoint: &crate::storage::rocksdb_storage::SessionCheckpoint,
     ) -> Result<(), String> {
-        let (response_tx, mut response_rx) = channel::<Result<(), String>>(1);
-
-        self.sender
-            .send(StorageMessage::SaveCheckpoint {
-                checkpoint: checkpoint.clone(),
+        let checkpoint = checkpoint.clone();
+        self.send_request(
+            OperationType::Medium,
+            || "SaveCheckpoint".to_string(),
+            |response_tx| StorageMessage::SaveCheckpoint {
+                checkpoint,
                 response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(OperationType::Medium, "SaveCheckpoint", response_rx.recv())
-            .await
+            },
+        )
+        .await
     }
 
     pub async fn load_checkpoint(
         &self,
-        checkpoint_id: uuid::Uuid,
+        checkpoint_id: Uuid,
     ) -> Result<crate::storage::rocksdb_storage::SessionCheckpoint, String> {
-        let (response_tx, mut response_rx) =
-            channel::<Result<crate::storage::rocksdb_storage::SessionCheckpoint, String>>(1);
-
-        self.sender
-            .send(StorageMessage::LoadCheckpoint {
+        self.send_request(
+            OperationType::Fast,
+            || format!("LoadCheckpoint {checkpoint_id}"),
+            |response_tx| StorageMessage::LoadCheckpoint {
                 checkpoint_id,
                 response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
-            OperationType::Fast,
-            &format!("LoadCheckpoint {}", checkpoint_id),
-            response_rx.recv(),
+            },
         )
         .await
     }
@@ -385,22 +330,19 @@ impl StorageActorHandle {
         description: &str,
         session_ids: &[Uuid],
     ) -> Result<(), String> {
-        let (response_tx, mut response_rx) = channel::<Result<(), String>>(1);
-
-        self.sender
-            .send(StorageMessage::SaveWorkspaceMetadata {
-                workspace_id,
-                name: name.to_string(),
-                description: description.to_string(),
-                session_ids: session_ids.to_vec(),
-                response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
+        let name = name.to_string();
+        let description = description.to_string();
+        let session_ids = session_ids.to_vec();
+        self.send_request(
             OperationType::Medium,
-            "SaveWorkspaceMetadata",
-            response_rx.recv(),
+            || "SaveWorkspaceMetadata".to_string(),
+            |response_tx| StorageMessage::SaveWorkspaceMetadata {
+                workspace_id,
+                name,
+                description,
+                session_ids,
+                response_tx,
+            },
         )
         .await
     }
@@ -408,31 +350,22 @@ impl StorageActorHandle {
     pub async fn list_all_workspaces(
         &self,
     ) -> Result<Vec<crate::storage::rocksdb_storage::StoredWorkspace>, String> {
-        let (response_tx, mut response_rx) =
-            channel::<Result<Vec<crate::storage::rocksdb_storage::StoredWorkspace>, String>>(1);
-
-        self.sender
-            .send(StorageMessage::ListAllWorkspaces { response_tx })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(OperationType::Slow, "ListAllWorkspaces", response_rx.recv())
-            .await
+        self.send_request(
+            OperationType::Slow,
+            || "ListAllWorkspaces".to_string(),
+            |response_tx| StorageMessage::ListAllWorkspaces { response_tx },
+        )
+        .await
     }
 
     pub async fn delete_workspace(&self, workspace_id: Uuid) -> Result<(), String> {
-        let (response_tx, mut response_rx) = channel::<Result<(), String>>(1);
-
-        self.sender
-            .send(StorageMessage::DeleteWorkspace {
+        self.send_request(
+            OperationType::Medium,
+            || format!("DeleteWorkspace {workspace_id}"),
+            |response_tx| StorageMessage::DeleteWorkspace {
                 workspace_id,
                 response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
-            OperationType::Medium,
-            &format!("DeleteWorkspace {}", workspace_id),
-            response_rx.recv(),
+            },
         )
         .await
     }
@@ -443,21 +376,15 @@ impl StorageActorHandle {
         session_id: Uuid,
         role: crate::workspace::SessionRole,
     ) -> Result<(), String> {
-        let (response_tx, mut response_rx) = channel::<Result<(), String>>(1);
-
-        self.sender
-            .send(StorageMessage::AddSessionToWorkspace {
+        self.send_request(
+            OperationType::Fast,
+            || "AddSessionToWorkspace".to_string(),
+            |response_tx| StorageMessage::AddSessionToWorkspace {
                 workspace_id,
                 session_id,
                 role,
                 response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
-            OperationType::Fast,
-            "AddSessionToWorkspace",
-            response_rx.recv(),
+            },
         )
         .await
     }
@@ -467,20 +394,14 @@ impl StorageActorHandle {
         workspace_id: Uuid,
         session_id: Uuid,
     ) -> Result<(), String> {
-        let (response_tx, mut response_rx) = channel::<Result<(), String>>(1);
-
-        self.sender
-            .send(StorageMessage::RemoveSessionFromWorkspace {
+        self.send_request(
+            OperationType::Fast,
+            || "RemoveSessionFromWorkspace".to_string(),
+            |response_tx| StorageMessage::RemoveSessionFromWorkspace {
                 workspace_id,
                 session_id,
                 response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
-            OperationType::Fast,
-            "RemoveSessionFromWorkspace",
-            response_rx.recv(),
+            },
         )
         .await
     }
@@ -490,20 +411,14 @@ impl StorageActorHandle {
         session_id: Uuid,
         updates: Vec<crate::core::context_update::ContextUpdate>,
     ) -> Result<(), String> {
-        let (response_tx, mut response_rx) = channel::<Result<(), String>>(1);
-
-        self.sender
-            .send(StorageMessage::BatchSaveUpdates {
+        self.send_request(
+            OperationType::Medium,
+            || format!("BatchSaveUpdates {session_id}"),
+            |response_tx| StorageMessage::BatchSaveUpdates {
                 session_id,
                 updates,
                 response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
-            OperationType::Medium,
-            &format!("BatchSaveUpdates {}", session_id),
-            response_rx.recv(),
+            },
         )
         .await
     }
@@ -513,20 +428,14 @@ impl StorageActorHandle {
         session_id: Uuid,
         source_ref: SourceReference,
     ) -> Result<(), String> {
-        let (response_tx, mut response_rx) = channel(1);
-
-        self.sender
-            .send(StorageMessage::RegisterSource {
+        self.send_request(
+            OperationType::Medium,
+            || "RegisterSource".to_string(),
+            |response_tx| StorageMessage::RegisterSource {
                 session_id,
                 source_ref,
                 response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
-            OperationType::Medium,
-            "RegisterSource",
-            response_rx.recv(),
+            },
         )
         .await
     }
@@ -547,22 +456,17 @@ impl StorageActorHandle {
         ast_hash: Option<Vec<u8>>,
         symbol_name: Option<String>,
     ) -> Result<FreshnessEntry, String> {
-        let (response_tx, mut response_rx) = channel(1);
-
-        self.sender
-            .send(StorageMessage::CheckFreshness {
-                entry_id: entry_id.clone(),
+        let entry_id_for_err = entry_id.clone();
+        self.send_request(
+            OperationType::Fast,
+            || format!("CheckFreshness {entry_id_for_err}"),
+            |response_tx| StorageMessage::CheckFreshness {
+                entry_id,
                 file_hash,
                 ast_hash,
                 symbol_name,
                 response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
-            OperationType::Fast,
-            &format!("CheckFreshness {}", entry_id),
-            response_rx.recv(),
+            },
         )
         .await
     }
@@ -571,40 +475,26 @@ impl StorageActorHandle {
         &self,
         entries: Vec<(String, Vec<u8>, Option<Vec<u8>>, Option<String>)>,
     ) -> Result<Vec<FreshnessEntry>, String> {
-        let (response_tx, mut response_rx) = channel(1);
-
-        self.sender
-            .send(StorageMessage::CheckFreshnessBatch {
+        self.send_request(
+            OperationType::Medium,
+            || "CheckFreshnessBatch".to_string(),
+            |response_tx| StorageMessage::CheckFreshnessBatch {
                 entries,
                 response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
-            OperationType::Medium,
-            "CheckFreshnessBatch",
-            response_rx.recv(),
+            },
         )
         .await
     }
 
-    pub async fn invalidate_source(
-        &self,
-        file_path: &str,
-    ) -> Result<u32, String> {
-        let (response_tx, mut response_rx) = channel(1);
-
-        self.sender
-            .send(StorageMessage::InvalidateSource {
-                file_path: file_path.to_string(),
-                response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
+    pub async fn invalidate_source(&self, file_path: &str) -> Result<u32, String> {
+        let file_path = file_path.to_string();
+        self.send_request(
             OperationType::Medium,
-            "InvalidateSource",
-            response_rx.recv(),
+            || "InvalidateSource".to_string(),
+            |response_tx| StorageMessage::InvalidateSource {
+                file_path,
+                response_tx,
+            },
         )
         .await
         .map_err(|e: String| {
@@ -618,20 +508,14 @@ impl StorageActorHandle {
         from: SymbolId,
         to_symbols: Vec<SymbolId>,
     ) -> Result<u32, String> {
-        let (response_tx, mut response_rx) = channel(1);
-
-        self.sender
-            .send(StorageMessage::RegisterSymbolDependencies {
+        self.send_request(
+            OperationType::Medium,
+            || "RegisterSymbolDependencies".to_string(),
+            |response_tx| StorageMessage::RegisterSymbolDependencies {
                 from,
                 to_symbols,
                 response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
-            OperationType::Medium,
-            "RegisterSymbolDependencies",
-            response_rx.recv(),
+            },
         )
         .await
     }
@@ -642,21 +526,15 @@ impl StorageActorHandle {
         new_ast_hash: Vec<u8>,
         max_depth: u32,
     ) -> Result<CascadeInvalidateReport, String> {
-        let (response_tx, mut response_rx) = channel(1);
-
-        self.sender
-            .send(StorageMessage::CascadeInvalidate {
+        self.send_request(
+            OperationType::Medium,
+            || "CascadeInvalidate".to_string(),
+            |response_tx| StorageMessage::CascadeInvalidate {
                 changed,
                 new_ast_hash,
                 max_depth,
                 response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
-            OperationType::Medium,
-            "CascadeInvalidate",
-            response_rx.recv(),
+            },
         )
         .await
     }
@@ -665,19 +543,14 @@ impl StorageActorHandle {
         &self,
         file_path: &str,
     ) -> Result<Vec<crate::storage::traits::StaleEntryInfo>, String> {
-        let (response_tx, mut response_rx) = channel(1);
-
-        self.sender
-            .send(StorageMessage::GetStaleEntriesBySource {
-                file_path: file_path.to_string(),
-                response_tx,
-            })
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
-        self.execute_with_timeout(
+        let file_path = file_path.to_string();
+        self.send_request(
             OperationType::Medium,
-            "GetStaleEntriesBySource",
-            response_rx.recv(),
+            || "GetStaleEntriesBySource".to_string(),
+            |response_tx| StorageMessage::GetStaleEntriesBySource {
+                file_path,
+                response_tx,
+            },
         )
         .await
     }
@@ -694,10 +567,7 @@ impl StorageActor {
             storage,
             receiver,
             performance_monitor,
-            operation_count: AtomicU64::new(0),
-            load_count: AtomicU64::new(0),
-            save_count: AtomicU64::new(0),
-            delete_count: AtomicU64::new(0),
+            persist_locks: Arc::new(DashMap::new()),
         };
 
         // Create confirmation channel for startup synchronization
@@ -705,12 +575,10 @@ impl StorageActor {
 
         // Spawn async actor task with startup confirmation
         tokio::spawn(async move {
-            // Send confirmation that actor is ready
             let _ = startup_tx.send(());
             actor.run_async().await;
         });
 
-        // Wait for actor to be ready before returning handle
         startup_rx
             .await
             .map_err(|_| "Storage actor failed to start".to_string())?;
@@ -735,50 +603,48 @@ impl StorageActor {
     }
 
     async fn handle_message_async(&self, message: StorageMessage) {
-        tracing::info!(
-            "StorageActor: Handling message: {:?}",
+        trace!(
+            "StorageActor: handling message {:?}",
             std::mem::discriminant(&message)
         );
         let _timer = self.performance_monitor.start_timer("storage_operation");
-        self.operation_count.fetch_add(1, Ordering::Relaxed);
 
         match message {
             StorageMessage::LoadSession {
                 session_id,
                 response_tx,
             } => {
-                self.load_count.fetch_add(1, Ordering::Relaxed);
-                debug!("StorageActor: Loading session {}", session_id);
                 let result = match self.storage.load_session(session_id).await {
                     Ok(session) => Ok(Some(session)),
                     Err(_) => Ok(None), // Session not found is OK, not an error
                 };
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::SaveSession {
                 session,
                 response_tx,
             } => {
-                self.save_count.fetch_add(1, Ordering::Relaxed);
                 let result = self
                     .storage
                     .save_session(&session)
                     .await
                     .map_err(|e| e.to_string());
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::DeleteSession {
                 session_id,
                 response_tx,
             } => {
-                self.delete_count.fetch_add(1, Ordering::Relaxed);
                 let result = self
                     .storage
                     .delete_session(session_id)
                     .await
                     .map(|_| true)
                     .map_err(|e| e.to_string());
-                let _ = response_tx.send(result).await;
+                // Drop the persist lock so it doesn't leak. Any in-flight persist
+                // still holds its Arc<Mutex> clone so it'll finish cleanly.
+                self.persist_locks.remove(&session_id);
+                let _ = response_tx.send(result);
             }
             StorageMessage::ClearSessionEntities {
                 session_id,
@@ -789,43 +655,27 @@ impl StorageActor {
                     .clear_session_entities(session_id)
                     .await
                     .map_err(|e| e.to_string());
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::DeleteEntity {
                 session_id,
                 entity_name,
                 response_tx,
             } => {
-                self.delete_count.fetch_add(1, Ordering::Relaxed);
                 let result = self
                     .storage
                     .delete_entity(session_id, &entity_name)
                     .await
                     .map_err(|e| e.to_string());
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::ListSessions { response_tx } => {
-                self.load_count.fetch_add(1, Ordering::Relaxed);
                 let result = self
                     .storage
                     .list_sessions()
                     .await
                     .map_err(|e| e.to_string());
-                let _ = response_tx.send(result).await;
-            }
-            StorageMessage::GetStats { response_tx } => {
-                let stats = StorageStats {
-                    total_operations: self.operation_count.load(Ordering::Relaxed),
-                    load_operations: self.load_count.load(Ordering::Relaxed),
-                    save_operations: self.save_count.load(Ordering::Relaxed),
-                    delete_operations: self.delete_count.load(Ordering::Relaxed),
-                    avg_operation_time_ns: 0,
-                    last_operation_timestamp: SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .expect("System time before UNIX epoch")
-                        .as_secs(),
-                };
-                let _ = response_tx.send(stats).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::SaveCheckpoint {
                 checkpoint,
@@ -836,7 +686,7 @@ impl StorageActor {
                     .save_checkpoint(&checkpoint)
                     .await
                     .map_err(|e| e.to_string());
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::LoadCheckpoint {
                 checkpoint_id,
@@ -847,7 +697,7 @@ impl StorageActor {
                     .load_checkpoint(checkpoint_id)
                     .await
                     .map_err(|e| e.to_string());
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::SaveWorkspaceMetadata {
                 workspace_id,
@@ -861,7 +711,7 @@ impl StorageActor {
                     .save_workspace_metadata(workspace_id, &name, &description, &session_ids)
                     .await
                     .map_err(|e| e.to_string());
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::DeleteWorkspace {
                 workspace_id,
@@ -872,7 +722,7 @@ impl StorageActor {
                     .delete_workspace(workspace_id)
                     .await
                     .map_err(|e| e.to_string());
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::AddSessionToWorkspace {
                 workspace_id,
@@ -885,7 +735,7 @@ impl StorageActor {
                     .add_session_to_workspace(workspace_id, session_id, role)
                     .await
                     .map_err(|e| e.to_string());
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::RemoveSessionFromWorkspace {
                 workspace_id,
@@ -897,7 +747,7 @@ impl StorageActor {
                     .remove_session_from_workspace(workspace_id, session_id)
                     .await
                     .map_err(|e| e.to_string());
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::ListAllWorkspaces { response_tx } => {
                 let result = self
@@ -905,7 +755,7 @@ impl StorageActor {
                     .list_workspaces()
                     .await
                     .map_err(|e| e.to_string());
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::BatchSaveUpdates {
                 session_id,
@@ -917,38 +767,7 @@ impl StorageActor {
                     .batch_save_updates(session_id, updates)
                     .await
                     .map_err(|e| e.to_string());
-                let _ = response_tx.send(result).await;
-            }
-            StorageMessage::FindRelatedEntities {
-                session_id,
-                entity_name,
-                response_tx,
-            } => {
-                // Load session and access its entity graph
-                let result = match self.storage.load_session(session_id).await {
-                    Ok(session) => {
-                        let related = session.entity_graph.find_related_entities(&entity_name);
-                        Ok(related)
-                    }
-                    Err(e) => Err(e.to_string()),
-                };
-                let _ = response_tx.send(result).await;
-            }
-            StorageMessage::FindShortestPath {
-                session_id,
-                from_entity,
-                to_entity,
-                response_tx,
-            } => {
-                // Load session and access its entity graph
-                let result = match self.storage.load_session(session_id).await {
-                    Ok(session) => {
-                        let path = session.entity_graph.find_shortest_path(&from_entity, &to_entity);
-                        Ok(path)
-                    }
-                    Err(e) => Err(e.to_string()),
-                };
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::RegisterSource {
                 session_id,
@@ -962,11 +781,9 @@ impl StorageActor {
                 .await
                 {
                     Ok(inner) => inner.map_err(|e| e.to_string()),
-                    Err(_) => Err(
-                        "register_source timed out after 5s".to_string()
-                    ),
+                    Err(_) => Err("register_source timed out after 5s".to_string()),
                 };
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::CheckFreshness {
                 entry_id,
@@ -985,15 +802,18 @@ impl StorageActor {
                     )
                     .await
                     .map_err(|e| e.to_string());
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
-            StorageMessage::CheckFreshnessBatch { entries, response_tx } => {
+            StorageMessage::CheckFreshnessBatch {
+                entries,
+                response_tx,
+            } => {
                 let result = self
                     .storage
                     .check_freshness_batch(entries)
                     .await
                     .map_err(|e| e.to_string());
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::InvalidateSource {
                 file_path,
@@ -1004,19 +824,24 @@ impl StorageActor {
                     .invalidate_source(&file_path)
                     .await
                     .map_err(|e: anyhow::Error| e.to_string());
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::PersistSessionAndUpdate {
                 session,
                 session_id,
                 updates,
             } => {
-                self.save_count.fetch_add(1, Ordering::Relaxed);
-                // Spawn as background task so we don't block the actor queue.
-                // PersistSessionAndUpdate is fire-and-forget (no response_tx),
-                // so it's safe to run outside the actor loop.
+                // Spawn as background task so we don't block the actor queue, BUT
+                // serialize per-session via a tokio Mutex so concurrent persists
+                // for the same session can't write the session blob out of order.
                 let storage = Arc::clone(&self.storage);
+                let lock = self
+                    .persist_locks
+                    .entry(session_id)
+                    .or_insert_with(|| Arc::new(Mutex::new(())))
+                    .clone();
                 tokio::spawn(async move {
+                    let _guard = lock.lock().await;
                     if let Err(e) = storage
                         .save_session_with_updates(&session, session_id, updates)
                         .await
@@ -1040,7 +865,7 @@ impl StorageActor {
                     .register_symbol_dependencies(from, to_symbols)
                     .await
                     .map_err(|e| e.to_string());
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::CascadeInvalidate {
                 changed,
@@ -1053,7 +878,7 @@ impl StorageActor {
                     .cascade_invalidate(changed, new_ast_hash, max_depth)
                     .await
                     .map_err(|e| e.to_string());
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::GetStaleEntriesBySource {
                 file_path,
@@ -1064,7 +889,7 @@ impl StorageActor {
                     .get_stale_entries_by_source(&file_path)
                     .await
                     .map_err(|e: anyhow::Error| e.to_string());
-                let _ = response_tx.send(result).await;
+                let _ = response_tx.send(result);
             }
             StorageMessage::Shutdown => {} // Handled in main loop
         }
