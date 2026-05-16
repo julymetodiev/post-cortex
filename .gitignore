@@ -32,7 +32,7 @@ Thumbs.db
 post_cortex_data
 logs
 dev.txt
-vector_db/
+/vector_db/
 # Ignore Python and shell test files but keep Rust integration tests
 tests/*.py
 tests/*.sh
