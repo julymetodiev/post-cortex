@@ -163,7 +163,14 @@ pub fn validate_scope(scope: &str) -> Result<(), CoercionError> {
 /// * `Ok(())` if the action is valid
 /// * `Err(CoercionError)` with helpful message if invalid
 pub fn validate_session_action(action: &str) -> Result<(), CoercionError> {
-    const VALID_ACTIONS: &[&str] = &["create", "list"];
+    const VALID_ACTIONS: &[&str] = &[
+        "create",
+        "list",
+        "load",
+        "search",
+        "update_metadata",
+        "delete",
+    ];
 
     if VALID_ACTIONS.contains(&action.to_lowercase().as_str()) {
         Ok(())
@@ -175,7 +182,7 @@ pub fn validate_session_action(action: &str) -> Result<(), CoercionError> {
         )
         .with_parameter_path("action".to_string())
         .with_expected_type(&format!("one of: {}", VALID_ACTIONS.join(", ")))
-        .with_hint("Use 'create' to create a new session with optional name and description, or 'list' to see all sessions"))
+        .with_hint("Valid actions: create (name, description), list, load (session_id), search (query), update_metadata (session_id + name/description), delete (session_id)"))
     }
 }
 

@@ -516,6 +516,28 @@ impl ActiveSession {
         Ok(())
     }
 
+    /// Remove a single incremental update by its ContextUpdate.id (entry_id).
+    ///
+    /// Cleans up the hot context cache, the warm-compressed cache, and the
+    /// canonical `incremental_updates` vector. Returns true if the entry existed.
+    /// Caller is responsible for persisting the session and (optionally) rebuilding
+    /// the entity graph if relations from this update should be revoked.
+    pub fn remove_update_by_id(&mut self, entry_id: &Uuid) -> bool {
+        let hot_removed = self.hot_context.remove_by_id(entry_id);
+
+        let warm = Arc::make_mut(&mut self.warm_context);
+        let before = warm.len();
+        warm.retain(|c| c.update.id != *entry_id);
+        let warm_removed = before != warm.len();
+
+        let incr = Arc::make_mut(&mut self.incremental_updates);
+        let before = incr.len();
+        incr.retain(|u| u.id != *entry_id);
+        let incr_removed = before != incr.len();
+
+        hot_removed || warm_removed || incr_removed
+    }
+
     /// Remove incremental updates whose `related_code.file_path` matches `file_path`.
     /// Also removes the corresponding code_references entry.
     /// Returns the number of updates removed.

@@ -5,7 +5,7 @@
 ## Session
 
 **Session ID**  `bf52f62e-8e26-4e9e-8501-c42753d9a9ee`
-**Workspace ID** | `c7c6dfa7-85c6-42b0-9b37-f2034c569a71`
+**Workspace ID** | `ba76f569-a50d-46cd-a5dd-7c5577f12d1f`
 
 ## Rules
 

@@ -1,15 +1,18 @@
 // Copyright (c) 2025 Julius ML
 // MIT License
 
-//! Post-Cortex MCP Service - Consolidated 6-tool API
+//! Post-Cortex MCP Service - Consolidated 9-tool API
 //!
 //! Tools:
-//! 1. session - create/list sessions
+//! 1. session - create/list/load/search/update_metadata/delete sessions
 //! 2. update_conversation_context - single or bulk updates
-//! 3. semantic_search - unified search with scope
+//! 3. semantic_search - unified search with scope (structured payload)
 //! 4. get_structured_summary - summary with optional sections
 //! 5. query_conversation_context - flexible queries
 //! 6. manage_workspace - workspace operations
+//! 7. assemble_context - graph-aware retrieval (semantic + traversal + impact)
+//! 8. manage_entity - delete entities from a session graph
+//! 9. admin - daemon health, vectorization, checkpoints
 
 use crate::ConversationMemorySystem;
 use crate::daemon::coerce::{CoercionError, coerce_and_validate};
@@ -40,8 +43,125 @@ pub struct PostCortexService {
 }
 
 // =============================================================================
+// Tool 7: assemble_context
+// =============================================================================
+
+#[derive(Deserialize, JsonSchema, Debug)]
+pub struct AssembleContextRequest {
+    #[schemars(description = r#"Session UUID. Required when workspace_id is not provided.
+
+Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+Note: If both session_id and workspace_id are provided, workspace_id takes precedence
+(context is merged across all sessions in the workspace)."#)]
+    pub session_id: Option<String>,
+    #[schemars(
+        description = r#"Workspace UUID. When provided, context is merged across all sessions in the workspace.
+
+Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+Note: Takes precedence over session_id."#
+    )]
+    pub workspace_id: Option<String>,
+    #[schemars(description = r#"The query/topic to assemble context for.
+
+Example: "How does authentication interact with the user profile service?"
+
+Note: Entity extraction runs on this query to seed graph traversal."#)]
+    pub query: String,
+    #[schemars(
+        description = r#"Token budget for the assembled context (default: 4000).
+
+Examples:
+- 2000: tight context window
+- 4000: default (matches Axon's per-call budget)
+- 8000: extended chains / orchestration
+
+Note: Must be > 0. Items are packed highest-score-first until budget is consumed."#
+    )]
+    pub token_budget: Option<u32>,
+}
+
+// =============================================================================
+// Tool 8: manage_entity
+// =============================================================================
+
+#[derive(Deserialize, JsonSchema, Debug)]
+pub struct ManageEntityRequest {
+    #[schemars(description = r#"Action to perform on session content.
+
+Valid values:
+- delete: Remove an entity from the session (cascades typed edges). Requires entity_name.
+- delete_update: Remove a single context update (ghost / bad row) by entry_id. Requires entry_id.
+
+Note: Must be lowercase. Additional actions may be added later."#)]
+    pub action: String,
+    #[schemars(description = r#"Session UUID containing the entity/update.
+
+Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"#)]
+    pub session_id: String,
+    #[schemars(description = r#"Entity name to operate on (required for action=delete).
+
+Example: "RocksDB"
+
+Note: Names are matched case-insensitively in the entity graph."#)]
+    pub entity_name: Option<String>,
+    #[schemars(description = r#"Context-update id (required for action=delete_update).
+
+Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+Note: This is the `entry_id` returned by `assemble_context` items, or the id of a
+ContextUpdate stored in the session. Use it to remove ghost / mis-shaped writes."#)]
+    pub entry_id: Option<String>,
+}
+
+// =============================================================================
+// Tool 9: admin
+// =============================================================================
+
+#[derive(Deserialize, JsonSchema, Debug)]
+pub struct AdminRequest {
+    #[schemars(description = r#"Administrative action on the Post-Cortex daemon.
+
+Valid values:
+- health: Report daemon health (active sessions, embeddings status, version)
+- vectorize_session: Backfill embeddings for an existing session (requires session_id)
+- vectorize_stats: Return embedding-pipeline statistics as JSON
+- create_checkpoint: Persist a snapshot of a session for later recall (requires session_id)
+
+Examples:
+✅ {"action": "health"}
+✅ {"action": "vectorize_session", "session_id": "60c598e2-..."}
+✅ {"action": "vectorize_stats"}
+✅ {"action": "create_checkpoint", "session_id": "60c598e2-..."}
+
+Note: Must be lowercase."#)]
+    pub action: String,
+    #[schemars(description = r#"Session UUID for vectorize_session and create_checkpoint.
+
+Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"#)]
+    pub session_id: Option<String>,
+}
+
+// =============================================================================
 // Helper Functions
 // =============================================================================
+
+/// Emit an MCPToolResult through CallToolResult, preserving structured data.
+///
+/// When `result.data` is present, the structured JSON payload is appended as a
+/// second `Content::text` item so MCP clients keep access to scores, snippets
+/// and entity tags instead of the human-readable summary alone.
+fn mcp_result_to_call_result(result: MCPToolResult) -> CallToolResult {
+    let mut contents = vec![Content::text(result.message)];
+    if let Some(data) = result.data {
+        contents.push(Content::text(format!(
+            "\n\nResults:\n{}",
+            serde_json::to_string_pretty(&data).unwrap_or_default()
+        )));
+    }
+    CallToolResult::success(contents)
+}
 
 async fn check_session_exists_for_dry_run(
     memory_system: &Arc<ConversationMemorySystem>,
@@ -70,29 +190,53 @@ async fn check_session_exists_for_dry_run(
 
 #[derive(Deserialize, JsonSchema, Debug)]
 pub struct SessionRequest {
-    #[schemars(description = r#"Action to perform: 'create' or 'list'.
+    #[schemars(description = r#"Action to perform on sessions.
+
+Valid values:
+- create: Create a new session and return a UUID (optional: name, description)
+- list: List all existing sessions
+- load: Load metadata for a single session (requires session_id)
+- search: Find sessions by name or description substring (requires query)
+- update_metadata: Update session name and/or description (requires session_id; provide name and/or description)
+- delete: Permanently delete a session and its updates (requires session_id)
 
 Examples:
-✅ "create" - Creates a new session and returns a UUID
-✅ "list" - Lists all existing sessions
+✅ {"action": "create", "name": "Auth", "description": "OAuth2 work"}
+✅ {"action": "load", "session_id": "60c598e2-..."}
+✅ {"action": "search", "query": "auth"}
+✅ {"action": "update_metadata", "session_id": "60c598e2-...", "name": "New name"}
+✅ {"action": "delete", "session_id": "60c598e2-..."}
 
-Note: Must be lowercase. Use 'create' to get a session_id before using other tools."#)]
+Note: Must be lowercase."#)]
     pub action: String,
-    #[schemars(description = r#"Optional session name (for create action).
+    #[schemars(description = r#"Session name (used by create and update_metadata).
 
 Examples:
 - "Feature: Authentication"
 - "Bug Fix: Memory Leak"
-- "Planning: API Design"
 
-Note: Only used when action='create'. Helps identify sessions later."#)]
+Note: For update_metadata, only provided fields are changed."#)]
     pub name: Option<String>,
-    #[schemars(description = r#"Optional session description (for create action).
+    #[schemars(description = r#"Session description (used by create and update_metadata).
 
 Example: "Working on implementing OAuth2 login flow"
 
-Note: Only used when action='create'. Provides context for the session."#)]
+Note: For update_metadata, only provided fields are changed."#)]
     pub description: Option<String>,
+    #[schemars(description = r#"Session UUID (required for load, update_metadata, delete).
+
+Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+Example: "60c598e2-d602-4e07-a328-c458006d48c7""#)]
+    pub session_id: Option<String>,
+    #[schemars(description = r#"Search query for the search action.
+
+Examples:
+- "authentication"
+- "image pipeline"
+
+Note: Matches session name or description (case-insensitive substring)."#)]
+    pub query: Option<String>,
 }
 
 // =============================================================================
@@ -396,7 +540,7 @@ pub struct QueryConversationContextRequest {
     #[schemars(description = "Session ID")]
     pub session_id: String,
     #[schemars(
-        description = "Query type: find_related_entities, get_entity_context, search_updates, entity_importance, entity_network, etc."
+        description = "Query type. Supported: find_related_entities, get_entity_context, search_updates, entity_importance, entity_network, find_related_content (topic, max_results), key_decisions, key_insights (limit), session_statistics, structured_summary, decisions, open_questions, related_entities, all_entities, trace_relationships, get_most_important_entities, get_recently_mentioned_entities, analyze_entity_importance, find_entities_by_type, assemble_context, recent_changes, code_references."
     )]
     pub query_type: String,
     #[schemars(description = "Query parameters as key-value pairs")]
@@ -537,7 +681,7 @@ fn parse_date_range(
 #[tool_router]
 impl PostCortexService {
     pub fn new(memory_system: Arc<ConversationMemorySystem>) -> Self {
-        info!("Initializing Post-Cortex MCP Service (6 consolidated tools)");
+        info!("Initializing Post-Cortex MCP Service (9 consolidated tools)");
         Self {
             memory_system,
             tool_router: Self::tool_router(),
@@ -548,7 +692,7 @@ impl PostCortexService {
     // Tool 1: session
     // =========================================================================
     #[tool(
-        description = "Manage sessions: create new session or list all sessions",
+        description = "Manage sessions. Actions: create, list, load, search, update_metadata, delete.",
         input_schema = rmcp::handler::server::common::schema_for_type::<SessionRequest>()
     )]
     async fn session(
@@ -557,12 +701,34 @@ impl PostCortexService {
     ) -> Result<CallToolResult, McpError> {
         let req: SessionRequest = coerce_and_validate(params.0).map_err(|e| {
             e.with_parameter_path("action".to_string())
-                .with_expected_type("one of: create, list")
-                .with_hint("Use 'create' to create a new session or 'list' to see all sessions")
+                .with_expected_type("one of: create, list, load, search, update_metadata, delete")
+                .with_hint("Valid actions: create (name, description), list, load (session_id), search (query), update_metadata (session_id + name/description), delete (session_id)")
                 .to_mcp_error()
         })?;
 
         validate_session_action(&req.action).map_err(|e| e.to_mcp_error())?;
+
+        let require_session_id =
+            |req: &SessionRequest, action: &str| -> Result<Uuid, McpError> {
+                let raw = req.session_id.as_ref().ok_or_else(|| {
+                    CoercionError::new(
+                        "Missing required parameter",
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "session_id required",
+                        ),
+                        None,
+                    )
+                    .with_parameter_path("session_id".to_string())
+                    .with_expected_type("UUID string (36 chars with hyphens)")
+                    .with_hint(&format!(
+                        "Action '{}' requires session_id (the session UUID)",
+                        action
+                    ))
+                    .to_mcp_error()
+                })?;
+                validate_session_id(raw).map_err(|e| e.to_mcp_error())
+            };
 
         match req.action.to_lowercase().as_str() {
             "create" => {
@@ -590,8 +756,115 @@ impl PostCortexService {
                 Ok(result) => Ok(CallToolResult::success(vec![Content::text(result.message)])),
                 Err(e) => Err(McpError::internal_error(e.to_string(), None)),
             },
+            "load" => {
+                let session_id = require_session_id(&req, "load")?;
+                let session_arc = self
+                    .memory_system
+                    .get_session(session_id)
+                    .await
+                    .map_err(|e| McpError::internal_error(format!("Session not found: {}", e), None))?;
+                let session = session_arc.load();
+
+                let info = serde_json::json!({
+                    "session_id": session_id.to_string(),
+                    "name": session.name().unwrap_or_default(),
+                    "description": session.description().unwrap_or_default(),
+                    "created_at_unix": session.created_at().timestamp(),
+                    "update_count": session.incremental_updates.len(),
+                });
+
+                Ok(mcp_result_to_call_result(MCPToolResult::success(
+                    format!("Loaded session {}", session_id),
+                    Some(info),
+                )))
+            }
+            "search" => {
+                let query = req.query.as_ref().ok_or_else(|| {
+                    CoercionError::new(
+                        "Missing required parameter",
+                        std::io::Error::new(std::io::ErrorKind::InvalidInput, "query required"),
+                        None,
+                    )
+                    .with_parameter_path("query".to_string())
+                    .with_expected_type("search query string")
+                    .with_hint(
+                        "Action 'search' requires a non-empty 'query' for name/description substring match",
+                    )
+                    .to_mcp_error()
+                })?;
+
+                if query.is_empty() {
+                    return Err(McpError::invalid_params(
+                        "query cannot be empty".to_string(),
+                        Some(serde_json::Value::String("query".to_string())),
+                    ));
+                }
+
+                let session_ids = self
+                    .memory_system
+                    .find_sessions_by_name_or_description(query)
+                    .await
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+                let mut entries = Vec::with_capacity(session_ids.len());
+                for sid in &session_ids {
+                    if let Ok(session_arc) = self.memory_system.get_session(*sid).await {
+                        let session = session_arc.load();
+                        entries.push(serde_json::json!({
+                            "session_id": sid.to_string(),
+                            "name": session.name().unwrap_or_default(),
+                            "description": session.description().unwrap_or_default(),
+                            "created_at_unix": session.created_at().timestamp(),
+                            "update_count": session.incremental_updates.len(),
+                        }));
+                    }
+                }
+
+                Ok(mcp_result_to_call_result(MCPToolResult::success(
+                    format!("Found {} matching sessions", entries.len()),
+                    Some(serde_json::json!({ "query": query, "sessions": entries })),
+                )))
+            }
+            "update_metadata" => {
+                let session_id = require_session_id(&req, "update_metadata")?;
+                if req.name.is_none() && req.description.is_none() {
+                    return Err(McpError::invalid_params(
+                        "update_metadata requires at least one of 'name' or 'description'"
+                            .to_string(),
+                        None,
+                    ));
+                }
+                match self
+                    .memory_system
+                    .update_session_metadata(session_id, req.name.clone(), req.description.clone())
+                    .await
+                {
+                    Ok(()) => Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Updated metadata for session {}",
+                        session_id
+                    ))])),
+                    Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+                }
+            }
+            "delete" => {
+                let session_id = require_session_id(&req, "delete")?;
+                match self.memory_system.storage_actor.delete_session(session_id).await {
+                    Ok(true) => Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Deleted session {}",
+                        session_id
+                    ))])),
+                    Ok(false) => Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Session {} was not present (no-op)",
+                        session_id
+                    ))])),
+                    Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+                }
+            }
             _ => Err(McpError::invalid_params(
-                format!("Invalid action '{}'. Use: create | list", req.action),
+                format!(
+                    "Invalid action '{}'. Use: create | list | load | search | update_metadata | delete",
+                    req.action
+                ),
                 None,
             )),
         }
@@ -835,9 +1108,7 @@ impl PostCortexService {
                 .await
                 .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-                Ok(CallToolResult::success(vec![Content::text(
-                    search_results.message,
-                )]))
+                Ok(mcp_result_to_call_result(search_results))
             }
             "workspace" => {
                 // For workspace search, we need to get workspace sessions and search with recency bias
@@ -887,6 +1158,20 @@ impl PostCortexService {
                     .map(|(id, _)| id)
                     .collect();
 
+                // semantic_search_multisession treats an empty session_ids slice as
+                // "no filter" and falls back to a global search. For workspace scope
+                // that's wrong — an empty workspace must return zero results.
+                if session_ids.is_empty() {
+                    return Ok(mcp_result_to_call_result(MCPToolResult::success(
+                        format!("Found 0 results (workspace {} has no sessions)", ws_uuid),
+                        Some(serde_json::json!({
+                            "results": [],
+                            "workspace_id": ws_uuid.to_string(),
+                            "note": "workspace has no sessions",
+                        })),
+                    )));
+                }
+
                 // Parse date range if provided
                 let date_range = parse_date_range(req.date_from.clone(), req.date_to.clone())?;
 
@@ -914,9 +1199,7 @@ impl PostCortexService {
                     Some(serde_json::json!({ "results": formatted })),
                 );
 
-                Ok(CallToolResult::success(vec![Content::text(
-                    search_results.message,
-                )]))
+                Ok(mcp_result_to_call_result(search_results))
             }
             "global" | _ => {
                 // Validate recency_bias if provided
@@ -935,9 +1218,7 @@ impl PostCortexService {
                 .await
                 .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-                Ok(CallToolResult::success(vec![Content::text(
-                    search_results.message,
-                )]))
+                Ok(mcp_result_to_call_result(search_results))
             }
         }
     }
@@ -1089,7 +1370,7 @@ impl PostCortexService {
     // Tool 5: query_conversation_context
     // =========================================================================
     #[tool(
-        description = "Query session data. Types: find_related_entities, get_entity_context, search_updates, entity_importance, entity_network, etc.",
+        description = "Query session data. Types include: find_related_entities, get_entity_context, search_updates, entity_importance, entity_network, find_related_content, key_decisions, key_insights, session_statistics, structured_summary, decisions, open_questions, assemble_context.",
         input_schema = rmcp::handler::server::common::schema_for_type::<QueryConversationContextRequest>()
     )]
     async fn query_conversation_context(
@@ -1142,7 +1423,7 @@ impl PostCortexService {
                 )
                 .await
                 {
-                    Ok(result) => Ok(CallToolResult::success(vec![Content::text(result.message)])),
+                    Ok(result) => Ok(mcp_result_to_call_result(result)),
                     Err(e) => Err(McpError::internal_error(e.to_string(), None)),
                 }
             }
@@ -1165,7 +1446,63 @@ impl PostCortexService {
                 )
                 .await
                 {
-                    Ok(result) => Ok(CallToolResult::success(vec![Content::text(result.message)])),
+                    Ok(result) => Ok(mcp_result_to_call_result(result)),
+                    Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+                }
+            }
+            "find_related_content" => {
+                #[cfg(feature = "embeddings")]
+                {
+                    let topic = req
+                        .parameters
+                        .get("topic")
+                        .cloned()
+                        .or_else(|| req.parameters.get("query").cloned())
+                        .unwrap_or_default();
+                    if topic.is_empty() {
+                        return Err(McpError::invalid_params(
+                            "find_related_content requires a non-empty 'topic' parameter".to_string(),
+                            Some(serde_json::Value::String("topic".to_string())),
+                        ));
+                    }
+                    let limit = req
+                        .parameters
+                        .get("max_results")
+                        .or_else(|| req.parameters.get("limit"))
+                        .and_then(|s: &String| s.parse().ok());
+
+                    match crate::tools::mcp::find_related_content(uuid, topic, limit).await {
+                        Ok(result) => Ok(mcp_result_to_call_result(result)),
+                        Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+                    }
+                }
+                #[cfg(not(feature = "embeddings"))]
+                {
+                    Err(McpError::internal_error(
+                        "find_related_content requires the 'embeddings' feature".to_string(),
+                        None,
+                    ))
+                }
+            }
+            "key_decisions" => {
+                match crate::tools::mcp::get_key_decisions(req.session_id.clone()).await {
+                    Ok(result) => Ok(mcp_result_to_call_result(result)),
+                    Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+                }
+            }
+            "key_insights" => {
+                let limit = req
+                    .parameters
+                    .get("limit")
+                    .and_then(|s: &String| s.parse().ok());
+                match crate::tools::mcp::get_key_insights(req.session_id.clone(), limit).await {
+                    Ok(result) => Ok(mcp_result_to_call_result(result)),
+                    Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+                }
+            }
+            "session_statistics" => {
+                match crate::tools::mcp::get_session_statistics(req.session_id.clone()).await {
+                    Ok(result) => Ok(mcp_result_to_call_result(result)),
                     Err(e) => Err(McpError::internal_error(e.to_string(), None)),
                 }
             }
@@ -1399,6 +1736,370 @@ impl PostCortexService {
             )),
         }
     }
+
+    // =========================================================================
+    // Tool 7: assemble_context (graph-aware retrieval)
+    // =========================================================================
+    #[tool(
+        description = "Graph-aware context assembly: blends semantic search with entity-graph traversal and impact analysis. Returns ranked items, entity neighbourhood, dependency impact, and an LLM-ready formatted block. Scope: session or workspace.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<AssembleContextRequest>()
+    )]
+    async fn assemble_context(
+        &self,
+        params: Parameters<serde_json::Value>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::core::context_assembly;
+        use crate::graph::entity_graph::SimpleEntityGraph;
+
+        let req: AssembleContextRequest = coerce_and_validate(params.0).map_err(|e| {
+            if e.message.contains("query") {
+                e.clone()
+                    .with_parameter_path("query".to_string())
+                    .with_expected_type("non-empty query/topic string")
+                    .with_hint("Provide the question or topic to assemble context for")
+                    .to_mcp_error()
+            } else {
+                e.to_mcp_error()
+            }
+        })?;
+
+        if req.query.trim().is_empty() {
+            return Err(McpError::invalid_params(
+                "query cannot be empty".to_string(),
+                Some(serde_json::Value::String("query".to_string())),
+            ));
+        }
+
+        if req.session_id.is_none() && req.workspace_id.is_none() {
+            return Err(McpError::invalid_params(
+                "either session_id or workspace_id is required".to_string(),
+                None,
+            ));
+        }
+
+        let token_budget = req
+            .token_budget
+            .filter(|b| *b > 0)
+            .map(|b| b as usize)
+            .unwrap_or(4000);
+
+        let (updates, graph) = if let Some(ws_raw) = req.workspace_id.as_ref().filter(|s| !s.is_empty()) {
+            let ws_uuid = Uuid::parse_str(ws_raw).map_err(|_| {
+                CoercionError::new(
+                    "Invalid UUID",
+                    std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid UUID format"),
+                    Some(serde_json::Value::String(ws_raw.clone())),
+                )
+                .with_parameter_path("workspace_id".to_string())
+                .with_expected_type("Valid UUID string")
+                .to_mcp_error()
+            })?;
+
+            let workspace = self
+                .memory_system
+                .workspace_manager
+                .get_workspace(&ws_uuid)
+                .ok_or_else(|| {
+                    McpError::invalid_params(
+                        format!("Workspace {} not found", ws_uuid),
+                        Some(serde_json::Value::String("workspace_id".to_string())),
+                    )
+                })?;
+
+            let mut all_updates = Vec::new();
+            let mut merged_graph = SimpleEntityGraph::new();
+
+            for (ws_session_id, _role) in workspace.get_all_sessions() {
+                if let Ok(session_arc) = self.memory_system.get_session(ws_session_id).await {
+                    let session = session_arc.load();
+                    all_updates.extend(session.hot_context.iter().iter().cloned());
+                    all_updates
+                        .extend(session.warm_context.iter().map(|c| c.update.clone()));
+                    merged_graph.merge_from(&session.entity_graph);
+                }
+            }
+
+            (all_updates, merged_graph)
+        } else {
+            let sid_raw = req.session_id.as_ref().unwrap();
+            let session_id = validate_session_id(sid_raw).map_err(|e| e.to_mcp_error())?;
+
+            let session_arc = self
+                .memory_system
+                .get_session(session_id)
+                .await
+                .map_err(|e| McpError::internal_error(format!("Session not found: {}", e), None))?;
+            let session = session_arc.load();
+            let updates: Vec<_> = session
+                .hot_context
+                .iter()
+                .iter()
+                .chain(session.warm_context.iter().map(|c| &c.update))
+                .cloned()
+                .collect();
+            (updates, (*session.entity_graph).clone())
+        };
+
+        let assembled =
+            context_assembly::assemble_context(&req.query, &graph, &updates, token_budget);
+        let formatted_text = context_assembly::format_for_llm(&assembled);
+
+        let payload = serde_json::json!({
+            "query": req.query,
+            "token_budget": token_budget,
+            "total_tokens": assembled.total_tokens,
+            "items": assembled.items,
+            "entity_context": assembled.entity_context,
+            "impact": assembled.impact,
+            "formatted_text": formatted_text,
+        });
+
+        Ok(mcp_result_to_call_result(MCPToolResult::success(
+            format!(
+                "Assembled {} items ({} tokens) for query: {}",
+                assembled.items.len(),
+                assembled.total_tokens,
+                req.query
+            ),
+            Some(payload),
+        )))
+    }
+
+    // =========================================================================
+    // Tool 8: manage_entity
+    // =========================================================================
+    #[tool(
+        description = "Manage entities and context entries in a session. Actions: delete (remove entity + cascade typed edges; requires entity_name), delete_update (remove a single context entry by entry_id).",
+        input_schema = rmcp::handler::server::common::schema_for_type::<ManageEntityRequest>()
+    )]
+    async fn manage_entity(
+        &self,
+        params: Parameters<serde_json::Value>,
+    ) -> Result<CallToolResult, McpError> {
+        let req: ManageEntityRequest = coerce_and_validate(params.0).map_err(|e| {
+            if e.message.contains("action") {
+                e.clone()
+                    .with_parameter_path("action".to_string())
+                    .with_expected_type("one of: delete, delete_update")
+                    .with_hint(
+                        "Use 'delete' with entity_name for entities, or 'delete_update' with entry_id for context rows",
+                    )
+                    .to_mcp_error()
+            } else if e.message.contains("session_id") {
+                e.clone()
+                    .with_parameter_path("session_id".to_string())
+                    .with_expected_type("UUID string (36 chars with hyphens)")
+                    .to_mcp_error()
+            } else {
+                e.to_mcp_error()
+            }
+        })?;
+
+        let session_id = validate_session_id(&req.session_id).map_err(|e| e.to_mcp_error())?;
+
+        match req.action.to_lowercase().as_str() {
+            "delete" => {
+                let entity_name = req
+                    .entity_name
+                    .as_ref()
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| {
+                        McpError::invalid_params(
+                            "action 'delete' requires a non-empty entity_name".to_string(),
+                            Some(serde_json::Value::String("entity_name".to_string())),
+                        )
+                    })?;
+
+                match self.memory_system.delete_entity(session_id, entity_name).await {
+                    Ok(existed) => Ok(mcp_result_to_call_result(MCPToolResult::success(
+                        if existed {
+                            format!(
+                                "Deleted entity '{}' from session {}",
+                                entity_name, session_id
+                            )
+                        } else {
+                            format!(
+                                "Entity '{}' not present in session {} (no-op)",
+                                entity_name, session_id
+                            )
+                        },
+                        Some(serde_json::json!({
+                            "existed": existed,
+                            "entity_name": entity_name,
+                            "session_id": session_id.to_string(),
+                        })),
+                    ))),
+                    Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+                }
+            }
+            "delete_update" => {
+                let entry_raw = req.entry_id.as_ref().ok_or_else(|| {
+                    McpError::invalid_params(
+                        "action 'delete_update' requires entry_id".to_string(),
+                        Some(serde_json::Value::String("entry_id".to_string())),
+                    )
+                })?;
+                let entry_id = Uuid::parse_str(entry_raw).map_err(|_| {
+                    CoercionError::new(
+                        "Invalid UUID",
+                        std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid UUID"),
+                        Some(serde_json::Value::String(entry_raw.clone())),
+                    )
+                    .with_parameter_path("entry_id".to_string())
+                    .with_expected_type("UUID string (36 chars with hyphens)")
+                    .with_hint("entry_id is the ContextUpdate id (e.g. the entry_id returned by assemble_context items)")
+                    .to_mcp_error()
+                })?;
+
+                match self.memory_system.delete_update(session_id, entry_id).await {
+                    Ok(existed) => Ok(mcp_result_to_call_result(MCPToolResult::success(
+                        if existed {
+                            format!(
+                                "Deleted update {} from session {}",
+                                entry_id, session_id
+                            )
+                        } else {
+                            format!(
+                                "Update {} not present in session {} (no-op)",
+                                entry_id, session_id
+                            )
+                        },
+                        Some(serde_json::json!({
+                            "existed": existed,
+                            "entry_id": entry_id.to_string(),
+                            "session_id": session_id.to_string(),
+                        })),
+                    ))),
+                    Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+                }
+            }
+            _ => Err(McpError::invalid_params(
+                format!("Invalid action '{}'. Use: delete | delete_update", req.action),
+                None,
+            )),
+        }
+    }
+
+    // =========================================================================
+    // Tool 9: admin (health, vectorize_session, vectorize_stats, create_checkpoint)
+    // =========================================================================
+    #[tool(
+        description = "Daemon administration. Actions: health, vectorize_session (session_id), vectorize_stats, create_checkpoint (session_id).",
+        input_schema = rmcp::handler::server::common::schema_for_type::<AdminRequest>()
+    )]
+    async fn admin(
+        &self,
+        params: Parameters<serde_json::Value>,
+    ) -> Result<CallToolResult, McpError> {
+        let req: AdminRequest = coerce_and_validate(params.0).map_err(|e| {
+            e.with_parameter_path("action".to_string())
+                .with_expected_type("one of: health, vectorize_session, vectorize_stats, create_checkpoint")
+                .to_mcp_error()
+        })?;
+
+        match req.action.to_lowercase().as_str() {
+            "health" => {
+                let health = self.memory_system.get_system_health();
+                let payload = serde_json::json!({
+                    "healthy": !health.circuit_breaker_open,
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "active_sessions": health.active_sessions,
+                    "total_updates": health.total_requests,
+                    "embeddings_enabled": self.memory_system.embeddings_enabled(),
+                    "circuit_breaker_open": health.circuit_breaker_open,
+                });
+                Ok(mcp_result_to_call_result(MCPToolResult::success(
+                    format!(
+                        "PCX healthy={} version={} active_sessions={}",
+                        !health.circuit_breaker_open,
+                        env!("CARGO_PKG_VERSION"),
+                        health.active_sessions
+                    ),
+                    Some(payload),
+                )))
+            }
+            "vectorize_session" => {
+                let sid_raw = req.session_id.as_ref().ok_or_else(|| {
+                    McpError::invalid_params(
+                        "vectorize_session requires session_id".to_string(),
+                        Some(serde_json::Value::String("session_id".to_string())),
+                    )
+                })?;
+                let session_id = validate_session_id(sid_raw).map_err(|e| e.to_mcp_error())?;
+
+                #[cfg(feature = "embeddings")]
+                {
+                    match self.memory_system.vectorize_session(session_id).await {
+                        Ok(vectors_created) => {
+                            Ok(mcp_result_to_call_result(MCPToolResult::success(
+                                format!(
+                                    "Vectorized session {} ({} vectors created)",
+                                    session_id, vectors_created
+                                ),
+                                Some(serde_json::json!({
+                                    "session_id": session_id.to_string(),
+                                    "vectors_created": vectors_created,
+                                })),
+                            )))
+                        }
+                        Err(e) => Err(McpError::internal_error(e, None)),
+                    }
+                }
+                #[cfg(not(feature = "embeddings"))]
+                {
+                    let _ = session_id;
+                    Err(McpError::internal_error(
+                        "vectorize_session requires the 'embeddings' feature".to_string(),
+                        None,
+                    ))
+                }
+            }
+            "vectorize_stats" => {
+                #[cfg(feature = "embeddings")]
+                {
+                    match self.memory_system.get_vectorization_stats() {
+                        Ok(stats) => {
+                            let value = serde_json::to_value(&stats).unwrap_or(serde_json::json!({}));
+                            Ok(mcp_result_to_call_result(MCPToolResult::success(
+                                "Vectorization stats".to_string(),
+                                Some(value),
+                            )))
+                        }
+                        Err(e) => Err(McpError::internal_error(e, None)),
+                    }
+                }
+                #[cfg(not(feature = "embeddings"))]
+                {
+                    Err(McpError::internal_error(
+                        "vectorize_stats requires the 'embeddings' feature".to_string(),
+                        None,
+                    ))
+                }
+            }
+            "create_checkpoint" => {
+                let sid_raw = req.session_id.as_ref().ok_or_else(|| {
+                    McpError::invalid_params(
+                        "create_checkpoint requires session_id".to_string(),
+                        Some(serde_json::Value::String("session_id".to_string())),
+                    )
+                })?;
+                let session_id = validate_session_id(sid_raw).map_err(|e| e.to_mcp_error())?;
+
+                match crate::tools::mcp::create_session_checkpoint(session_id).await {
+                    Ok(result) => Ok(mcp_result_to_call_result(result)),
+                    Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+                }
+            }
+            _ => Err(McpError::invalid_params(
+                format!(
+                    "Invalid action '{}'. Use: health | vectorize_session | vectorize_stats | create_checkpoint",
+                    req.action
+                ),
+                None,
+            )),
+        }
+    }
 }
 
 // NOTE: We implement ServerHandler manually instead of using #[tool_handler] macro
@@ -1411,10 +2112,10 @@ impl ServerHandler for PostCortexService {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "Post-Cortex: Intelligent conversation memory system with 6 consolidated MCP tools. \
+                "Post-Cortex: Intelligent conversation memory system with 9 consolidated MCP tools. \
                  Tools: session, update_conversation_context, semantic_search, get_structured_summary, \
-                 query_conversation_context, manage_workspace. All use shared RocksDB for centralized \
-                 knowledge management.".to_string()
+                 query_conversation_context, manage_workspace, assemble_context, manage_entity, admin. \
+                 All use shared RocksDB for centralized knowledge management.".to_string()
             ),
         }
     }

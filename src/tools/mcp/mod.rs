@@ -280,11 +280,26 @@ pub async fn update_conversation_context_with_system(
                 .collect()
         };
 
+        // Resolve a primary slot (title/description) using a list of preferred keys.
+        // Falls back to a generic `title`/`description` key when none of the
+        // domain-specific keys are present. This prevents ghost entries like
+        // ": " when callers post content with unrecognised key names.
+        let resolve_slot = |preferred: &[&str], fallback_keys: &[&str]| -> String {
+            for k in preferred.iter().chain(fallback_keys.iter()) {
+                if let Some(v) = content.get(*k) {
+                    if !v.trim().is_empty() {
+                        return v.clone();
+                    }
+                }
+            }
+            String::new()
+        };
+
         let interaction = match interaction_type.as_str() {
             "qa" => {
-                let question = content.get("question").cloned().unwrap_or_default();
-                let answer = content.get("answer").cloned().unwrap_or_default();
-                let extras = extract_extras(&["question", "answer"]);
+                let question = resolve_slot(&["question"], &["title"]);
+                let answer = resolve_slot(&["answer"], &["description"]);
+                let extras = extract_extras(&["question", "answer", "title", "description"]);
                 Interaction::QA {
                     question,
                     answer,
@@ -293,25 +308,20 @@ pub async fn update_conversation_context_with_system(
             }
             "code_change" => {
                 // Accept: file_path/file/description, changes/diff/change_type
-                let file_path = content
-                    .get("file_path")
-                    .or_else(|| content.get("file"))
-                    .or_else(|| content.get("description"))
-                    .cloned()
-                    .unwrap_or_default();
-                let changes = content
-                    .get("changes")
-                    .or_else(|| content.get("diff"))
-                    .or_else(|| content.get("change_type"))
-                    .cloned()
-                    .unwrap_or_default();
+                let file_path = resolve_slot(&["file_path", "file"], &["title"]);
+                let changes = resolve_slot(
+                    &["changes", "diff", "change_type", "change"],
+                    &["description"],
+                );
                 let extras = extract_extras(&[
                     "file_path",
                     "file",
+                    "title",
                     "description",
                     "changes",
                     "diff",
                     "change_type",
+                    "change",
                 ]);
                 Interaction::CodeChange {
                     file_path,
@@ -320,9 +330,9 @@ pub async fn update_conversation_context_with_system(
                 }
             }
             "problem_solved" => {
-                let problem = content.get("problem").cloned().unwrap_or_default();
-                let solution = content.get("solution").cloned().unwrap_or_default();
-                let extras = extract_extras(&["problem", "solution"]);
+                let problem = resolve_slot(&["problem"], &["title"]);
+                let solution = resolve_slot(&["solution"], &["description"]);
+                let extras = extract_extras(&["problem", "solution", "title", "description"]);
                 Interaction::ProblemSolved {
                     problem,
                     solution,
@@ -330,9 +340,9 @@ pub async fn update_conversation_context_with_system(
                 }
             }
             "decision_made" => {
-                let decision = content.get("decision").cloned().unwrap_or_default();
-                let rationale = content.get("rationale").cloned().unwrap_or_default();
-                let extras = extract_extras(&["decision", "rationale"]);
+                let decision = resolve_slot(&["decision"], &["title"]);
+                let rationale = resolve_slot(&["rationale"], &["description"]);
+                let extras = extract_extras(&["decision", "rationale", "title", "description"]);
                 Interaction::DecisionMade {
                     decision,
                     rationale,
@@ -340,12 +350,17 @@ pub async fn update_conversation_context_with_system(
                 }
             }
             "requirement_added" => {
-                let requirement = content.get("requirement").cloned().unwrap_or_default();
+                let requirement = resolve_slot(&["requirement"], &["title"]);
                 let priority = content
                     .get("priority")
                     .cloned()
                     .unwrap_or_else(|| "medium".to_string());
-                let extras = extract_extras(&["requirement", "priority"]);
+                let extras = extract_extras(&[
+                    "requirement",
+                    "priority",
+                    "title",
+                    "description",
+                ]);
                 Interaction::RequirementAdded {
                     requirement,
                     priority,
@@ -353,9 +368,14 @@ pub async fn update_conversation_context_with_system(
                 }
             }
             "concept_defined" => {
-                let concept = content.get("concept").cloned().unwrap_or_default();
-                let definition = content.get("definition").cloned().unwrap_or_default();
-                let extras = extract_extras(&["concept", "definition"]);
+                let concept = resolve_slot(&["concept"], &["title"]);
+                let definition = resolve_slot(&["definition"], &["description"]);
+                let extras = extract_extras(&[
+                    "concept",
+                    "definition",
+                    "title",
+                    "description",
+                ]);
                 Interaction::ConceptDefined {
                     concept,
                     definition,
@@ -373,6 +393,27 @@ pub async fn update_conversation_context_with_system(
 
         debug!("Converting interaction to ContextUpdate...");
         let mut update = interaction_to_context_update(interaction, code_reference)?;
+
+        // Final guard: refuse to store an entry whose title AND description are
+        // both empty after all fallbacks ran. This is what produced the 1-token
+        // ": " ghost rows discovered 2026-05-16 when callers posted content
+        // with keys the dispatcher didn't recognise.
+        if update.content.title.trim().is_empty()
+            && update.content.description.trim().is_empty()
+        {
+            let known_keys: Vec<String> = content.keys().cloned().collect();
+            warn!(
+                "Rejecting empty update for interaction_type='{}' (no usable title/description). Provided keys: {:?}",
+                interaction_type, known_keys
+            );
+            return Ok(MCPToolResult::error(format!(
+                "Refusing to store empty update for interaction_type='{}': none of the recognised keys carried text. \
+                 Provide one of the type-specific keys (e.g. decision/rationale, problem/solution, concept/definition, \
+                 question/answer, file/changes, requirement) or a generic 'title' and/or 'description'. \
+                 Got keys: {:?}",
+                interaction_type, known_keys
+            )));
+        }
 
         // Parse explicit entities from content (comma or space separated)
         if let Some(entities_str) = content.get("entities") {
@@ -813,19 +854,24 @@ pub async fn bulk_update_conversation_context(
                 .collect()
         };
 
+        // Same fallback resolver as the single-update path: prefer domain keys,
+        // fall back to generic title/description, ignore whitespace-only values.
+        let resolve_slot = |preferred: &[&str], fallback_keys: &[&str]| -> String {
+            for k in preferred.iter().chain(fallback_keys.iter()) {
+                if let Some(v) = update_item.content.get(*k) {
+                    if !v.trim().is_empty() {
+                        return v.clone();
+                    }
+                }
+            }
+            String::new()
+        };
+
         let interaction = match update_item.interaction_type.as_str() {
             "qa" => {
-                let question = update_item
-                    .content
-                    .get("question")
-                    .cloned()
-                    .unwrap_or_default();
-                let answer = update_item
-                    .content
-                    .get("answer")
-                    .cloned()
-                    .unwrap_or_default();
-                let extras = extract_extras(&["question", "answer"]);
+                let question = resolve_slot(&["question"], &["title"]);
+                let answer = resolve_slot(&["answer"], &["description"]);
+                let extras = extract_extras(&["question", "answer", "title", "description"]);
                 Interaction::QA {
                     question,
                     answer,
@@ -833,35 +879,29 @@ pub async fn bulk_update_conversation_context(
                 }
             }
             "code_change" => {
-                let description = update_item
-                    .content
-                    .get("description")
-                    .cloned()
-                    .unwrap_or_default();
-                let change_type = update_item
-                    .content
-                    .get("change_type")
-                    .cloned()
-                    .unwrap_or_default();
-                let extras = extract_extras(&["description", "change_type"]);
+                let file_path = resolve_slot(&["file_path", "file"], &["title", "description"]);
+                let changes =
+                    resolve_slot(&["changes", "diff", "change_type", "change"], &["description"]);
+                let extras = extract_extras(&[
+                    "file_path",
+                    "file",
+                    "title",
+                    "description",
+                    "changes",
+                    "diff",
+                    "change_type",
+                    "change",
+                ]);
                 Interaction::CodeChange {
-                    file_path: description,
-                    diff: change_type,
+                    file_path,
+                    diff: changes,
                     details: extras,
                 }
             }
             "problem_solved" => {
-                let problem = update_item
-                    .content
-                    .get("problem")
-                    .cloned()
-                    .unwrap_or_default();
-                let solution = update_item
-                    .content
-                    .get("solution")
-                    .cloned()
-                    .unwrap_or_default();
-                let extras = extract_extras(&["problem", "solution"]);
+                let problem = resolve_slot(&["problem"], &["title"]);
+                let solution = resolve_slot(&["solution"], &["description"]);
+                let extras = extract_extras(&["problem", "solution", "title", "description"]);
                 Interaction::ProblemSolved {
                     problem,
                     solution,
@@ -869,17 +909,9 @@ pub async fn bulk_update_conversation_context(
                 }
             }
             "decision_made" => {
-                let decision = update_item
-                    .content
-                    .get("decision")
-                    .cloned()
-                    .unwrap_or_default();
-                let rationale = update_item
-                    .content
-                    .get("rationale")
-                    .cloned()
-                    .unwrap_or_default();
-                let extras = extract_extras(&["decision", "rationale"]);
+                let decision = resolve_slot(&["decision"], &["title"]);
+                let rationale = resolve_slot(&["rationale"], &["description"]);
+                let extras = extract_extras(&["decision", "rationale", "title", "description"]);
                 Interaction::DecisionMade {
                     decision,
                     rationale,
@@ -887,17 +919,18 @@ pub async fn bulk_update_conversation_context(
                 }
             }
             "requirement_added" => {
-                let requirement = update_item
-                    .content
-                    .get("requirement")
-                    .cloned()
-                    .unwrap_or_default();
+                let requirement = resolve_slot(&["requirement"], &["title"]);
                 let priority = update_item
                     .content
                     .get("priority")
                     .cloned()
                     .unwrap_or_else(|| "medium".to_string());
-                let extras = extract_extras(&["requirement", "priority"]);
+                let extras = extract_extras(&[
+                    "requirement",
+                    "priority",
+                    "title",
+                    "description",
+                ]);
                 Interaction::RequirementAdded {
                     requirement,
                     priority,
@@ -905,17 +938,14 @@ pub async fn bulk_update_conversation_context(
                 }
             }
             "concept_defined" => {
-                let concept = update_item
-                    .content
-                    .get("concept")
-                    .cloned()
-                    .unwrap_or_default();
-                let definition = update_item
-                    .content
-                    .get("definition")
-                    .cloned()
-                    .unwrap_or_default();
-                let extras = extract_extras(&["concept", "definition"]);
+                let concept = resolve_slot(&["concept"], &["title"]);
+                let definition = resolve_slot(&["definition"], &["description"]);
+                let extras = extract_extras(&[
+                    "concept",
+                    "definition",
+                    "title",
+                    "description",
+                ]);
                 Interaction::ConceptDefined {
                     concept,
                     definition,
@@ -935,6 +965,20 @@ pub async fn bulk_update_conversation_context(
         // Convert to ContextUpdate
         match interaction_to_context_update(interaction, update_item.code_reference) {
             Ok(update) => {
+                // Refuse to persist empty rows — same guard as the single-update path.
+                if update.content.title.trim().is_empty()
+                    && update.content.description.trim().is_empty()
+                {
+                    let known_keys: Vec<String> =
+                        update_item.content.keys().cloned().collect();
+                    error_count += 1;
+                    errors.push(format!(
+                        "Update {}: empty title and description for interaction_type='{}'. \
+                         Provided keys: {:?}. Supply a recognised key or a generic 'title'/'description'.",
+                        index, update_item.interaction_type, known_keys
+                    ));
+                    continue;
+                }
                 let description = update.content.description.clone();
                 let metadata = match serde_json::to_value(&update) {
                     Ok(v) => Some(v),

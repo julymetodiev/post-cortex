@@ -867,6 +867,36 @@ impl ConversationMemorySystem {
         Ok(existed)
     }
 
+    /// Delete a single incremental update (context entry) by its entry_id.
+    ///
+    /// Used by MCP `manage_entity` action=delete_update to clean up ghost/bad rows
+    /// produced when a client posts content the dispatcher can't map to a title.
+    /// Persists the updated session via the storage actor. Returns true if the
+    /// entry existed.
+    pub async fn delete_update(
+        &self,
+        session_id: Uuid,
+        entry_id: Uuid,
+    ) -> Result<bool, String> {
+        let session_arc = self.get_session(session_id).await?;
+        let current = session_arc.load();
+        let mut new_session = (**current).clone();
+        let existed = new_session.remove_update_by_id(&entry_id);
+
+        if existed {
+            let new_arc = Arc::new(new_session);
+            let prev = session_arc.compare_and_swap(&current, Arc::clone(&new_arc));
+            if Arc::ptr_eq(&prev, &current) {
+                self.storage_actor
+                    .persist_session_and_update_nowait((*new_arc).clone(), vec![]);
+            } else {
+                warn!("CAS failed during delete_update for session {}", session_id);
+            }
+        }
+
+        Ok(existed)
+    }
+
     /// Find sessions by name or description compatibility method
     pub async fn find_sessions_by_name_or_description(
         &self,

@@ -885,11 +885,20 @@ impl Storage for SurrealDBStorage {
     async fn list_sessions(&self) -> Result<Vec<Uuid>> {
         debug!("SurrealDBStorage: Listing sessions");
 
-        let records: Vec<SessionRecord> = self.select_all("session").await?;
+        // Raw query + `response.take(0)` routes through serde (honours
+        // `deserialize_surreal_option` on the Option<String> fields).
+        // `db.select(table)` goes through SurrealValue conversion which
+        // rejects NONE for Option<String> and crashed any list with
+        // sessions that had `name = null` in storage.
+        let mut response = self
+            .db
+            .query("SELECT session_id FROM session")
+            .await?;
+        let ids: Vec<String> = response.take("session_id")?;
 
-        let sessions: Vec<Uuid> = records
+        let sessions: Vec<Uuid> = ids
             .into_iter()
-            .filter_map(|r| Uuid::parse_str(&r.session_id).ok())
+            .filter_map(|s| Uuid::parse_str(&s).ok())
             .collect();
 
         debug!("SurrealDBStorage: Found {} sessions", sessions.len());

@@ -122,6 +122,22 @@ impl HotContext {
         self.next_id.store(0, Ordering::Release);
     }
 
+    /// Remove the first update whose ContextUpdate.id matches `entry_id` (lock-free).
+    /// Returns true if an entry was removed. Used by manage_entity delete_update so
+    /// MCP clients can clean up ghost / bad context rows by entry_id.
+    pub fn remove_by_id(&self, entry_id: &uuid::Uuid) -> bool {
+        let slot = self
+            .updates
+            .iter()
+            .find(|entry| entry.value().id == *entry_id)
+            .map(|entry| *entry.key());
+        if let Some(key) = slot {
+            self.updates.remove(&key).is_some()
+        } else {
+            false
+        }
+    }
+
     /// Get most recent update (lock-free)
     ///
     /// Returns None if the context is empty or if the most recent entry
