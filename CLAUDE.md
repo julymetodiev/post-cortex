@@ -23,12 +23,15 @@ Call directly — do NOT use subagents for simple search/log operations.
 
 | Tool | When |
 |------|------|
-| `semantic_search` | Before answering code/arch questions |
-| `update_conversation_context` | After decisions, fixes, changes |
+| `semantic_search` | Before answering code/arch questions. Scope: session / workspace / global. Returns structured payload (scores, content_id, content_type, snippet, timestamp) |
+| `update_conversation_context` | After decisions, fixes, changes. Single or bulk. Empty title+description is rejected — use the typed keys (decision/rationale, problem/solution, concept/definition, question/answer, file/changes, requirement) or generic `title`/`description` |
 | `get_structured_summary` | Session analysis and reviews |
-| `query_conversation_context` | Entity relationships, keyword search |
-| `session` | Create/list sessions |
-| `manage_workspace` | Workspace CRUD |
+| `query_conversation_context` | Flexible queries. `query_type` values: `find_related_entities`, `get_entity_context`, `search_updates`, `entity_importance`, `entity_network`, `find_related_content` (topic, max_results), `key_decisions`, `key_insights` (limit), `session_statistics`, `structured_summary`, `decisions`, `open_questions`, `assemble_context`, `trace_relationships`, `get_most_important_entities`, `find_entities_by_type` |
+| `session` | Sessions: `create`, `list`, `load` (session_id), `search` (query), `update_metadata` (session_id + name/description; preserves created_at), `delete` (evicts cache + storage) |
+| `manage_workspace` | Workspace CRUD: `create`, `list`, `get`, `delete`, `add_session`, `remove_session` |
+| `assemble_context` | Graph-aware retrieval (semantic + traversal + impact). Scope: session or workspace. Returns items, entity_context, impact, total_tokens, formatted_text |
+| `manage_entity` | `delete` (entity_name; cascades typed edges), `delete_update` (entry_id; removes a single context row from hot/warm/incremental caches and persists) |
+| `admin` | `health`, `vectorize_session` (session_id), `vectorize_stats`, `create_checkpoint` (session_id) |
 
 ## Hooks
 
