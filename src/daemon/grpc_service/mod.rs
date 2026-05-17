@@ -1,12 +1,19 @@
-//! gRPC service for Post-Cortex
+// Copyright (c) 2025, 2026 Julius ML
+// MIT License
+
+//! gRPC service for Post-Cortex.
 //!
-//! Provides a tonic gRPC interface to ConversationMemorySystem,
-//! enabling native binary protocol access for coding agents like Axon.
+//! Provides a tonic gRPC interface to [`ConversationMemorySystem`], enabling
+//! native binary protocol access for coding agents like Axon.
+//!
+//! Layout: the canonical `impl PostCortex for PcxGrpcService` block lives in
+//! this file. Freshness-tracking methods (Phase 9) delegate to inherent
+//! `*_impl` methods in [`freshness`] to keep this file scoped to the
+//! interactive surface. Shared parsing/validation helpers live in
+//! [`helpers`].
 
 use crate::ConversationMemorySystem;
 use crate::storage::rocksdb_storage::SessionCheckpoint;
-use crate::workspace::SessionRole;
-use futures::future::join_all;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
@@ -16,12 +23,19 @@ pub mod pb {
     tonic::include_proto!("pcx.v1");
 }
 
+mod freshness;
+mod helpers;
+
+use helpers::{
+    build_update_metadata, format_context_description, parse_session_role, parse_uuid,
+    validate_entities_and_relations, workspace_to_info,
+};
 use pb::post_cortex_server::{PostCortex, PostCortexServer};
 use pb::*;
 
 /// gRPC service backed by ConversationMemorySystem
 pub struct PcxGrpcService {
-    memory: Arc<ConversationMemorySystem>,
+    pub(super) memory: Arc<ConversationMemorySystem>,
 }
 
 impl PcxGrpcService {
@@ -1120,554 +1134,57 @@ impl PostCortex for PcxGrpcService {
         }))
     }
 
-    // --- Source Tracking (Phase 9) ---
+
+    // --- Source Tracking (Phase 9): delegated to ./freshness.rs ---
 
     async fn register_source(
         &self,
         request: Request<RegisterSourceRequest>,
     ) -> Result<Response<RegisterSourceAck>, Status> {
-        let session_id_str = get_session_id_from_metadata(&request)?;
-        let session_id = parse_uuid(&session_id_str)?;
-
-        let req = request.into_inner();
-
-        // Ensure source_ref is present
-        let source_ref = req
-            .source_ref
-            .ok_or_else(|| Status::invalid_argument("Missing source_ref in request"))?;
-
-        debug!("gRPC RegisterSource: entry_id={}", source_ref.entry_id);
-
-        match self
-            .memory
-            .storage_actor
-            .register_source(session_id, source_ref)
-            .await
-        {
-            Ok(()) => Ok(Response::new(RegisterSourceAck {})),
-            Err(e) => {
-                error!("gRPC RegisterSource failed: {}", e);
-                let e_msg: String = e.to_string();
-                Err(Status::internal(e_msg))
-            }
-        }
+        self.register_source_impl(request).await
     }
 
     async fn register_source_batch(
         &self,
         request: Request<RegisterSourceBatchRequest>,
     ) -> Result<Response<RegisterSourceBatchAck>, Status> {
-        let session_id_str = get_session_id_from_metadata(&request)?;
-        let session_id = parse_uuid(&session_id_str)?;
-
-        let req = request.into_inner();
-        let total = req.sources.len();
-        debug!(
-            "gRPC RegisterSourceBatch: session={} sources={}",
-            session_id, total
-        );
-
-        let futures = req.sources.into_iter().map(|source_ref| {
-            let entry_id = source_ref.entry_id.clone();
-            let actor = self.memory.storage_actor.clone();
-            async move { (entry_id, actor.register_source(session_id, source_ref).await) }
-        });
-        let results = join_all(futures).await;
-
-        let mut registered: u32 = 0;
-        for (entry_id, result) in results {
-            match result {
-                Ok(()) => registered += 1,
-                Err(e) => {
-                    error!(
-                        "gRPC RegisterSourceBatch: failed for entry_id={}: {}",
-                        entry_id, e
-                    );
-                }
-            }
-        }
-
-        debug!(
-            "gRPC RegisterSourceBatch: registered {}/{} sources",
-            registered, total
-        );
-        Ok(Response::new(RegisterSourceBatchAck { registered }))
+        self.register_source_batch_impl(request).await
     }
 
     async fn check_freshness(
         &self,
         request: Request<FreshnessRequest>,
     ) -> Result<Response<FreshnessReport>, Status> {
-        let req = request.into_inner();
-        debug!(
-            "gRPC CheckFreshness: checking {} entries",
-            req.entry_ids.len()
-        );
-
-        if req.entry_ids.len() != req.current_hashes.len() {
-            return Err(Status::invalid_argument(
-                "entry_ids and current_hashes must have the same length",
-            ));
-        }
-
-        let has_checks = req.checks.len() == req.entry_ids.len();
-
-        // Collect per-entry metadata needed for fallback Unknown responses.
-        // (file_path is not stored in storage; it comes from the request.)
-        let mut file_paths: Vec<String> = Vec::with_capacity(req.entry_ids.len());
-        let mut fallback_hashes: Vec<Vec<u8>> = Vec::with_capacity(req.entry_ids.len());
-
-        // Build the batch input: one tuple per entry.
-        let batch: Vec<(String, Vec<u8>, Option<Vec<u8>>, Option<String>)> = req
-            .entry_ids
-            .iter()
-            .enumerate()
-            .map(|(i, entry_id)| {
-                let current_hash = req.current_hashes[i].hash.clone();
-                file_paths.push(req.current_hashes[i].file_path.clone());
-                fallback_hashes.push(current_hash.clone());
-
-                let (ast_hash, symbol_name) = if has_checks {
-                    let check = &req.checks[i];
-                    (
-                        if check.ast_hash.is_empty() {
-                            None
-                        } else {
-                            Some(check.ast_hash.clone())
-                        },
-                        if check.symbol_name.is_empty() {
-                            None
-                        } else {
-                            Some(check.symbol_name.clone())
-                        },
-                    )
-                } else {
-                    (None, None)
-                };
-
-                (entry_id.clone(), current_hash, ast_hash, symbol_name)
-            })
-            .collect();
-
-        // Single actor message — one SurrealDB round-trip for the whole batch.
-        match self.memory.storage_actor.check_freshness_batch(batch).await {
-            Ok(entries) => Ok(Response::new(FreshnessReport { entries })),
-            Err(e) => {
-                error!("gRPC CheckFreshness batch failed: {}", e);
-                // Fall back to Unknown for every entry so callers are not blocked.
-                let reports = req
-                    .entry_ids
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, entry_id)| FreshnessEntry {
-                        entry_id,
-                        file_path: file_paths.get(i).cloned().unwrap_or_default(),
-                        status: FreshnessStatus::Unknown as i32,
-                        stored_hash: Vec::new(),
-                        current_hash: fallback_hashes.get(i).cloned().unwrap_or_default(),
-                    })
-                    .collect();
-                Ok(Response::new(FreshnessReport { entries: reports }))
-            }
-        }
+        self.check_freshness_impl(request).await
     }
 
     async fn invalidate(
         &self,
         request: Request<InvalidateRequest>,
     ) -> Result<Response<InvalidateAck>, Status> {
-        let req = request.into_inner();
-        debug!("gRPC Invalidate: checking source path {}", req.file_path);
-
-        // If session_id is provided, also rebuild entity graph
-        if !req.session_id.is_empty() {
-            let session_id = uuid::Uuid::parse_str(&req.session_id)
-                .map_err(|e| Status::invalid_argument(format!("Invalid session_id: {}", e)))?;
-
-            match self
-                .memory
-                .invalidate_and_rebuild_entity_graph(session_id, &req.file_path)
-                .await
-            {
-                Ok((entries_invalidated, entities_after)) => {
-                    Ok(Response::new(InvalidateAck {
-                        entries_invalidated,
-                        entities_rebuilt: entities_after as u32,
-                    }))
-                }
-                Err(e) => {
-                    error!("gRPC Invalidate+rebuild failed for file {}: {}", req.file_path, e);
-                    Err(Status::internal(e.to_string()))
-                }
-            }
-        } else {
-            // Legacy path: only invalidate source references
-            match self
-                .memory
-                .storage_actor
-                .invalidate_source(&req.file_path)
-                .await
-            {
-                Ok(count) => Ok(Response::new(InvalidateAck {
-                    entries_invalidated: count,
-                    entities_rebuilt: 0,
-                })),
-                Err(e) => {
-                    error!("gRPC Invalidate failed for file {}: {}", req.file_path, e);
-                    Err(Status::internal(e.to_string()))
-                }
-            }
-        }
+        self.invalidate_impl(request).await
     }
 
     async fn register_symbol_dependency(
         &self,
         request: Request<RegisterSymbolDependencyRequest>,
     ) -> Result<Response<RegisterSymbolDependencyAck>, Status> {
-        let req = request.into_inner();
-        let from = req
-            .from_symbol
-            .ok_or_else(|| Status::invalid_argument("Missing from_symbol"))?;
-        let to_symbols = req.to_symbols;
-
-        debug!(
-            "gRPC RegisterSymbolDependency: {}::{} -> {} deps",
-            from.file_path,
-            from.symbol_name,
-            to_symbols.len()
-        );
-
-        match self
-            .memory
-            .storage_actor
-            .register_symbol_dependencies(from, to_symbols)
-            .await
-        {
-            Ok(count) => Ok(Response::new(RegisterSymbolDependencyAck {
-                edges_created: count,
-            })),
-            Err(e) => {
-                error!("gRPC RegisterSymbolDependency failed: {}", e);
-                Err(Status::internal(e.to_string()))
-            }
-        }
+        self.register_symbol_dependency_impl(request).await
     }
 
     async fn cascade_invalidate(
         &self,
         request: Request<CascadeInvalidateRequest>,
     ) -> Result<Response<CascadeInvalidateReport>, Status> {
-        let req = request.into_inner();
-        let changed = req
-            .changed_symbol
-            .ok_or_else(|| Status::invalid_argument("Missing changed_symbol"))?;
-        let max_depth = if req.max_depth == 0 { 10 } else { req.max_depth };
-
-        debug!(
-            "gRPC CascadeInvalidate: {}::{} depth={}",
-            changed.file_path, changed.symbol_name, max_depth
-        );
-
-        match self
-            .memory
-            .storage_actor
-            .cascade_invalidate(changed, req.new_ast_hash, max_depth)
-            .await
-        {
-            Ok(report) => Ok(Response::new(report)),
-            Err(e) => {
-                error!("gRPC CascadeInvalidate failed: {}", e);
-                Err(Status::internal(e.to_string()))
-            }
-        }
+        self.cascade_invalidate_impl(request).await
     }
 
     async fn get_stale_entries_by_source(
         &self,
         request: Request<GetStaleEntriesBySourceRequest>,
     ) -> Result<Response<GetStaleEntriesBySourceResponse>, Status> {
-        let req = request.into_inner();
-        debug!(
-            "gRPC GetStaleEntriesBySource: file_path={}",
-            req.file_path
-        );
-
-        match self
-            .memory
-            .storage_actor
-            .get_stale_entries_by_source(&req.file_path)
-            .await
-        {
-            Ok(stale) => {
-                let entries = stale
-                    .into_iter()
-                    .map(|s| StaleEntryInfo {
-                        entry_id: s.entry_id,
-                        symbol_name: s.symbol_name.unwrap_or_default(),
-                        symbol_type: s.symbol_type.unwrap_or_default(),
-                    })
-                    .collect();
-                Ok(Response::new(GetStaleEntriesBySourceResponse { entries }))
-            }
-            Err(e) => {
-                error!("gRPC GetStaleEntriesBySource failed: {}", e);
-                Err(Status::internal(e.to_string()))
-            }
-        }
+        self.get_stale_entries_by_source_impl(request).await
     }
-}
-
-// --- Helpers ---
-
-fn parse_uuid(s: &str) -> Result<Uuid, Status> {
-    Uuid::parse_str(s).map_err(|_| Status::invalid_argument(format!("Invalid UUID: {s}")))
-}
-
-fn get_session_id_from_metadata<T>(request: &Request<T>) -> Result<String, Status> {
-    request
-        .metadata()
-        .get("x-session-id")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .ok_or_else(|| Status::unauthenticated("Missing x-session-id metadata"))
-}
-
-fn parse_session_role(s: &str) -> SessionRole {
-    match s.to_lowercase().as_str() {
-        "primary" => SessionRole::Primary,
-        "dependency" => SessionRole::Dependency,
-        "shared" => SessionRole::Shared,
-        _ => SessionRole::Related,
-    }
-}
-
-fn workspace_to_info(workspace: &crate::workspace::Workspace) -> WorkspaceInfo {
-    let created_at_unix = workspace
-        .created_at
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-
-    let sessions: Vec<WorkspaceSessionEntry> = workspace
-        .session_ids
-        .iter()
-        .map(|entry| WorkspaceSessionEntry {
-            session_id: entry.key().to_string(),
-            role: format!("{:?}", entry.value()),
-        })
-        .collect();
-
-    WorkspaceInfo {
-        workspace_id: workspace.id.to_string(),
-        name: workspace.name.clone(),
-        description: workspace.description.clone(),
-        created_at_unix,
-        sessions,
-    }
-}
-
-fn format_context_description(interaction_type: &str, content: &ContextContent) -> String {
-    let mut desc = String::new();
-    if !content.title.is_empty() {
-        desc.push_str(&content.title);
-    }
-    if !content.description.is_empty() {
-        if !desc.is_empty() {
-            desc.push_str(": ");
-        }
-        desc.push_str(&content.description);
-    }
-    if desc.is_empty() {
-        desc = format!("[{interaction_type}] update");
-    }
-    desc
-}
-
-/// Validate entities and relations provided by the caller (Claude-driven extraction).
-/// Returns `Err(Status)` with a precise message on the first validation failure.
-fn validate_entities_and_relations(
-    entities: &[EntityInfo],
-    relations: &[RelationInfo],
-) -> Result<(), Status> {
-    use std::collections::HashSet;
-
-    if entities.is_empty() {
-        return Err(Status::invalid_argument(
-            "entities field is required and must not be empty",
-        ));
-    }
-
-    if relations.is_empty() {
-        return Err(Status::invalid_argument(
-            "relations field is required and must not be empty",
-        ));
-    }
-
-    // Build a set of known entity names for referential-integrity checks.
-    let entity_names: HashSet<&str> = entities.iter().map(|e| e.name.as_str()).collect();
-
-    for (i, rel) in relations.iter().enumerate() {
-        if rel.from_entity.is_empty() {
-            return Err(Status::invalid_argument(format!(
-                "relation[{i}]: from_entity must not be empty"
-            )));
-        }
-        if rel.to_entity.is_empty() {
-            return Err(Status::invalid_argument(format!(
-                "relation[{i}]: to_entity must not be empty"
-            )));
-        }
-        if rel.from_entity == rel.to_entity {
-            return Err(Status::invalid_argument(format!(
-                "relation[{i}]: self-relations are not allowed (from_entity == to_entity == {:?})",
-                rel.from_entity
-            )));
-        }
-        if rel.context.is_empty() {
-            return Err(Status::invalid_argument(format!(
-                "relation[{i}]: context must not be empty — every relation requires an explanation"
-            )));
-        }
-        // Validate relation_type is a known variant.
-        if parse_relation_type(&rel.relation_type).is_none() {
-            return Err(Status::invalid_argument(format!(
-                "relation[{i}]: unknown relation_type {:?}; valid values are: \
-                 required_by, leads_to, related_to, conflicts_with, depends_on, implements, caused_by, solves",
-                rel.relation_type
-            )));
-        }
-        // Referential integrity: both endpoints must be declared in entities.
-        if !entity_names.contains(rel.from_entity.as_str()) {
-            return Err(Status::invalid_argument(format!(
-                "relation[{i}]: from_entity {:?} is not declared in the entities list",
-                rel.from_entity
-            )));
-        }
-        if !entity_names.contains(rel.to_entity.as_str()) {
-            return Err(Status::invalid_argument(format!(
-                "relation[{i}]: to_entity {:?} is not declared in the entities list",
-                rel.to_entity
-            )));
-        }
-    }
-
-    Ok(())
-}
-
-/// Parse a relation_type string (case-insensitive) into a `RelationType`, returning `None` for
-/// unknown values.
-fn parse_relation_type(s: &str) -> Option<crate::core::context_update::RelationType> {
-    use crate::core::context_update::RelationType;
-    match s.to_lowercase().as_str() {
-        "required_by" | "requiredby" => Some(RelationType::RequiredBy),
-        "leads_to" | "leadsto" => Some(RelationType::LeadsTo),
-        "related_to" | "relatedto" => Some(RelationType::RelatedTo),
-        "conflicts_with" | "conflictswith" => Some(RelationType::ConflictsWith),
-        "depends_on" | "dependson" => Some(RelationType::DependsOn),
-        "implements" => Some(RelationType::Implements),
-        "caused_by" | "causedby" => Some(RelationType::CausedBy),
-        "solves" => Some(RelationType::Solves),
-        _ => None,
-    }
-}
-
-/// Parse an entity_type string (case-insensitive) into an `EntityType`, defaulting to `Concept`.
-fn parse_entity_type(s: &str) -> crate::core::context_update::EntityType {
-    use crate::core::context_update::EntityType;
-    match s.to_lowercase().as_str() {
-        "technology" => EntityType::Technology,
-        "concept" => EntityType::Concept,
-        "problem" => EntityType::Problem,
-        "solution" => EntityType::Solution,
-        "decision" => EntityType::Decision,
-        "code_component" | "codecomponent" => EntityType::CodeComponent,
-        _ => EntityType::Concept,
-    }
-}
-
-fn build_update_metadata(
-    interaction_type: &str,
-    content: &ContextContent,
-    entities: &[EntityInfo],
-    relations: &[RelationInfo],
-) -> serde_json::Value {
-    use crate::core::context_update::{
-        ContextUpdate, EntityRelationship, TypedEntity, UpdateContent, UpdateType,
-    };
-
-    let update_type = match interaction_type {
-        "decision_made" => UpdateType::DecisionMade,
-        "problem_solved" => UpdateType::ProblemSolved,
-        "code_change" | "code_changed" => UpdateType::CodeChanged,
-        "qa" | "question_answered" => UpdateType::QuestionAnswered,
-        "requirement_added" => UpdateType::RequirementAdded,
-        "concept_defined" | _ => UpdateType::ConceptDefined,
-    };
-
-    let related_code = content.code_ref.as_ref().map(|c| {
-        crate::core::context_update::CodeReference {
-            file_path: c.file_path.clone(),
-            start_line: c.start_line,
-            end_line: c.end_line,
-            code_snippet: c.code_snippet.clone(),
-            commit_hash: if c.commit_hash.is_empty() {
-                None
-            } else {
-                Some(c.commit_hash.clone())
-            },
-            branch: if c.branch.is_empty() {
-                None
-            } else {
-                Some(c.branch.clone())
-            },
-            change_description: c.change_description.clone(),
-        }
-    });
-
-    // Map proto EntityInfo → TypedEntity and collect entity names for creates_entities.
-    let typed_entities: Vec<TypedEntity> = entities
-        .iter()
-        .map(|e| TypedEntity {
-            name: e.name.clone(),
-            entity_type: parse_entity_type(&e.entity_type),
-        })
-        .collect();
-    let creates_entities: Vec<String> = typed_entities.iter().map(|e| e.name.clone()).collect();
-
-    // Map proto RelationInfo → EntityRelationship.
-    let creates_relationships: Vec<EntityRelationship> = relations
-        .iter()
-        .filter_map(|r| {
-            parse_relation_type(&r.relation_type).map(|rt| EntityRelationship {
-                from_entity: r.from_entity.clone(),
-                to_entity: r.to_entity.clone(),
-                relation_type: rt,
-                context: r.context.clone(),
-            })
-        })
-        .collect();
-
-    let update = ContextUpdate {
-        id: Uuid::new_v4(),
-        timestamp: chrono::Utc::now(),
-        update_type,
-        content: UpdateContent {
-            title: content.title.clone(),
-            description: content.description.clone(),
-            details: content.details.clone(),
-            examples: content.examples.clone(),
-            implications: content.implications.clone(),
-        },
-        related_code,
-        parent_update: None,
-        user_marked_important: false,
-        creates_entities,
-        creates_relationships,
-        references_entities: Vec::new(),
-        typed_entities,
-    };
-
-    serde_json::to_value(update).expect("ContextUpdate serialization cannot fail")
 }
 
 /// Start the gRPC server on the given port.
