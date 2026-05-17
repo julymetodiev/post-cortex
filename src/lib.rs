@@ -1,64 +1,38 @@
 // Copyright (c) 2025, 2026 Julius ML
 // Licensed under the MIT License. See LICENSE at the workspace root.
 
-//! Legacy single-crate root for post-cortex (transitional facade).
+//! Legacy `post-cortex` single-crate facade (transitional).
 //!
-//! Phases 3a-3d of the workspace refactor moved every library module out
-//! of this crate:
+//! Phases 3-7 of the workspace refactor moved every library module out
+//! of this crate. What remains is a thin re-export layer that keeps the
+//! historical import paths (`post_cortex::ConversationMemorySystem`,
+//! `post_cortex::storage::*`, `post_cortex::tools::mcp::*`, etc.)
+//! resolving so the integration tests under `tests/` keep compiling
+//! against the published surface.
 //!
-//! | Old path | New crate |
-//! |----------|-----------|
-//! | `crate::core::{cache,context_update,error,structured_context,timeout_utils}` | `post-cortex-core` |
-//! | `crate::core::{memory_system,content_vectorizer,context_assembly,scoring,semantic_query_engine,query_cache,performance}` | `post-cortex-memory` |
-//! | `crate::core::{embeddings,vector_db}` | `post-cortex-embeddings` |
-//! | `crate::{session,graph,workspace,summary}` | `post-cortex-core` |
-//! | `crate::storage` | `post-cortex-storage` |
-//! | `proto::pb` (daemon's old generated module) | `post-cortex-proto::pb` |
-//!
-//! This file re-exports the moved modules under their original paths so
-//! `src/daemon/` and `src/tools/` — which still live in this crate
-//! until Phases 6 and 7 — keep compiling without touching every `use`
-//! statement. The shim is removed in Phase 8 when the legacy package
-//! becomes the `post-cortex` facade meta-crate.
+//! Phase 8 retires this crate entirely: the new `post-cortex` facade
+//! crate at `crates/post-cortex/` takes over the published name and the
+//! workspace root drops its [`[package]`] section.
 
-/// `crate::core::*` shim. Combines the pure-domain modules from
-/// post-cortex-core with the orchestrator pieces from post-cortex-memory
-/// and the embeddings stack from post-cortex-embeddings so historical
-/// import paths under `crate::core::*` keep resolving.
-pub mod core {
-    pub use post_cortex_core::core::{
-        cache, context_update, error, structured_context, timeout_utils,
-    };
-    pub use post_cortex_memory::{
-        content_vectorizer, context_assembly, memory_system, performance, query_cache, scoring,
-        semantic_query_engine,
-    };
-    // post-cortex-embeddings is the single crate hosting both the
-    // EmbeddingBackend stack and the HNSW vector_db. Aliasing it twice
-    // preserves the legacy `crate::core::embeddings::*` and
-    // `crate::core::vector_db::*` paths.
-    pub use post_cortex_embeddings as embeddings;
-    pub use post_cortex_embeddings::vector_db;
-}
-
+pub use post_cortex_core::core;
 pub use post_cortex_core::graph;
 pub use post_cortex_core::session;
 pub use post_cortex_core::summary;
 pub use post_cortex_core::workspace;
 pub use post_cortex_storage as storage;
 
-/// Phase 6 — `tools::mcp` moved to post-cortex-mcp. Legacy callers
-/// (daemon's mcp_service handlers) still use `crate::tools::mcp::X`
-/// paths; the re-export below keeps them compiling until Phase 7
-/// migrates the daemon to import from post-cortex-mcp directly.
+/// Phase 6 — `tools::mcp` is published as `post-cortex-mcp`. The shim
+/// here preserves the historical `post_cortex::tools::mcp::X` path for
+/// integration tests + downstream callers until Phase 8.
 pub mod tools {
     pub use post_cortex_mcp as mcp;
 }
 
-// Daemon still hosted here. Phase 7 moves it into post-cortex-daemon.
-pub mod daemon;
+/// Phase 7 — the daemon is published as `post-cortex-daemon`. Legacy
+/// `post_cortex::daemon::X` callers keep working through this
+/// re-export.
+pub use post_cortex_daemon::daemon;
 
-// Headline re-exports preserved verbatim from the pre-Phase-3 surface.
 pub use post_cortex_core::core::error::{Result, SystemError};
 pub use post_cortex_core::summary::{StructuredSummaryView, SummaryGenerator};
 pub use post_cortex_memory::{ConversationMemorySystem, SystemConfig};

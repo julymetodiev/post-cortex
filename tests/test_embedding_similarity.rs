@@ -149,7 +149,7 @@ async fn test_end_to_end_semantic_search_pipeline() -> Result<()> {
     // End-to-end test: Create session, add QA update, search semantically
     // This tests the FULL pipeline including text extraction and vectorization
 
-    use post_cortex::core::memory_system::{
+    use post_cortex_memory::{
         ConversationMemorySystem, SystemConfig,
     };
     use std::sync::Arc;

@@ -6,13 +6,87 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "HTTP / gRPC / SSE / stdio daemon for post-cortex. Hosts the rmcp MCP server, the tonic gRPC API, and ships the `pcx` CLI binary."
+description = "HTTP / gRPC / SSE / stdio daemon for post-cortex. Hosts the rmcp Model Context Protocol surface, the tonic gRPC API, and ships the `pcx` CLI binary."
 keywords = ["post-cortex", "daemon", "grpc", "mcp", "axum"]
 categories = ["command-line-utilities", "database", "web-programming::http-server"]
 readme = "README.md"
 documentation = "https://docs.rs/post-cortex-daemon"
 
 [dependencies]
-# Phase 7 fills in: post-cortex-core, post-cortex-mcp, post-cortex-proto, axum, tower,
-# tower-http, hyper, tonic (full), rmcp, clap, reqwest, dialoguer, dirs, toml, flate2, zstd,
-# tokio, tokio-util, tracing, tracing-subscriber, tracing-appender.
+post-cortex-core.workspace = true
+post-cortex-proto.workspace = true
+post-cortex-memory.workspace = true
+post-cortex-storage.workspace = true
+post-cortex-embeddings = { workspace = true, features = ["bert"] }
+post-cortex-mcp.workspace = true
+
+# HTTP / gRPC / SSE
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+hyper.workspace = true
+tonic.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+
+# rmcp (Model Context Protocol server)
+rmcp.workspace = true
+
+# CLI
+clap.workspace = true
+dialoguer.workspace = true
+dirs.workspace = true
+toml.workspace = true
+reqwest.workspace = true
+
+# Compression for export/import (pcx export / import)
+flate2.workspace = true
+zstd.workspace = true
+
+# Async + serialisation
+anyhow.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+futures.workspace = true
+regex.workspace = true
+
+# Concurrency
+tokio.workspace = true
+tokio-util.workspace = true
+dashmap.workspace = true
+arc-swap.workspace = true
+parking_lot.workspace = true
+
+# Observability
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+log.workspace = true
+env_logger.workspace = true
+
+[dev-dependencies]
+tokio-test.workspace = true
+tempfile.workspace = true
+serial_test.workspace = true
+portpicker.workspace = true
+tokio-stream.workspace = true
+
+[[bin]]
+name = "pcx"
+path = "src/bin/pcx.rs"
+
+[features]
+default = ["embeddings"]
+embeddings = ["post-cortex-memory/embeddings", "post-cortex-mcp/embeddings"]
+surrealdb-storage = ["post-cortex-memory/surrealdb-storage"]
+surrealdb-tikv = ["surrealdb-storage", "post-cortex-storage/surrealdb-tikv"]
+otel = []
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

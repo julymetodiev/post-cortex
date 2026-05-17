@@ -138,71 +138,24 @@ keywords = ["conversation", "memory", "semantic-search", "lock-free", "mcp"]
 categories = ["data-structures", "database-implementations", "concurrency"]
 
 [dependencies]
-anyhow.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-schemars.workspace = true
-bincode.workspace = true
-uuid.workspace = true
-chrono.workspace = true
-tokio.workspace = true
-tokio-util.workspace = true
-rocksdb.workspace = true
-futures.workspace = true
-thiserror.workspace = true
-clap.workspace = true
-regex.workspace = true
-dashmap.workspace = true
-crossbeam-channel.workspace = true
-crossbeam-queue.workspace = true
-arc-swap.workspace = true
-atomic_float.workspace = true
-parking_lot.workspace = true
-log.workspace = true
-num_cpus.workspace = true
-rayon.workspace = true
-rand.workspace = true
-env_logger.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-tracing-appender.workspace = true
-petgraph.workspace = true
-async-trait.workspace = true
-# (candle/tokenizers/hf-hub moved into post-cortex-embeddings; surrealdb
-# moved into post-cortex-storage — legacy root forwards features to the
-# new homes via [features] below.)
-axum.workspace = true
-tower.workspace = true
-tower-http.workspace = true
-hyper.workspace = true
-dirs.workspace = true
-reqwest.workspace = true
-dialoguer.workspace = true
-toml.workspace = true
-flate2.workspace = true
-zstd.workspace = true
-rmcp.workspace = true
-tonic.workspace = true
-prost.workspace = true
-prost-types.workspace = true
-
+# After Phase 7, the legacy root crate is a pure re-export facade. It
+# carries no code beyond src/lib.rs — every direct dep below feeds the
+# `pub use` shim that keeps the historical `post_cortex::*` paths
+# resolving for integration tests under tests/ until Phase 8 retires
+# this crate entirely.
 post-cortex-proto.workspace = true
-
-# Phases 3a-3d — the legacy root re-exports the workspace member crates
-# under their historical paths (`crate::core::*`, `crate::storage::*`,
-# `crate::session::*`, etc.) so the still-in-tree `daemon` and `tools`
-# modules — plus integration tests — keep building unchanged until
-# Phases 6/7 split them out. The shim lives in src/lib.rs.
-post-cortex-core = { workspace = true }
+post-cortex-core.workspace = true
 post-cortex-embeddings = { workspace = true, features = ["bert"] }
 post-cortex-storage.workspace = true
 post-cortex-memory.workspace = true
 post-cortex-mcp.workspace = true
-
-# [build-dependencies] section intentionally absent — the legacy root no
-# longer compiles proto. tonic-build moved to crates/post-cortex-proto.
+post-cortex-daemon.workspace = true
 
 [dev-dependencies]
+# Test helpers + the deps integration tests under tests/ use directly.
+# Phase 12 will move per-crate tests into their owning crate's tests/;
+# until then this is the full list.
+tokio.workspace = true
 tokio-test.workspace = true
 tempfile.workspace = true
 criterion.workspace = true
@@ -210,14 +163,21 @@ portpicker.workspace = true
 proptest.workspace = true
 serial_test.workspace = true
 tokio-stream.workspace = true
-
-# Integration tests under tests/ import from post-cortex-embeddings directly
-# (test_direct_encoding, test_embedding_similarity, property_vector_db).
-post-cortex-embeddings.workspace = true
-
-[[bin]]
-name = "pcx"
-path = "src/bin/pcx.rs"
+anyhow.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+hyper.workspace = true
+tonic.workspace = true
+reqwest.workspace = true
+schemars.workspace = true
+tracing.workspace = true
+arc-swap.workspace = true
 
 [[bench]]
 name = "query_cache_bench"

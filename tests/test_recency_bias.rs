@@ -21,7 +21,7 @@
 //! Tests for temporal decay (recency bias) in semantic search
 
 use anyhow::Result;
-use post_cortex::core::memory_system::{
+use post_cortex_memory::{
     ConversationMemorySystem, SystemConfig,
 };
 use serial_test::serial;
@@ -119,7 +119,7 @@ async fn test_recency_bias_prioritizes_recent_content() -> Result<()> {
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // Search with different recency_bias values
-    let engine: Arc<post_cortex::core::semantic_query_engine::SemanticQueryEngine> =
+    let engine: Arc<post_cortex_memory::semantic_query_engine::SemanticQueryEngine> =
         system.ensure_semantic_engine_initialized().await
         .map_err(|e| anyhow::anyhow!(e))?;
 
@@ -223,7 +223,7 @@ async fn test_recency_bias_multisession() -> Result<()> {
     // Wait for vectorization
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-    let engine: Arc<post_cortex::core::semantic_query_engine::SemanticQueryEngine> =
+    let engine: Arc<post_cortex_memory::semantic_query_engine::SemanticQueryEngine> =
         system.ensure_semantic_engine_initialized().await
         .map_err(|e| anyhow::anyhow!(e))?;
 
@@ -294,7 +294,7 @@ async fn test_recency_bias_formula_consistency() -> Result<()> {
 
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-    let engine: Arc<post_cortex::core::semantic_query_engine::SemanticQueryEngine> =
+    let engine: Arc<post_cortex_memory::semantic_query_engine::SemanticQueryEngine> =
         system.ensure_semantic_engine_initialized().await
         .map_err(|e| anyhow::anyhow!(e))?;
 
@@ -381,7 +381,7 @@ async fn test_recency_bias_cache_collision() -> Result<()> {
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
     // Ensure semantic engine is initialized
-    let engine: Arc<post_cortex::core::semantic_query_engine::SemanticQueryEngine> =
+    let engine: Arc<post_cortex_memory::semantic_query_engine::SemanticQueryEngine> =
         system.ensure_semantic_engine_initialized().await
         .map_err(|e| anyhow::anyhow!(e))?;
 
@@ -467,7 +467,7 @@ async fn test_recency_bias_cache_collision() -> Result<()> {
 #[serial]
 #[tokio::test]
 async fn test_recency_bias_metrics_shared_across_clones() -> Result<()> {
-    use post_cortex::core::content_vectorizer::{ContentVectorizer, ContentVectorizerConfig};
+    use post_cortex_memory::content_vectorizer::{ContentVectorizer, ContentVectorizerConfig};
 
     let config = ContentVectorizerConfig::default();
     let vectorizer1 = ContentVectorizer::new(config).await?;
@@ -507,7 +507,7 @@ async fn test_recency_bias_metrics_shared_across_clones() -> Result<()> {
     // Wait for vectorization
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-    let engine: Arc<post_cortex::core::semantic_query_engine::SemanticQueryEngine> =
+    let engine: Arc<post_cortex_memory::semantic_query_engine::SemanticQueryEngine> =
         system.ensure_semantic_engine_initialized().await
         .map_err(|e| anyhow::anyhow!(e))?;
 

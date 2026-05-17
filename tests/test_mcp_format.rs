@@ -1,6 +1,6 @@
 use anyhow::Result;
 use post_cortex::core::context_update::{ContextUpdate, UpdateContent, UpdateType};
-use post_cortex::core::memory_system::{ConversationMemorySystem, SystemConfig};
+use post_cortex_memory::{ConversationMemorySystem, SystemConfig};
 use serial_test::serial;
 use std::sync::Arc;
 use tempfile::tempdir;

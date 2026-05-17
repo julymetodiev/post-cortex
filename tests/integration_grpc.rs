@@ -4,7 +4,7 @@
 // // retrievable via QueryContext, with proper interaction_type mapping and
 // // content preservation.
 
-// use post_cortex::core::memory_system::{ConversationMemorySystem, SystemConfig};
+// use post_cortex_memory::{ConversationMemorySystem, SystemConfig};
 // use post_cortex::daemon::grpc_service::pb::post_cortex_client::PostCortexClient;
 // use post_cortex::daemon::grpc_service::pb::*;
 // use post_cortex::daemon::grpc_service::PcxGrpcService;

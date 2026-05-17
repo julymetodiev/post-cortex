@@ -21,7 +21,7 @@
 //! Common test utilities and fixtures
 
 use anyhow::Result;
-use post_cortex::core::memory_system::{ConversationMemorySystem, SystemConfig};
+use post_cortex_memory::{ConversationMemorySystem, SystemConfig};
 #[cfg(feature = "surrealdb-storage")]
 use post_cortex::storage::traits::StorageBackendType;
 use std::sync::Arc;
@@ -99,7 +99,7 @@ impl TestFixture {
         &self,
         query: &str,
         bias: f32,
-    ) -> Result<Vec<post_cortex::core::content_vectorizer::SemanticSearchResult>> {
+    ) -> Result<Vec<post_cortex_memory::content_vectorizer::SemanticSearchResult>> {
         let engine = self
             .system
             .ensure_semantic_engine_initialized()
