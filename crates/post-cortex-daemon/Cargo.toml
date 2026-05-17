@@ -1,0 +1,18 @@
+[package]
+name = "post-cortex-daemon"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "HTTP / gRPC / SSE / stdio daemon for post-cortex. Hosts the rmcp MCP server, the tonic gRPC API, and ships the `pcx` CLI binary."
+keywords = ["post-cortex", "daemon", "grpc", "mcp", "axum"]
+categories = ["command-line-utilities", "database", "web-programming::http-server"]
+readme = "README.md"
+documentation = "https://docs.rs/post-cortex-daemon"
+
+[dependencies]
+# Phase 7 fills in: post-cortex-core, post-cortex-mcp, post-cortex-proto, axum, tower,
+# tower-http, hyper, tonic (full), rmcp, clap, reqwest, dialoguer, dirs, toml, flate2, zstd,
+# tokio, tokio-util, tracing, tracing-subscriber, tracing-appender.

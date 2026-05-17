@@ -1,0 +1,77 @@
+# cargo-deny configuration. Wired into CI in Phase 13.
+# Doc: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = true
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+# ---------------------------------------------------------------------------
+# Advisories — RUSTSEC vulnerabilities
+# ---------------------------------------------------------------------------
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/RustSec/advisory-db"]
+# Baseline ignores (Phase 0 — see docs/audit-baseline-0.1.23.md). All findings
+# below come from `surrealdb 3.0.0` transitive dependencies. Re-evaluate when
+# surrealdb releases a 3.x update with fresher pinned dependencies.
+ignore = [
+    "RUSTSEC-2026-0045", # aws-lc-sys AES-CCM timing
+    "RUSTSEC-2026-0044", # aws-lc-sys X.509 name constraints bypass
+    "RUSTSEC-2026-0048", # aws-lc-sys CRL scope check
+    "RUSTSEC-2026-0047", # aws-lc-sys PKCS7_verify bypass A
+    "RUSTSEC-2026-0046", # aws-lc-sys PKCS7_verify bypass B
+    "RUSTSEC-2026-0037", # quinn-proto DoS on endpoints
+    "RUSTSEC-2023-0071", # rsa Marvin attack (no upstream fix — see SECURITY.md)
+    "RUSTSEC-2026-0104", # rustls-webpki CRL parse panic
+    "RUSTSEC-2026-0098", # rustls-webpki URI name constraints
+    "RUSTSEC-2026-0099", # rustls-webpki wildcard name constraints
+    "RUSTSEC-2026-0049", # rustls-webpki
+    "RUSTSEC-2026-0009", # time
+    "RUSTSEC-2023-0089", # atomic-polyfill unmaintained
+    "RUSTSEC-2025-0141", # bincode 2.0.1 unmaintained
+    "RUSTSEC-2025-0119", # number_prefix unmaintained
+]
+
+# ---------------------------------------------------------------------------
+# License policy
+# ---------------------------------------------------------------------------
+[licenses]
+confidence-threshold = 0.93
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "Zlib",
+    "MPL-2.0",
+    "OpenSSL",
+]
+# Crates with non-SPDX or unusual license files. Reviewed and accepted.
+exceptions = []
+
+# ---------------------------------------------------------------------------
+# Banned crates
+# ---------------------------------------------------------------------------
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+# Steer the workspace toward rustls; ban openssl-sys to keep the build
+# reproducible and free of system-OpenSSL surprises.
+deny = [
+    { name = "openssl" },
+    { name = "openssl-sys" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

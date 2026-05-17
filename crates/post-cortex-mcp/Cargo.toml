@@ -1,0 +1,16 @@
+[package]
+name = "post-cortex-mcp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Pure-library MCP tool definitions for post-cortex. Embed in any MCP-compatible host (rmcp, custom servers) without pulling the post-cortex daemon."
+keywords = ["mcp", "tools", "memory", "ai", "post-cortex"]
+categories = ["api-bindings", "data-structures"]
+readme = "README.md"
+documentation = "https://docs.rs/post-cortex-mcp"
+
+[dependencies]
+# Phase 6 fills in: post-cortex-core, serde, serde_json, schemars, uuid, chrono, tracing.

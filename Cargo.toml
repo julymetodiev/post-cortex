@@ -1,15 +1,31 @@
-[package]
-name = "post-cortex"
+[workspace]
+resolver = "2"
+members = [
+    ".",
+    "crates/post-cortex-proto",
+    "crates/post-cortex-core",
+    "crates/post-cortex-mcp",
+    "crates/post-cortex-daemon",
+    "crates/post-cortex",
+]
+
+# Default `cargo` operations run against the legacy root crate so the existing
+# build / test / bench flows keep working while we migrate content into the
+# crates/* members. After Phase 8 the root [package] is deleted and the facade
+# crate becomes the default.
+default-members = ["."]
+
+[workspace.package]
 version = "0.1.23"
 edition = "2024"
 authors = ["Julius ML"]
-description = "An intelligent conversation memory system for AI assistants that provides persistent knowledge storage, semantic search, and automatic relationship mapping with lock-free concurrency guarantees"
 license = "MIT"
 repository = "https://github.com/juliusbiascan/post-cortex"
-keywords = ["conversation", "memory", "semantic-search", "lock-free", "mcp"]
-categories = ["data-structures", "database-implementations", "concurrency"]
+rust-version = "1.85"
 
-[dependencies]
+# Shared deps pinned once. Member crates opt in via `dep.workspace = true`.
+# `optional`, `features`, and `default-features` overrides stay per-consumer.
+[workspace.dependencies]
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -19,6 +35,7 @@ uuid = { version = "1.11", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1.42", features = ["full"] }
 tokio-util = "0.7"
+tokio-stream = "0.1"
 rocksdb = "0.24"
 futures = "0.3"
 thiserror = "2.0"
@@ -39,19 +56,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
 tracing-appender = "0.2"
 petgraph = { version = "0.8.2", features = ["serde-1"] }
-candle-core = { version = "0.9", optional = true }
-candle-nn = { version = "0.9", optional = true }
-candle-transformers = { version = "0.9", optional = true }
-tokenizers = { version = "0.22", optional = true }
-hf-hub = { version = "0.4", optional = true }
 async-trait = "0.1"
-
-# SurrealDB storage backend (optional) - using kv-mem for local tests, protocol-ws for remote
-# NOTE: kv-rocksdb conflicts with our direct rocksdb dependency, so we use kv-mem or remote only
-surrealdb = { version = "3.0.0", optional = true, features = ["kv-mem", "protocol-ws"] }
-surrealdb-types = { version = "3.0.0", optional = true }
-
-# HTTP daemon and MCP dependencies
+candle-core = "0.9"
+candle-nn = "0.9"
+candle-transformers = "0.9"
+tokenizers = "0.22"
+hf-hub = "0.4"
+surrealdb = { version = "3.0.0", features = ["kv-mem", "protocol-ws"] }
+surrealdb-types = "3.0.0"
 axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
@@ -60,39 +72,138 @@ dirs = "6.0.0"
 reqwest = { version = "0.12", features = ["json"] }
 dialoguer = "0.11"
 toml = "0.9.10"
-
-# Export/Import compression
 flate2 = "1.0"
 zstd = "0.13"
 rmcp = { version = "0.12.0", features = ["server", "transport-streamable-http-server"] }
-
-# gRPC
 tonic = "0.12"
+tonic-build = "0.12"
 prost = "0.13"
 prost-types = "0.13"
 
-[build-dependencies]
-tonic-build = "0.12"
+# Observability — added Phase 10; lifted here now so versions stay in lock-step
+# across crates when the otel feature lands.
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic", "trace", "metrics"] }
+tracing-opentelemetry = "0.28"
 
-[dev-dependencies]
+# Dev / test helpers
 tokio-test = "0.4"
 tempfile = "3.0"
 criterion = "0.8.1"
 portpicker = "0.1"
 proptest = "1.5"
 serial_test = { version = "3.3", features = ["async"] }
-tokio-stream = "0.1"
+
+# Intra-workspace path deps. Versions match [workspace.package].version so a
+# `cargo publish` from any member resolves siblings on crates.io rather than
+# the local path.
+post-cortex-proto = { version = "0.1.23", path = "crates/post-cortex-proto" }
+post-cortex-core = { version = "0.1.23", path = "crates/post-cortex-core" }
+post-cortex-mcp = { version = "0.1.23", path = "crates/post-cortex-mcp" }
+post-cortex-daemon = { version = "0.1.23", path = "crates/post-cortex-daemon" }
+
+[profile.release]
+# Surface real bugs hard instead of unwinding through tokio task boundaries.
+panic = "abort"
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+debug = true   # so flamegraph / pprof can resolve symbols
+
+# ---------------------------------------------------------------------------
+# Legacy root crate (single-crate post-cortex 0.1.23). Stays in place until
+# Phase 8 deletes it in favour of the facade crate.
+# ---------------------------------------------------------------------------
+[package]
+name = "post-cortex"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "An intelligent conversation memory system for AI assistants that provides persistent knowledge storage, semantic search, and automatic relationship mapping with lock-free concurrency guarantees"
+keywords = ["conversation", "memory", "semantic-search", "lock-free", "mcp"]
+categories = ["data-structures", "database-implementations", "concurrency"]
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+bincode.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+rocksdb.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+clap.workspace = true
+regex.workspace = true
+dashmap.workspace = true
+crossbeam-channel.workspace = true
+crossbeam-queue.workspace = true
+arc-swap.workspace = true
+atomic_float.workspace = true
+parking_lot.workspace = true
+log.workspace = true
+num_cpus.workspace = true
+rayon.workspace = true
+rand.workspace = true
+env_logger.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+petgraph.workspace = true
+async-trait.workspace = true
+candle-core = { workspace = true, optional = true }
+candle-nn = { workspace = true, optional = true }
+candle-transformers = { workspace = true, optional = true }
+tokenizers = { workspace = true, optional = true }
+hf-hub = { workspace = true, optional = true }
+surrealdb = { workspace = true, optional = true }
+surrealdb-types = { workspace = true, optional = true }
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+hyper.workspace = true
+dirs.workspace = true
+reqwest.workspace = true
+dialoguer.workspace = true
+toml.workspace = true
+flate2.workspace = true
+zstd.workspace = true
+rmcp.workspace = true
+tonic.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true
+
+[dev-dependencies]
+tokio-test.workspace = true
+tempfile.workspace = true
+criterion.workspace = true
+portpicker.workspace = true
+proptest.workspace = true
+serial_test.workspace = true
+tokio-stream.workspace = true
 
 [[bin]]
 name = "pcx"
 path = "src/bin/pcx.rs"
 
+[[bench]]
+name = "query_cache_bench"
+harness = false
+
 [features]
 default = ["embeddings"]
 llm-integration = []
 embeddings = ["candle-core", "candle-nn", "candle-transformers", "tokenizers", "hf-hub"]
-
-# SurrealDB storage backend
 surrealdb-storage = ["dep:surrealdb", "dep:surrealdb-types"]
-# SurrealDB with TiKV for distributed storage (future)
 surrealdb-tikv = ["dep:surrealdb", "surrealdb/kv-tikv"]

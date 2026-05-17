@@ -1,0 +1,20 @@
+[package]
+name = "post-cortex-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Core domain library for post-cortex: lock-free conversation memory, semantic search, knowledge graph, and storage backends. Transport-agnostic — no axum/tonic/rmcp."
+keywords = ["conversation", "memory", "semantic-search", "lock-free", "knowledge-graph"]
+categories = ["data-structures", "database-implementations", "concurrency"]
+readme = "README.md"
+documentation = "https://docs.rs/post-cortex-core"
+
+[dependencies]
+# Phase 3 fills in the dependency list (rocksdb, dashmap, petgraph, candle*, surrealdb,
+# tracing, opentelemetry, etc.) once the modules move in.
+
+[features]
+# Phase 3 fills in: default = ["embeddings"], embeddings, surrealdb-storage, otel, ...

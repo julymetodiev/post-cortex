@@ -1,0 +1,23 @@
+[package]
+name = "post-cortex-facade"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Facade meta-crate for the post-cortex workspace. Re-exports post-cortex-core and (feature-gated) post-cortex-mcp / post-cortex-daemon for one-stop integration."
+keywords = ["post-cortex", "facade", "memory", "ai", "rust-sdk"]
+categories = ["data-structures"]
+readme = "README.md"
+documentation = "https://docs.rs/post-cortex"
+
+# NOTE: the published name on crates.io will be `post-cortex` once the legacy
+# root crate is retired in Phase 8 (the legacy package currently owns that
+# name in the workspace). Until then, this crate publishes as
+# `post-cortex-facade` internally to avoid the name clash; Phase 8 renames it
+# back via `[package] name = "post-cortex"` plus deletion of the legacy root
+# [package] section.
+
+[dependencies]
+# Phase 8 fills in: post-cortex-core (always), and feature-gated mcp/daemon re-exports.

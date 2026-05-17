@@ -1,0 +1,19 @@
+[package]
+name = "post-cortex-proto"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Protobuf + tonic-generated wire types for post-cortex. Domain-neutral; safe to depend on from gRPC clients without pulling the full server stack."
+keywords = ["post-cortex", "grpc", "protobuf", "tonic", "memory"]
+categories = ["api-bindings", "encoding"]
+readme = "README.md"
+documentation = "https://docs.rs/post-cortex-proto"
+
+[dependencies]
+# Phase 2 fills in: prost, prost-types, tonic = { default-features = false, features = ["prost"] }
+
+[build-dependencies]
+# Phase 2 fills in: tonic-build with build_server / build_client toggles

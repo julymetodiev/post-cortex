@@ -4379,6 +4379,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "post-cortex-core"
+version = "0.1.23"
+
+[[package]]
+name = "post-cortex-daemon"
+version = "0.1.23"
+
+[[package]]
+name = "post-cortex-facade"
+version = "0.1.23"
+
+[[package]]
+name = "post-cortex-mcp"
+version = "0.1.23"
+
+[[package]]
+name = "post-cortex-proto"
+version = "0.1.23"
+
+[[package]]
 name = "potential_utf"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
