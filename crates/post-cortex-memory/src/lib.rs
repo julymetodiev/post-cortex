@@ -23,10 +23,12 @@ pub mod content_vectorizer;
 pub mod context_assembly;
 pub mod memory_system;
 pub mod performance;
+pub mod pipeline;
 pub mod query_cache;
 pub mod scoring;
 pub mod semantic_query_engine;
 pub mod services;
 
 pub use memory_system::{ConversationMemorySystem, SystemConfig};
+pub use pipeline::{Pipeline, PipelineConfig, PipelineError};
 pub use services::MemoryServiceImpl;

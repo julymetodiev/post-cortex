@@ -32,6 +32,7 @@ use post_cortex_core::services::{
 };
 
 use crate::memory_system::ConversationMemorySystem;
+use crate::pipeline::{Pipeline, PipelineConfig};
 
 /// Canonical [`PostCortexService`] implementation backed by
 /// [`ConversationMemorySystem`].
@@ -40,13 +41,35 @@ use crate::memory_system::ConversationMemorySystem;
 /// (typically the singleton owned by the daemon).
 pub struct MemoryServiceImpl {
     system: Arc<ConversationMemorySystem>,
+    pipeline: Arc<Pipeline>,
 }
 
 impl MemoryServiceImpl {
-    /// Wrap an existing memory system in the canonical service trait.
+    /// Wrap an existing memory system in the canonical service trait,
+    /// starting the non-blocking write pipeline with default capacities.
+    /// Must be called from inside a Tokio runtime.
     #[must_use]
     pub fn new(system: Arc<ConversationMemorySystem>) -> Self {
-        Self { system }
+        Self::with_pipeline_config(system, PipelineConfig::default())
+    }
+
+    /// Wrap an existing memory system in the service trait with an
+    /// explicit pipeline configuration.
+    #[must_use]
+    pub fn with_pipeline_config(
+        system: Arc<ConversationMemorySystem>,
+        config: PipelineConfig,
+    ) -> Self {
+        let pipeline = Arc::new(Pipeline::start(config));
+        Self { system, pipeline }
+    }
+
+    /// Borrow the non-blocking pipeline. Exposed so transport adapters
+    /// can submit derived-work items directly (e.g. enqueue an
+    /// embedding compute after a manual storage write).
+    #[must_use]
+    pub fn pipeline(&self) -> &Arc<Pipeline> {
+        &self.pipeline
     }
 
     /// Borrow the underlying memory system. Provided so the daemon's
@@ -79,7 +102,7 @@ impl PostCortexService for MemoryServiceImpl {
             // SystemHealth does not yet expose memory bytes — wired in
             // Phase 11 (perf observability). For now report 0.
             memory_usage_bytes: 0,
-            pipeline_backlog: 0, // Wired in Phase 5 (non-blocking pipeline).
+            pipeline_backlog: self.pipeline.backlog(),
             uptime_seconds: health.uptime_seconds,
         })
     }
