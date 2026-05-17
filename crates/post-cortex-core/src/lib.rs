@@ -33,6 +33,7 @@
 
 pub mod core;
 pub mod graph;
+pub mod services;
 pub mod session;
 pub mod summary;
 pub mod workspace;

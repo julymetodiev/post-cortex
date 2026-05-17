@@ -26,5 +26,7 @@ pub mod performance;
 pub mod query_cache;
 pub mod scoring;
 pub mod semantic_query_engine;
+pub mod services;
 
 pub use memory_system::{ConversationMemorySystem, SystemConfig};
+pub use services::MemoryServiceImpl;

@@ -32,6 +32,9 @@ futures.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
 regex.workspace = true
+# Phase 4 — services::PostCortexService trait carries serde-able request/
+# response types; tracing instrumentation lives at the impl side in
+# post-cortex-memory.
 
 # Lock-free + concurrency primitives
 dashmap.workspace = true
