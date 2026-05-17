@@ -45,9 +45,10 @@ fn build_content(
     let resolve_slot = |preferred: &[&str], fallback_keys: &[&str]| -> String {
         for k in preferred.iter().chain(fallback_keys.iter()) {
             if let Some(v) = content.get(*k)
-                && !v.trim().is_empty() {
-                    return v.clone();
-                }
+                && !v.trim().is_empty()
+            {
+                return v.clone();
+            }
         }
         String::new()
     };

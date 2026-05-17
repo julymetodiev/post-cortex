@@ -116,9 +116,10 @@ impl FreshnessStorage for RealRocksDBStorage {
                 }
 
                 if let Ok(reference) = SourceReference::decode(&value[..])
-                    && reference.file_path == query_path {
-                        keys_to_delete.push(key.to_vec());
-                    }
+                    && reference.file_path == query_path
+                {
+                    keys_to_delete.push(key.to_vec());
+                }
             }
 
             for key in keys_to_delete {
@@ -156,9 +157,10 @@ impl FreshnessStorage for RealRocksDBStorage {
                     }
 
                     if let Ok(reference) = SourceReference::decode(&value[..])
-                        && reference.file_path == query_path {
-                            matches.push(reference);
-                        }
+                        && reference.file_path == query_path
+                    {
+                        matches.push(reference);
+                    }
                 }
 
                 Ok(matches)
@@ -358,19 +360,20 @@ impl FreshnessStorage for RealRocksDBStorage {
                     }
 
                     if let Ok(reference) = SourceReference::decode(&value[..])
-                        && let Some(ref scope) = reference.scope {
-                            use post_cortex_proto::pb::source_scope::Scope;
-                            if let Some(Scope::Function(ref func)) = scope.scope {
-                                let ref_key = format!("{}::{}", reference.file_path, func.name);
-                                if ref_key == changed_key {
-                                    keys_to_delete.push(key.to_vec());
-                                    direct_count += 1;
-                                } else if dependent_symbols.contains(&ref_key) {
-                                    keys_to_delete.push(key.to_vec());
-                                    cascade_count += 1;
-                                }
+                        && let Some(ref scope) = reference.scope
+                    {
+                        use post_cortex_proto::pb::source_scope::Scope;
+                        if let Some(Scope::Function(ref func)) = scope.scope {
+                            let ref_key = format!("{}::{}", reference.file_path, func.name);
+                            if ref_key == changed_key {
+                                keys_to_delete.push(key.to_vec());
+                                direct_count += 1;
+                            } else if dependent_symbols.contains(&ref_key) {
+                                keys_to_delete.push(key.to_vec());
+                                cascade_count += 1;
                             }
                         }
+                    }
                 }
 
                 for key in keys_to_delete {

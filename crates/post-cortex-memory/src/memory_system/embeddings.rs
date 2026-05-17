@@ -852,13 +852,14 @@ fn enrich_results_with_graph(
         let top2 = extract_entities(&enriched[1].text_content);
         if let (Some(e1), Some(e2)) = (top1.first(), top2.first())
             && e1 != e2
-                && let Some(path) = entity_graph.find_shortest_path(e1, e2)
-                    && path.len() > 2 {
-                        graph_insights.push_str(&format!(
-                            "\n[Structural Insight]: Found connection: {}\n",
-                            path.join(" -> ")
-                        ));
-                    }
+            && let Some(path) = entity_graph.find_shortest_path(e1, e2)
+            && path.len() > 2
+        {
+            graph_insights.push_str(&format!(
+                "\n[Structural Insight]: Found connection: {}\n",
+                path.join(" -> ")
+            ));
+        }
     }
 
     // Step 4: prepend insights to first result

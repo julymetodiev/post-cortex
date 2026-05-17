@@ -57,9 +57,10 @@ impl SurrealDBStorage {
 
             // Apply filter if specified
             if let Some(ref filter) = options.session_filter
-                && !filter.contains(&session_id) {
-                    continue;
-                }
+                && !filter.contains(&session_id)
+            {
+                continue;
+            }
 
             // Check if session exists
             let exists = self.session_exists(session_id).await?;
@@ -112,9 +113,10 @@ impl SurrealDBStorage {
         for workspace in data.workspaces {
             // Apply filter if specified
             if let Some(ref filter) = options.workspace_filter
-                && !filter.contains(&workspace.id) {
-                    continue;
-                }
+                && !filter.contains(&workspace.id)
+            {
+                continue;
+            }
 
             // Check if workspace exists
             let existing = self.list_workspaces().await?;

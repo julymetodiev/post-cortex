@@ -266,17 +266,18 @@ pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result
                     // Parse PCX hooks and merge into existing
                     let pcx_settings = generate_settings_json(&session_id);
                     if let Ok(pcx_json) = serde_json::from_str::<serde_json::Value>(&pcx_settings)
-                        && let Some(hooks) = pcx_json.get("hooks") {
-                            existing_json
-                                .as_object_mut()
-                                .unwrap()
-                                .insert("hooks".to_string(), hooks.clone());
-                            let merged = serde_json::to_string_pretty(&existing_json)
-                                .map_err(|e| format!("JSON error: {}", e))?;
-                            std::fs::write(&settings_path, format!("{}\n", merged))
-                                .map_err(|e| format!("Write error: {}", e))?;
-                            println!("  Updated: .claude/settings.json (added hooks)");
-                        }
+                        && let Some(hooks) = pcx_json.get("hooks")
+                    {
+                        existing_json
+                            .as_object_mut()
+                            .unwrap()
+                            .insert("hooks".to_string(), hooks.clone());
+                        let merged = serde_json::to_string_pretty(&existing_json)
+                            .map_err(|e| format!("JSON error: {}", e))?;
+                        std::fs::write(&settings_path, format!("{}\n", merged))
+                            .map_err(|e| format!("Write error: {}", e))?;
+                        println!("  Updated: .claude/settings.json (added hooks)");
+                    }
                 }
             }
             Err(_) => {

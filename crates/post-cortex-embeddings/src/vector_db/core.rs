@@ -311,9 +311,10 @@ impl VectorDB {
             // Early termination: if current candidate is worse than worst result, stop
             if results.len() >= ef_search
                 && let Some(Reverse(worst)) = results.peek()
-                    && current.similarity < worst.similarity {
-                        break;
-                    }
+                && current.similarity < worst.similarity
+            {
+                break;
+            }
 
             // Explore connections
             if let Some(connections) = self.hnsw_index.get_connections(current.id) {
@@ -458,10 +459,11 @@ impl VectorDB {
             if heap.len() < k {
                 heap.push(Reverse(result));
             } else if let Some(Reverse(worst)) = heap.peek()
-                && similarity > worst.similarity {
-                    heap.pop();
-                    heap.push(Reverse(result));
-                }
+                && similarity > worst.similarity
+            {
+                heap.pop();
+                heap.push(Reverse(result));
+            }
         }
 
         // Extract results sorted by similarity (descending)

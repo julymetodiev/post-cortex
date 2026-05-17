@@ -141,9 +141,10 @@ pub fn generate_recovery_suggestions(
         suggestions.push("Create a new session using the 'session' tool with action='create' to get a valid UUID".to_string());
 
         if let Some(Value::String(s)) = received_value
-            && s.len() != 36 {
-                suggestions.push(format!("Your session_id '{}' has {} characters, but UUIDs require exactly 36 characters with hyphens.", s, s.len()));
-            }
+            && s.len() != 36
+        {
+            suggestions.push(format!("Your session_id '{}' has {} characters, but UUIDs require exactly 36 characters with hyphens.", s, s.len()));
+        }
     }
 
     // Pattern: interaction_type validation

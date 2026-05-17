@@ -154,10 +154,11 @@ impl DaemonConfig {
         }
 
         if let Ok(grpc_port_str) = std::env::var("PC_GRPC_PORT")
-            && let Ok(port) = grpc_port_str.parse::<u16>() {
-                config.grpc_port = port;
-                tracing::debug!("Overriding grpc_port from PC_GRPC_PORT environment variable");
-            }
+            && let Ok(port) = grpc_port_str.parse::<u16>()
+        {
+            config.grpc_port = port;
+            tracing::debug!("Overriding grpc_port from PC_GRPC_PORT environment variable");
+        }
 
         if let Ok(data_dir) = std::env::var("PC_DATA_DIR") {
             config.data_directory = data_dir;

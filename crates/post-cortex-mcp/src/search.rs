@@ -52,13 +52,12 @@ fn search_hit_to_json(
         "timestamp": r.timestamp.to_rfc3339(),
         "combined_score": r.combined_score,
     });
-    if include_session_id
-        && let Some(map) = obj.as_object_mut() {
-            map.insert(
-                "session_id".to_string(),
-                serde_json::Value::String(r.session_id.to_string()),
-            );
-        }
+    if include_session_id && let Some(map) = obj.as_object_mut() {
+        map.insert(
+            "session_id".to_string(),
+            serde_json::Value::String(r.session_id.to_string()),
+        );
+    }
     obj
 }
 
