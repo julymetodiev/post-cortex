@@ -32,9 +32,11 @@ use uuid::Uuid;
 /// System-wide error type for Post-Cortex
 #[derive(Error, Debug)]
 pub enum SystemError {
-    // Storage errors
+    // Storage errors — concrete backend errors (rocksdb / surrealdb) are
+    // wrapped as strings here so post-cortex-core stays free of those deps.
+    // Backends in post-cortex-storage call `SystemError::Database(e.to_string())`.
     #[error("Database error: {0}")]
-    Database(#[from] rocksdb::Error),
+    Database(String),
 
     #[error("Session {0} not found")]
     SessionNotFound(Uuid),
@@ -75,12 +77,12 @@ pub enum SystemError {
     #[error("Entity graph update failed: {0}")]
     GraphUpdateFailed(String),
 
-    // Embeddings
-    #[cfg(feature = "embeddings")]
+    // Embeddings — error variants are now unconditional. Whether the
+    // embedding backend is wired (BERT vs static-hash vs custom) is a
+    // runtime concern of post-cortex-embeddings.
     #[error("Embedding model error: {0}")]
     EmbeddingModel(String),
 
-    #[cfg(feature = "embeddings")]
     #[error("Vectorization failed: {0}")]
     VectorizationFailed(String),
 

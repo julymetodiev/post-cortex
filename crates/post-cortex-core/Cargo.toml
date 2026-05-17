@@ -13,23 +13,10 @@ readme = "README.md"
 documentation = "https://docs.rs/post-cortex-core"
 
 [dependencies]
+# post-cortex-core is the dependency root. Only the proto crate (for
+# FreshnessEntry / SourceReference types referenced from the domain
+# layer) and lightweight stdlib-adjacent crates.
 post-cortex-proto.workspace = true
-
-# Phase 3b transitional — embeddings + HNSW impl moved out of core. The
-# orchestrator code (memory_system, content_vectorizer, semantic_query_engine,
-# query_cache, context_assembly) still lives in this crate until Phase 3d
-# extracts it; those modules reach into post-cortex-embeddings for the
-# concrete EmbeddingBackend + VectorDB types. After Phase 3d this becomes
-# `dev-dependencies = true` only or is dropped entirely (core itself is
-# trait-only).
-post-cortex-embeddings.workspace = true
-
-# Direct prost (needed by storage/rocksdb_storage/freshness.rs for
-# encoding SourceReference proto messages into RocksDB).
-prost.workspace = true
-
-# Filesystem helpers (StorageConfig default path lookup).
-dirs.workspace = true
 
 # Core async runtime + serialisation
 anyhow.workspace = true
@@ -60,22 +47,6 @@ rand.workspace = true
 # Domain
 petgraph.workspace = true
 
-# Storage backends
-rocksdb.workspace = true
-surrealdb = { workspace = true, optional = true }
-surrealdb-types = { workspace = true, optional = true }
-
-# Export / import compression (storage::export_import)
-flate2.workspace = true
-zstd.workspace = true
-
-# Local embeddings (Phase 1+: feature-gated)
-candle-core = { workspace = true, optional = true }
-candle-nn = { workspace = true, optional = true }
-candle-transformers = { workspace = true, optional = true }
-tokenizers = { workspace = true, optional = true }
-hf-hub = { workspace = true, optional = true }
-
 # Observability
 log.workspace = true
 tracing.workspace = true
@@ -89,16 +60,7 @@ serial_test.workspace = true
 tokio-stream.workspace = true
 
 [features]
-default = ["embeddings"]
-embeddings = [
-    "dep:candle-core",
-    "dep:candle-nn",
-    "dep:candle-transformers",
-    "dep:tokenizers",
-    "dep:hf-hub",
-]
-surrealdb-storage = ["dep:surrealdb", "dep:surrealdb-types"]
-surrealdb-tikv = ["dep:surrealdb", "surrealdb/kv-tikv"]
+default = []
 # Placeholder for Phase 10 — the otel feature toggles between no-op tracing
 # layers and the full OTLP exporter stack. Wired with deps in Phase 10.
 otel = []

@@ -6,11 +6,76 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Storage backends for post-cortex — RocksDB (default) and SurrealDB (feature). Implements the Storage trait over the post-cortex domain types."
+description = "Storage backends for post-cortex — lock-free RocksDB (default) and optional SurrealDB. Implements the Storage trait against the post-cortex domain types."
 keywords = ["post-cortex", "storage", "rocksdb", "surrealdb", "kv"]
 categories = ["database-implementations"]
 readme = "README.md"
 documentation = "https://docs.rs/post-cortex-storage"
 
 [dependencies]
-# Phase 3c fills this in. Phase 3b stub keeps the workspace loadable.
+# Domain types (session, graph, workspace, context_update, scoring,
+# structured_context, error) come from post-cortex-core.
+post-cortex-core.workspace = true
+
+# Vector data types (VectorMetadata, SearchMatch, VectorDbStats). We only
+# need the types — the HNSW impl + Candle ML stack is gated behind the
+# `bert` feature of post-cortex-embeddings, which we leave off.
+post-cortex-embeddings.workspace = true
+
+# gRPC proto types (Source tracking, FreshnessEntry, CascadeInvalidateReport,
+# SymbolId — referenced from the Storage trait API and the freshness
+# subsystem). Storage backends serialise these directly into RocksDB /
+# SurrealDB.
+post-cortex-proto.workspace = true
+prost.workspace = true
+
+# Storage engines
+rocksdb.workspace = true
+surrealdb = { workspace = true, optional = true }
+surrealdb-types = { workspace = true, optional = true }
+
+# Async + serialisation
+anyhow.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bincode.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+futures.workspace = true
+regex.workspace = true
+
+# Concurrency primitives
+dashmap.workspace = true
+arc-swap.workspace = true
+parking_lot.workspace = true
+tokio.workspace = true
+
+# Filesystem helpers + compression for export/import
+dirs.workspace = true
+flate2.workspace = true
+zstd.workspace = true
+
+# Observability
+log.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+serial_test.workspace = true
+tokio-test.workspace = true
+
+[features]
+# rocksdb is the default backend — always compiled. Feature naming kept
+# in sync with the legacy single-crate package so existing `#[cfg(feature
+# = "surrealdb-storage")]` annotations across the moved tree (~60 sites)
+# resolve without rewriting.
+default = []
+surrealdb-storage = ["dep:surrealdb", "dep:surrealdb-types"]
+surrealdb-tikv = ["surrealdb-storage", "surrealdb/kv-tikv"]
+otel = []
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

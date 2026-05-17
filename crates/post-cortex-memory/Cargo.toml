@@ -6,11 +6,67 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Orchestrator for post-cortex — ConversationMemorySystem ties storage + embeddings + graph + session + summary into a single lock-free memory hierarchy with async pipelines."
+description = "Conversation memory orchestrator for post-cortex. Ties storage + embeddings + graph + session + summary into a single lock-free memory hierarchy with async pipelines and a canonical PostCortexService API."
 keywords = ["post-cortex", "memory", "orchestrator", "conversation", "ai"]
 categories = ["data-structures", "concurrency"]
 readme = "README.md"
 documentation = "https://docs.rs/post-cortex-memory"
 
 [dependencies]
-# Phase 3d fills this in. Phase 3b stub keeps the workspace loadable.
+post-cortex-core.workspace = true
+post-cortex-proto.workspace = true
+post-cortex-storage.workspace = true
+post-cortex-embeddings = { workspace = true, features = ["bert"] }
+
+# Async + serialisation
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+bincode.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+regex.workspace = true
+
+# Lock-free concurrency
+dashmap.workspace = true
+crossbeam-channel.workspace = true
+crossbeam-queue.workspace = true
+arc-swap.workspace = true
+atomic_float.workspace = true
+parking_lot.workspace = true
+rayon.workspace = true
+num_cpus.workspace = true
+rand.workspace = true
+
+# Observability
+log.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio-test.workspace = true
+tempfile.workspace = true
+proptest.workspace = true
+serial_test.workspace = true
+tokio-stream.workspace = true
+
+[features]
+# `embeddings` and `surrealdb-storage` mirror the legacy single-crate feature
+# names so the ~60 `#[cfg(feature = "...")]` annotations in the moved code
+# resolve without rewriting. memory always pulls in post-cortex-embeddings
+# (with `bert`) — the feature flag here is purely a compile-time toggle for
+# the *alternative* paths that fire when the legacy embeddings module was
+# disabled in the old single-crate build.
+default = ["embeddings"]
+embeddings = []
+surrealdb-storage = ["post-cortex-storage/surrealdb-storage"]
+otel = []
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

@@ -103,7 +103,10 @@ serial_test = { version = "3.3", features = ["async"] }
 # the local path.
 post-cortex-proto = { version = "0.1.23", path = "crates/post-cortex-proto" }
 post-cortex-core = { version = "0.1.23", path = "crates/post-cortex-core" }
-post-cortex-embeddings = { version = "0.1.23", path = "crates/post-cortex-embeddings" }
+# default-features = false at the workspace level so storage (which only
+# needs the data types) can take it cleanly; consumers that want the BERT
+# stack add `features = ["bert"]` explicitly.
+post-cortex-embeddings = { version = "0.1.23", path = "crates/post-cortex-embeddings", default-features = false }
 post-cortex-storage = { version = "0.1.23", path = "crates/post-cortex-storage" }
 post-cortex-memory = { version = "0.1.23", path = "crates/post-cortex-memory" }
 post-cortex-mcp = { version = "0.1.23", path = "crates/post-cortex-mcp" }
@@ -165,13 +168,9 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 petgraph.workspace = true
 async-trait.workspace = true
-candle-core = { workspace = true, optional = true }
-candle-nn = { workspace = true, optional = true }
-candle-transformers = { workspace = true, optional = true }
-tokenizers = { workspace = true, optional = true }
-hf-hub = { workspace = true, optional = true }
-surrealdb = { workspace = true, optional = true }
-surrealdb-types = { workspace = true, optional = true }
+# (candle/tokenizers/hf-hub moved into post-cortex-embeddings; surrealdb
+# moved into post-cortex-storage — legacy root forwards features to the
+# new homes via [features] below.)
 axum.workspace = true
 tower.workspace = true
 tower-http.workspace = true
@@ -187,18 +186,17 @@ tonic.workspace = true
 prost.workspace = true
 prost-types.workspace = true
 
-# Phase 2 — gRPC types now live in a sibling crate. The legacy root keeps
-# `crate::daemon::grpc_service::pb` working via a re-export inside
-# src/daemon/grpc_service/mod.rs, but all 30+ call sites that used to be
-# under `core/` and `storage/` now import `post_cortex_proto::pb::…`
-# directly so the upcoming Phase 3 core extraction is unblocked.
 post-cortex-proto.workspace = true
 
-# Phase 3 — domain modules now live in post-cortex-core. The legacy root
-# re-exports them via src/lib.rs so `crate::core::X` paths inside
-# src/daemon/ and src/tools/ keep resolving until Phases 6/7 finish the
-# split.
+# Phases 3a-3d — the legacy root re-exports the workspace member crates
+# under their historical paths (`crate::core::*`, `crate::storage::*`,
+# `crate::session::*`, etc.) so the still-in-tree `daemon` and `tools`
+# modules — plus integration tests — keep building unchanged until
+# Phases 6/7 split them out. The shim lives in src/lib.rs.
 post-cortex-core = { workspace = true }
+post-cortex-embeddings = { workspace = true, features = ["bert"] }
+post-cortex-storage.workspace = true
+post-cortex-memory.workspace = true
 
 # [build-dependencies] section intentionally absent — the legacy root no
 # longer compiles proto. tonic-build moved to crates/post-cortex-proto.
@@ -227,6 +225,13 @@ harness = false
 [features]
 default = ["embeddings"]
 llm-integration = []
-embeddings = ["candle-core", "candle-nn", "candle-transformers", "tokenizers", "hf-hub"]
-surrealdb-storage = ["dep:surrealdb", "dep:surrealdb-types"]
-surrealdb-tikv = ["dep:surrealdb", "surrealdb/kv-tikv"]
+# The legacy root crate's `embeddings` and `surrealdb-storage` features
+# now forward to the corresponding features on post-cortex-memory (which
+# owns the legacy code under the new layout). post-cortex-memory in turn
+# forwards `surrealdb-storage` to post-cortex-storage. End result: the
+# `cargo build --features embeddings,surrealdb-storage` invocation that
+# existed for the single-crate package keeps producing an identical
+# build of the legacy daemon + tools tree.
+embeddings = ["post-cortex-memory/embeddings"]
+surrealdb-storage = ["post-cortex-memory/surrealdb-storage"]
+surrealdb-tikv = ["post-cortex-memory/surrealdb-storage", "post-cortex-storage/surrealdb-tikv"]
