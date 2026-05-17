@@ -4381,7 +4381,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex"
-version = "0.1.23"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4419,7 +4419,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-core"
-version = "0.1.23"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4457,7 +4457,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-daemon"
-version = "0.1.23"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4509,7 +4509,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-embeddings"
-version = "0.1.23"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4541,7 +4541,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-mcp"
-version = "0.1.23"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4566,7 +4566,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-memory"
-version = "0.1.23"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4609,7 +4609,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-proto"
-version = "0.1.23"
+version = "0.2.0"
 dependencies = [
  "prost 0.13.5",
  "prost-types 0.13.5",
@@ -4619,7 +4619,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-storage"
-version = "0.1.23"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arc-swap",

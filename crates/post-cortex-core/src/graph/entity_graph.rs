@@ -1582,11 +1582,9 @@ mod tests {
         assert!(RelationType::CausedBy < RelationType::Solves);
 
         // Test that sorting works
-        let mut types = vec![
-            RelationType::Solves,
+        let mut types = [RelationType::Solves,
             RelationType::RequiredBy,
-            RelationType::LeadsTo,
-        ];
+            RelationType::LeadsTo];
         types.sort();
         assert_eq!(types[0], RelationType::RequiredBy);
         assert_eq!(types[1], RelationType::LeadsTo);

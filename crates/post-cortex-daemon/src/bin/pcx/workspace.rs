@@ -57,7 +57,7 @@ pub async fn handle_workspace_action(action: WorkspaceAction) -> Result<(), Stri
                 let client = DaemonClient::new(&config);
                 let workspaces = client.list_workspaces().await?;
                 println!("Workspaces ({})", workspaces.len());
-                println!("{:<38} {:<20} {}", "ID", "Name", "Sessions");
+                println!("{:<38} {:<20} Sessions", "ID", "Name");
                 println!("{:-<38} {:-<20} {:-<10}", "", "", "");
                 for ws in workspaces {
                     println!("{:<38} {:<20} {}", ws.id, ws.name, ws.session_count);
@@ -68,7 +68,7 @@ pub async fn handle_workspace_action(action: WorkspaceAction) -> Result<(), Stri
                 let existing_sessions: std::collections::HashSet<_> =
                     system.list_sessions().await?.into_iter().collect();
                 println!("Workspaces ({})", workspaces.len());
-                println!("{:<38} {:<20} {}", "ID", "Name", "Sessions");
+                println!("{:<38} {:<20} Sessions", "ID", "Name");
                 println!("{:-<38} {:-<20} {:-<10}", "", "", "");
                 for ws in workspaces {
                     let actual_count = ws

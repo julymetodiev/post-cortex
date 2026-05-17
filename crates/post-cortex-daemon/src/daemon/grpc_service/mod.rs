@@ -107,12 +107,12 @@ impl PostCortex for PcxGrpcService {
             self.memory
                 .find_sessions_by_name_or_description(&req.name_filter)
                 .await
-                .map_err(|e| Status::internal(e))?
+                .map_err(Status::internal)?
         } else {
             self.memory
                 .list_sessions()
                 .await
-                .map_err(|e| Status::internal(e))?
+                .map_err(Status::internal)?
         };
 
         let limit = if req.limit > 0 {
@@ -151,7 +151,7 @@ impl PostCortex for PcxGrpcService {
             .memory
             .get_session(session_id)
             .await
-            .map_err(|e| Status::not_found(e))?;
+            .map_err(Status::not_found)?;
         let session = session_arc.load();
 
         let info = SessionInfo {
@@ -182,7 +182,7 @@ impl PostCortex for PcxGrpcService {
             .memory
             .find_sessions_by_name_or_description(&req.query)
             .await
-            .map_err(|e| Status::internal(e))?;
+            .map_err(Status::internal)?;
 
         let mut sessions = Vec::new();
         for session_id in session_ids {
@@ -379,7 +379,7 @@ impl PostCortex for PcxGrpcService {
             .memory
             .get_session(session_id)
             .await
-            .map_err(|e| Status::not_found(e))?;
+            .map_err(Status::not_found)?;
         let session = session_arc.load();
 
         let checkpoint = SessionCheckpoint {
@@ -419,7 +419,7 @@ impl PostCortex for PcxGrpcService {
             .memory
             .get_session(session_id)
             .await
-            .map_err(|e| Status::not_found(e))?;
+            .map_err(Status::not_found)?;
         let session = session_arc.load();
 
         let limit = if req.limit > 0 {
@@ -702,7 +702,7 @@ impl PostCortex for PcxGrpcService {
 
         let session_id = parse_uuid(&req.session_id)?;
         let session_arc = self.memory.get_session(session_id).await
-            .map_err(|e| Status::not_found(e))?;
+            .map_err(Status::not_found)?;
         let session = session_arc.load();
 
         use post_cortex_core::summary::{SummaryGenerator, SummaryOptions};
@@ -742,7 +742,7 @@ impl PostCortex for PcxGrpcService {
 
         let session_id = parse_uuid(&req.session_id)?;
         let session_arc = self.memory.get_session(session_id).await
-            .map_err(|e| Status::not_found(e))?;
+            .map_err(Status::not_found)?;
         let session = session_arc.load();
 
         use post_cortex_core::summary::SummaryGenerator;
@@ -762,7 +762,7 @@ impl PostCortex for PcxGrpcService {
 
         let session_id = parse_uuid(&req.session_id)?;
         let session_arc = self.memory.get_session(session_id).await
-            .map_err(|e| Status::not_found(e))?;
+            .map_err(Status::not_found)?;
         let session = session_arc.load();
 
         use post_cortex_core::summary::SummaryGenerator;
@@ -782,7 +782,7 @@ impl PostCortex for PcxGrpcService {
 
         let session_id = parse_uuid(&req.session_id)?;
         let session_arc = self.memory.get_session(session_id).await
-            .map_err(|e| Status::not_found(e))?;
+            .map_err(Status::not_found)?;
         let session = session_arc.load();
 
         let mut analysis = session.entity_graph.analyze_entity_importance();
@@ -807,7 +807,7 @@ impl PostCortex for PcxGrpcService {
 
         let session_id = parse_uuid(&req.session_id)?;
         let session_arc = self.memory.get_session(session_id).await
-            .map_err(|e| Status::not_found(e))?;
+            .map_err(Status::not_found)?;
         let session = session_arc.load();
 
         let network = match req.center_entity {
@@ -836,7 +836,7 @@ impl PostCortex for PcxGrpcService {
 
         let session_id = parse_uuid(&req.session_id)?;
         let session_arc = self.memory.get_session(session_id).await
-            .map_err(|e| Status::not_found(e))?;
+            .map_err(Status::not_found)?;
         let session = session_arc.load();
 
         use post_cortex_core::summary::SummaryGenerator;
@@ -903,7 +903,7 @@ impl PostCortex for PcxGrpcService {
             // Single-session (existing behaviour)
             let session_id = parse_uuid(&req.session_id)?;
             let session_arc = self.memory.get_session(session_id).await
-                .map_err(|e| Status::not_found(e))?;
+                .map_err(Status::not_found)?;
             let session = session_arc.load();
             let updates: Vec<_> = session.hot_context.iter().iter()
                 .chain(session.warm_context.iter().map(|c| &c.update))
@@ -1077,7 +1077,7 @@ impl PostCortex for PcxGrpcService {
         self.memory
             .workspace_manager
             .add_session_to_workspace(&workspace_id, session_id, role)
-            .map_err(|e| Status::not_found(e))?;
+            .map_err(Status::not_found)?;
 
         // Persist updated workspace membership
         if let Some(ws) = self.memory.workspace_manager.get_workspace(&workspace_id) {
@@ -1115,7 +1115,7 @@ impl PostCortex for PcxGrpcService {
         self.memory
             .workspace_manager
             .remove_session_from_workspace(&workspace_id, &session_id)
-            .map_err(|e| Status::not_found(e))?;
+            .map_err(Status::not_found)?;
 
         // Persist updated workspace membership
         if let Some(ws) = self.memory.workspace_manager.get_workspace(&workspace_id) {

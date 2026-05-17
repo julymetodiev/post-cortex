@@ -26,6 +26,13 @@ use std::sync::Arc;
 use crate::embeddings::backend::EmbeddingBackend;
 use crate::embeddings::pool::MemoryPool;
 
+/// Fallback embedding backend — hashes the input bytes into a
+/// deterministic pseudo-embedding of the configured dimension.
+///
+/// Used when the BERT backend is unavailable (e.g. the `bert` feature
+/// is disabled or the HuggingFace Hub model cache cannot be reached).
+/// The output is **not** semantically meaningful — it just provides
+/// stable vectors for tests and offline development.
 pub struct StaticHashBackend {
     dimension: usize,
     memory_pool: Arc<MemoryPool>,

@@ -547,7 +547,7 @@ impl ActiveSession {
         updates.retain(|u| {
             u.related_code
                 .as_ref()
-                .map_or(true, |cr| cr.file_path != file_path)
+                .is_none_or(|cr| cr.file_path != file_path)
         });
         let removed = before - updates.len();
         if removed > 0 {

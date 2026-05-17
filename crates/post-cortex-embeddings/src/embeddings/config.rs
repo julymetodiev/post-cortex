@@ -56,12 +56,14 @@ impl Default for EmbeddingConfig {
 
 /// Embedding model types
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Default)]
 pub enum EmbeddingModelType {
     /// Static embeddings (fast, lightweight)
     StaticSimilarityMRL,
     /// MiniLM model (balanced performance, English-only)
     MiniLM,
     /// Multilingual MiniLM model (supports 50+ languages including Bulgarian)
+    #[default]
     MultilingualMiniLM,
     /// TinyBERT model (smallest BERT variant)
     TinyBERT,
@@ -69,11 +71,6 @@ pub enum EmbeddingModelType {
     BGESmall,
 }
 
-impl Default for EmbeddingModelType {
-    fn default() -> Self {
-        Self::MultilingualMiniLM
-    }
-}
 
 impl EmbeddingModelType {
     /// Get embedding dimension for this model type

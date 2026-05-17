@@ -251,7 +251,7 @@ pub(super) async fn api_attach_session(
     server
         .memory_system
         .get_storage()
-        .add_session_to_workspace(ws_id, sess_id, role.clone())
+        .add_session_to_workspace(ws_id, sess_id, role)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 

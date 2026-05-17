@@ -71,10 +71,8 @@ pub async fn handle_migrate(
     let source_storage = RealRocksDBStorage::new(&source).await.map_err(|e| {
         let err_str = e.to_string();
         if err_str.contains("LOCK") || err_str.contains("Resource temporarily unavailable") {
-            format!(
-                "Source database is locked by another process (likely the daemon).\n\
-                     Please stop the daemon first: pkill -f 'pcx start'"
-            )
+            "Source database is locked by another process (likely the daemon).\n\
+                     Please stop the daemon first: pkill -f 'pcx start'".to_string()
         } else {
             format!("Failed to open source storage: {}", e)
         }

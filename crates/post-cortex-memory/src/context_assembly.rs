@@ -94,7 +94,7 @@ pub struct ImpactEntry {
 
 /// Rough token estimate: ~4 chars per token for English
 fn estimate_tokens(text: &str) -> usize {
-    (text.len() + 3) / 4
+    text.len().div_ceil(4)
 }
 
 /// Extract entity names that appear in the query text.
@@ -163,7 +163,7 @@ pub fn find_query_entities(query: &str, graph: &SimpleEntityGraph) -> Vec<String
         let threshold = if entity_tokens.len() <= 2 {
             entity_tokens.len()
         } else {
-            1.max((entity_tokens.len() * 2 + 4) / 5) // ceil(40%)
+            1.max((entity_tokens.len() * 2).div_ceil(5)) // ceil(40%)
         };
 
         if matched >= threshold {

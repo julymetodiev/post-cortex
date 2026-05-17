@@ -17,6 +17,17 @@
 // SAFETY: candle's `from_mmaped_safetensors` needs an unsafe block at the
 // single call site (file mmap). The exemption is justified inline.
 #![deny(unsafe_code)]
+// VectorDB config + HNSW types have many tuning knobs — the
+// field-by-field default-then-mutate pattern in tests is intentional.
+#![allow(clippy::field_reassign_with_default)]
+// `vec!` in tests is fine for clarity vs an array literal — silenced.
+#![allow(clippy::useless_vec)]
+// HNSW core uses .iter().enumerate() to index parallel arrays; the
+// loop variable looks "unused" to the lint but is structurally needed.
+#![allow(clippy::needless_range_loop)]
+// We pin MSRV 1.85; some clippy suggestions point at stabilisations in
+// later releases (e.g. div_ceil since 1.73 / inline_const since 1.79).
+#![allow(clippy::incompatible_msrv)]
 
 pub mod embeddings;
 pub mod error;

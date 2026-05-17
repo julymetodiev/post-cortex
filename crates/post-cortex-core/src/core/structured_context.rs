@@ -147,8 +147,10 @@ impl Default for QuestionItem {
 
 /// Status of a question in the conversation.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Default)]
 pub enum QuestionStatus {
     /// Question is open and awaiting answer.
+    #[default]
     Open,
     /// Question is being actively worked on.
     InProgress,
@@ -158,11 +160,6 @@ pub enum QuestionStatus {
     Deferred,
 }
 
-impl Default for QuestionStatus {
-    fn default() -> Self {
-        Self::Open
-    }
-}
 
 /// A concept identified during the conversation.
 ///

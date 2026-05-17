@@ -26,6 +26,8 @@
 //! own service impl.
 
 #![forbid(unsafe_code)]
+#![allow(clippy::result_large_err)]
+#![allow(clippy::type_complexity)]
 
 pub mod error;
 pub use error::{Error, Result as McpResult};

@@ -215,7 +215,7 @@ async fn test_session_isolation_bug_reproduction() {
     async fn add_updates(sys: &ConversationMemorySystem, sess: Uuid, updates: Vec<&str>) {
         for text in updates {
             let mut content = std::collections::HashMap::new();
-            content.insert("question".to_string(), format!("How does this work?"));
+            content.insert("question".to_string(), "How does this work?".to_string());
             content.insert("answer".to_string(), text.to_string());
 
             post_cortex::tools::mcp::update_conversation_context_with_system(

@@ -906,8 +906,10 @@ pub struct StorageConfig {
 /// Storage backend type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum StorageBackendType {
     /// RocksDB local storage (default)
+    #[default]
     RocksDB,
 
     /// SurrealDB storage with native graph support
@@ -915,11 +917,6 @@ pub enum StorageBackendType {
     SurrealDB,
 }
 
-impl Default for StorageBackendType {
-    fn default() -> Self {
-        StorageBackendType::RocksDB
-    }
-}
 
 impl StorageBackendType {
     /// Parse storage backend type from string

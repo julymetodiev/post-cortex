@@ -1001,7 +1001,7 @@ mod search_mode_tests {
         // Query vector
         let query = vec![0.5f32, 0.5f32]
             .into_iter()
-            .chain(std::iter::repeat(0.0f32).take(dim - 2))
+            .chain(std::iter::repeat_n(0.0f32, dim - 2))
             .collect::<Vec<f32>>();
 
         // Exact search (linear scan)
@@ -1018,9 +1018,9 @@ mod search_mode_tests {
             .unwrap();
 
         // All should return some results
-        assert!(exact_results.len() > 0);
-        assert!(approx_results.len() > 0);
-        assert!(balanced_results.len() > 0);
+        assert!(!exact_results.is_empty());
+        assert!(!approx_results.is_empty());
+        assert!(!balanced_results.is_empty());
 
         // Exact search should have highest similarity for top result
         assert!(exact_results[0].similarity >= approx_results[0].similarity - 0.1);

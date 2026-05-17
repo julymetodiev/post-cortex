@@ -15,6 +15,23 @@
 //! ```
 
 #![forbid(unsafe_code)]
+// Storage records (StoredEntity, ExportData, etc.) are large by design —
+// they're persisted records, not transient values. Boxing them on the
+// Err path would obscure the API.
+#![allow(clippy::result_large_err)]
+// Some persisted records have many fields; refactoring into nested
+// helper types would change the on-disk serialization layout.
+#![allow(clippy::type_complexity)]
+// Construction patterns like `let mut cfg = StorageConfig::default(); cfg.x = y;`
+// are clearer than a struct literal with `..Default::default()` in the
+// large config types here.
+#![allow(clippy::field_reassign_with_default)]
+// `from_str` here pre-dates `std::str::FromStr` adoption; full FromStr
+// impls land during the Phase 9 error-typing follow-up.
+#![allow(clippy::should_implement_trait)]
+// `format!` inside a format arg is occasionally clearer than computing
+// the inner string ahead of time.
+#![allow(clippy::format_in_format_args)]
 
 pub mod error;
 pub mod export_import;

@@ -97,7 +97,7 @@ fn test_remove_vector() {
     assert!(removed);
     assert_eq!(db.get_stats().total_vectors, 0);
 
-    let results = db.search(&vec![1.0, 0.0, 0.0], 5).unwrap();
+    let results = db.search(&[1.0, 0.0, 0.0], 5).unwrap();
     assert_eq!(results.len(), 0);
 }
 
@@ -141,7 +141,7 @@ fn test_batch_operations() {
     assert_eq!(ids.len(), 3);
     assert_eq!(db.get_stats().total_vectors, 3);
 
-    let results = db.search(&vec![1.0, 0.0, 0.0], 5).unwrap();
+    let results = db.search(&[1.0, 0.0, 0.0], 5).unwrap();
     // The search should find all 3 vectors since they are all similar to [1.0, 0.0, 0.0] to some degree
     assert!(!results.is_empty()); // At least the exact match should be found
 }

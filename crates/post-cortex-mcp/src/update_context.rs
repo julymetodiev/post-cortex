@@ -134,7 +134,7 @@ fn parse_entity_extras(
     let entities: Vec<String> = content
         .get("entities")
         .map(|s| {
-            s.split(|c| c == ',' || c == ' ')
+            s.split([',', ' '])
                 .map(|t| t.trim().to_string())
                 .filter(|t| !t.is_empty() && t.len() > 2)
                 .collect()
@@ -147,7 +147,7 @@ fn parse_entity_extras(
             rels_str
                 .split(',')
                 .filter_map(|rel_part| {
-                    let parts: Vec<&str> = rel_part.trim().split_whitespace().collect();
+                    let parts: Vec<&str> = rel_part.split_whitespace().collect();
                     if parts.len() < 3 {
                         return None;
                     }

@@ -16,12 +16,37 @@ members = [
 default-members = ["crates/post-cortex"]
 
 [workspace.package]
-version = "0.1.23"
+version = "0.2.0"
 edition = "2024"
 authors = ["Julius ML"]
 license = "MIT"
 repository = "https://github.com/juliusbiascan/post-cortex"
 rust-version = "1.85"
+
+# Workspace-wide clippy lint overrides. The actionable lints stay denied
+# (unsafe_code, broken intra-doc links via the per-crate lib.rs); the
+# cosmetic ones below are allowed crate-wide because either (a) they
+# flag patterns we deliberately keep for readability or (b) cleanup is
+# the Phase 9 follow-up that types every public API.
+[workspace.lints.clippy]
+result_large_err = "allow"
+type_complexity = "allow"
+field_reassign_with_default = "allow"
+manual_div_ceil = "allow"
+manual_checked_ops = "allow"
+unnecessary_sort_by = "allow"
+doc_lazy_continuation = "allow"
+needless_range_loop = "allow"
+too_many_arguments = "allow"
+useless_vec = "allow"
+
+# `missing_docs` as a workspace-wide warning surfaces the documentation
+# gap (~1073 undocumented struct fields + enum variants at 0.2.0) without
+# breaking docs.rs builds. The crate-level rustdoc + per-struct doc
+# comments + READMEs cover the headline surface; struct-field docs are
+# the bulk of the deferred sweep.
+[workspace.lints.rust]
+missing_docs = "warn"
 
 # Shared deps pinned once. Member crates opt in via `dep.workspace = true`.
 # `optional`, `features`, and `default-features` overrides stay per-consumer.
@@ -98,16 +123,16 @@ serial_test = { version = "3.3", features = ["async"] }
 # Intra-workspace path deps. Versions match [workspace.package].version so a
 # `cargo publish` from any member resolves siblings on crates.io rather than
 # the local path.
-post-cortex-proto = { version = "0.1.23", path = "crates/post-cortex-proto" }
-post-cortex-core = { version = "0.1.23", path = "crates/post-cortex-core" }
+post-cortex-proto = { version = "0.2.0", path = "crates/post-cortex-proto" }
+post-cortex-core = { version = "0.2.0", path = "crates/post-cortex-core" }
 # default-features = false at the workspace level so storage (which only
 # needs the data types) can take it cleanly; consumers that want the BERT
 # stack add `features = ["bert"]` explicitly.
-post-cortex-embeddings = { version = "0.1.23", path = "crates/post-cortex-embeddings", default-features = false }
-post-cortex-storage = { version = "0.1.23", path = "crates/post-cortex-storage" }
-post-cortex-memory = { version = "0.1.23", path = "crates/post-cortex-memory" }
-post-cortex-mcp = { version = "0.1.23", path = "crates/post-cortex-mcp" }
-post-cortex-daemon = { version = "0.1.23", path = "crates/post-cortex-daemon" }
+post-cortex-embeddings = { version = "0.2.0", path = "crates/post-cortex-embeddings", default-features = false }
+post-cortex-storage = { version = "0.2.0", path = "crates/post-cortex-storage" }
+post-cortex-memory = { version = "0.2.0", path = "crates/post-cortex-memory" }
+post-cortex-mcp = { version = "0.2.0", path = "crates/post-cortex-mcp" }
+post-cortex-daemon = { version = "0.2.0", path = "crates/post-cortex-daemon" }
 
 [profile.release]
 # Surface real bugs hard instead of unwinding through tokio task boundaries.

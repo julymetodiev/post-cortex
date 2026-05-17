@@ -341,9 +341,10 @@ mod tests {
 
     #[test]
     fn test_coerce_float_to_string() {
-        let value = json!({"score": 3.14});
+        // Use an arbitrary float that doesn't approximate `f64::consts::PI`.
+        let value = json!({"score": 2.71});
         let result: HashMap<String, String> = coerce_and_validate(value).unwrap();
-        assert_eq!(result.get("score"), Some(&"3.14".to_string()));
+        assert_eq!(result.get("score"), Some(&"2.71".to_string()));
     }
 
     #[test]

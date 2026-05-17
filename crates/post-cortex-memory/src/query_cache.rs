@@ -606,7 +606,7 @@ impl QueryCache {
         // Collect keys to remove (entries associated with this session)
         for entry in self.cache.iter() {
             if entry.value().session_id == Some(session_id) {
-                keys_to_remove.push(entry.key().clone());
+                keys_to_remove.push(*entry.key());
             }
         }
 

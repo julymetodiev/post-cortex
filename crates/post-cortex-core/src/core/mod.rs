@@ -10,8 +10,18 @@
 //! storage backends live in `post-cortex-storage`. What remains here is
 //! transport-/IO-free domain logic.
 
+/// Generic LRU cache primitives used across the workspace.
 pub mod cache;
+
+/// Context-update data model — `ContextUpdate`, `EntityData`,
+/// `EntityRelationship`, `UpdateType`, and supporting types.
 pub mod context_update;
+
+/// Typed system error hierarchy and `Result<T>` alias.
 pub mod error;
+
+/// Structured projection types over a session's update history.
 pub mod structured_context;
+
+/// Retry + timeout helpers (`with_storage_timeout`, `with_mcp_timeout`).
 pub mod timeout_utils;

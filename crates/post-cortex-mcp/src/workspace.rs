@@ -190,7 +190,7 @@ pub async fn add_session_to_workspace(
 
     match system
         .workspace_manager
-        .add_session_to_workspace(&workspace_id, session_id, role_enum.clone())
+        .add_session_to_workspace(&workspace_id, session_id, role_enum)
     {
         Ok(()) => {
             if let Err(e) = persist_workspace_after_mutation(&system, workspace_id).await {

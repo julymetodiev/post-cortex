@@ -26,8 +26,7 @@ async fn export_from_rocksdb(
     let storage = RealRocksDBStorage::new(data_dir).await.map_err(|e| {
         let err_str = e.to_string();
         if err_str.contains("LOCK") || err_str.contains("Resource temporarily unavailable") {
-            format!(
-                "Database is locked by another process (likely the daemon).\n\
+            "Database is locked by another process (likely the daemon).\n\
                      \n\
                      Please stop the daemon first:\n\
                      \n\
@@ -37,8 +36,7 @@ async fn export_from_rocksdb(
                      Option 2: Stop via launchctl (macOS)\n\
                      $ launchctl unload ~/Library/LaunchAgents/com.juliusml.post-cortex.plist\n\
                      \n\
-                     Then retry the export command."
-            )
+                     Then retry the export command.".to_string()
         } else {
             format!("Failed to open storage: {}", e)
         }

@@ -18,6 +18,15 @@
 //! blocking pipeline work queues (TODO.md:136-145).
 
 #![forbid(unsafe_code)]
+// SystemError + memory::Error carry rich variants for transport layers.
+// Boxing them all to satisfy result_large_err would force every caller
+// to deref before pattern matching.
+#![allow(clippy::result_large_err)]
+// Storage actor request/response types are complex tuples by design.
+#![allow(clippy::type_complexity)]
+// `ptr_arg` flags a &mut Vec param that could be &mut [_], but the
+// caller relies on push() — slicing would break the contract.
+#![allow(clippy::ptr_arg)]
 
 pub mod content_vectorizer;
 pub mod context_assembly;

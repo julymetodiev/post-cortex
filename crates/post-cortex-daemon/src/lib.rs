@@ -37,6 +37,22 @@
 // the test framework, so we relax `forbid` to `deny` and let those two
 // blocks opt in via `#[allow(unsafe_code)]`.
 #![deny(unsafe_code)]
+// CoercionError carries rich context (path, expected type, hint, source)
+// so consumers can render actionable validation messages. The lint
+// flags every Result<_, CoercionError> as "Err variant very large", but
+// boxing it would defeat the design — accept the warning at crate level.
+#![allow(clippy::result_large_err)]
+// Some daemon types (CoerceFn signatures, gRPC handler tuples) are
+// intentionally complex; refactoring them into separate type aliases
+// would obscure the call site without changing behaviour.
+#![allow(clippy::type_complexity)]
+// gRPC handler match arms include a wildcard branch even when the
+// variants are exhaustive — leaving it in keeps the handlers
+// forward-compatible if new request types land.
+#![allow(clippy::wildcard_in_or_patterns)]
+#![allow(clippy::match_wildcard_for_single_variants)]
+// Some pcx CLI handlers take many tuple-shaped command-line args.
+#![allow(clippy::too_many_arguments)]
 
 pub mod daemon;
 pub mod error;

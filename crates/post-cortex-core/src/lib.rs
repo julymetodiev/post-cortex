@@ -30,12 +30,48 @@
 // candle's `from_mmaped_safetensors` requires `unsafe` at a single call
 // site in post-cortex-embeddings; this crate is otherwise unsafe-free.
 #![deny(unsafe_code)]
+// Cosmetic clippy suggestions silenced workspace-wide — see other
+// crates' lib.rs for the same rationale.
+#![allow(clippy::result_large_err)]
+#![allow(clippy::type_complexity)]
+#![allow(clippy::field_reassign_with_default)]
+#![allow(clippy::manual_div_ceil)]
+// `sort_by` with .cmp() is sometimes clearer than the suggested
+// `sort_by_key(|x| x.field)` when the key involves multiple fields.
+#![allow(clippy::unnecessary_sort_by)]
+// Doc lists with indentation drift in legacy code; cleanup is Phase 12
+// follow-up.
+#![allow(clippy::doc_lazy_continuation)]
 
+/// Cross-cutting primitives shared by every post-cortex crate.
+///
+/// Hosts the [`cache`][core::cache] LRU helpers, the
+/// [`context_update`][core::context_update] data model, the
+/// [`error`][core::error] hierarchy ([`SystemError`] + [`Result`]),
+/// the [`structured_context`][core::structured_context] projection
+/// types, and the [`timeout_utils`][core::timeout_utils] retry helpers.
 pub mod core;
+
+/// Entity graph + GraphRAG types — `petgraph`-backed knowledge graph
+/// used to enrich semantic search with relationship traversal.
 pub mod graph;
+
+/// Canonical [`services::PostCortexService`] trait. Every transport
+/// (gRPC, MCP, REST) delegates to the same single implementation in
+/// `post-cortex-memory`.
 pub mod services;
+
+/// `ActiveSession` and session-component types — the hot-context cache
+/// + change-history layer that backs the lock-free session manager.
 pub mod session;
+
+/// Read-only summary projection types (decisions, entities,
+/// timeline) consumed by MCP `get_structured_summary` and the gRPC
+/// equivalent.
 pub mod summary;
+
+/// Workspace types — `WorkspaceManager`, `SessionRole`, the entities
+/// that group multiple sessions for cross-session search.
 pub mod workspace;
 
 pub use crate::core::error::{Result, SystemError};

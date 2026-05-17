@@ -67,3 +67,6 @@ default = []
 # Placeholder for Phase 10 — the otel feature toggles between no-op tracing
 # layers and the full OTLP exporter stack. Wired with deps in Phase 10.
 otel = []
+
+[lints]
+workspace = true

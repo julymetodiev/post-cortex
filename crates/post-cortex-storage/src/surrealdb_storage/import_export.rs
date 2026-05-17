@@ -153,7 +153,7 @@ impl SurrealDBStorage {
                     // Add session associations with roles
                     for (session_id, role) in &workspace.sessions {
                         if let Err(e) = self
-                            .add_session_to_workspace(workspace.id, *session_id, role.clone())
+                            .add_session_to_workspace(workspace.id, *session_id, *role)
                             .await
                         {
                             result.errors.push(format!(

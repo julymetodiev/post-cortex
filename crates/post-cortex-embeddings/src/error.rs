@@ -41,7 +41,12 @@ pub enum Error {
     /// Caller supplied a vector with a dimension other than the
     /// index's expected width.
     #[error("vector dimension mismatch: expected {expected}, got {actual}")]
-    Dimension { expected: usize, actual: usize },
+    Dimension {
+        /// Dimension the index was built with.
+        expected: usize,
+        /// Dimension of the supplied vector.
+        actual: usize,
+    },
 
     /// HNSW index is full.
     #[error("vector index is full")]

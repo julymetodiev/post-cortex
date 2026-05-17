@@ -433,7 +433,7 @@ impl FreshnessStorage for SurrealDBStorage {
         // Mark source_reference entries stale rather than deleting them.
         // This preserves baseline records so freshness checks return Stale (status=1)
         // instead of Unknown (no record), which is what triggers cascade invalidation.
-        let direct_count: u32;
+        
         let mut cascade_count = 0u32;
 
         // Direct: mark entries for the changed symbol as stale
@@ -445,7 +445,7 @@ impl FreshnessStorage for SurrealDBStorage {
             .bind(("symbol", changed.symbol_name.clone()))
             .await?;
         let updated: Vec<SourceReferenceRecord> = response.take(0)?;
-        direct_count = updated.len() as u32;
+        let direct_count: u32 = updated.len() as u32;
 
         // Cascade: mark entries for dependent symbols as stale
         for dep_key in &dependent_symbols {

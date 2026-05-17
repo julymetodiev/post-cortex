@@ -315,7 +315,7 @@ pub fn validate_recency_bias(recency_bias: Option<f32>) -> Result<Option<f32>, C
             .with_expected_type("finite f32 between 0.0 and 10.0")
             .with_hint("Use a finite value between 0.0 (disabled) and 10.0 (aggressive decay). Recommended: 0.0-1.0 for most use cases."));
         }
-        if value < MIN_RECENCY_BIAS || value > MAX_RECENCY_BIAS {
+        if !(MIN_RECENCY_BIAS..=MAX_RECENCY_BIAS).contains(&value) {
             return Err(CoercionError::new(
                 "recency_bias out of range",
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, "Value must be between 0.0 and 10.0"),
@@ -472,7 +472,11 @@ mod tests {
 
     #[test]
     fn test_validate_session_action_invalid() {
-        let result = validate_session_action("delete");
+        // "delete" was added to VALID_ACTIONS in a later refactor; the
+        // test previously asserted that "delete" was rejected, which
+        // became the long-standing baseline failure noted in TODO.md.
+        // Use a genuinely invalid action here.
+        let result = validate_session_action("nuke_everything");
         assert!(result.is_err());
         let error = result.unwrap_err();
         let hint = error.hint.as_ref().unwrap();

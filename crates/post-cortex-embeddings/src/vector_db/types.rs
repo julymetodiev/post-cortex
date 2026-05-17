@@ -179,14 +179,22 @@ impl VectorDbStats {
     }
 }
 
-/// Snapshot of vector database statistics
+/// Snapshot of vector database statistics — a copy of the atomic
+/// counters at the moment of the snapshot call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorDbStatsSnapshot {
+    /// Total number of vectors persisted in the index.
     pub total_vectors: usize,
+    /// Whether the HNSW index has been built (entry points connected).
     pub is_built: bool,
+    /// Approximate memory footprint in bytes.
     pub memory_usage_bytes: usize,
+    /// Mean search latency in microseconds over the lifetime of the index.
     pub avg_search_time_us: f64,
+    /// Fraction of recent searches that hit the query cache (computed).
     pub search_hit_rate: f64,
+    /// Average number of HNSW edges per node (index quality metric).
     pub index_efficiency: f64,
+    /// Compression ratio when product quantization is enabled (>= 1.0).
     pub quantization_ratio: f64,
 }

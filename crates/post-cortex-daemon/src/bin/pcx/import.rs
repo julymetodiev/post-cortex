@@ -51,7 +51,7 @@ pub async fn handle_import(
 
         if !sessions.is_empty() {
             println!("Sessions in export:");
-            println!("{:<38} {:<30} {}", "ID", "Name", "Updates");
+            println!("{:<38} {:<30} Updates", "ID", "Name");
             println!("{:-<38} {:-<30} {:-<10}", "", "", "");
             for (id, name, updates) in sessions {
                 println!("{:<38} {:<30} {}", id, name, updates);
@@ -168,8 +168,7 @@ pub async fn handle_import(
     let storage = RealRocksDBStorage::new(&data_dir).await.map_err(|e| {
         let err_str = e.to_string();
         if err_str.contains("LOCK") || err_str.contains("Resource temporarily unavailable") {
-            format!(
-                "Database is locked by another process (likely the daemon).\n\
+            "Database is locked by another process (likely the daemon).\n\
                      \n\
                      Please stop the daemon first:\n\
                      \n\
@@ -179,8 +178,7 @@ pub async fn handle_import(
                      Option 2: Stop via launchctl (macOS)\n\
                      $ launchctl unload ~/Library/LaunchAgents/com.juliusml.post-cortex.plist\n\
                      \n\
-                     Then retry the import command."
-            )
+                     Then retry the import command.".to_string()
         } else {
             format!("Failed to open storage: {}", e)
         }

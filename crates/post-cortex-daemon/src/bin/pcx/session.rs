@@ -57,7 +57,7 @@ pub async fn handle_session_action(action: SessionAction) -> Result<(), String> 
                 let client = DaemonClient::new(&config);
                 let sessions = client.list_sessions().await?;
                 println!("Sessions ({})", sessions.len());
-                println!("{:<38} {:<20} {}", "ID", "Workspace", "Name");
+                println!("{:<38} {:<20} Name", "ID", "Workspace");
                 println!("{:-<38} {:-<20} {:-<30}", "", "", "");
                 for s in sessions {
                     let ws = s.workspace.as_deref().unwrap_or("-");
@@ -77,7 +77,7 @@ pub async fn handle_session_action(action: SessionAction) -> Result<(), String> 
                 }
 
                 println!("Sessions ({})", ids.len());
-                println!("{:<38} {:<20} {}", "ID", "Workspace", "Name");
+                println!("{:<38} {:<20} Name", "ID", "Workspace");
                 println!("{:-<38} {:-<20} {:-<30}", "", "", "");
 
                 for id in ids {

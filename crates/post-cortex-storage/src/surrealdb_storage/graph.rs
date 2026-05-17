@@ -496,7 +496,7 @@ impl SurrealDBStorage {
                     });
                 }
 
-                if all_relationships.len() > 0 && all_relationships.len() % 1000 == 0 {
+                if !all_relationships.is_empty() && all_relationships.len() % 1000 == 0 {
                     debug!(
                         "SurrealDBStorage: Loaded {} relationships...",
                         all_relationships.len()
