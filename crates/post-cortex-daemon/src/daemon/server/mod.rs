@@ -38,7 +38,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
-use tower_http::cors::CorsLayer;
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -171,7 +170,12 @@ impl DaemonServer {
                 "/api/workspaces/{workspace_id}/sessions/{session_id}",
                 post(rest::api_attach_session),
             )
-            .layer(CorsLayer::permissive())
+            // No CORS layer: the daemon is a local-only service that exposes
+            // raw session/workspace payloads. With permissive CORS, any web page
+            // the user visits could fetch http://127.0.0.1:3737/api/sessions
+            // and exfiltrate memory data. Omitting the layer means axum sends
+            // no Access-Control-Allow-* headers, so browsers refuse all
+            // cross-origin requests. Native MCP/gRPC clients are unaffected.
             .with_state(server)
     }
 
