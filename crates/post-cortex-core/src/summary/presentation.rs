@@ -17,6 +17,10 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
+//! Presentation-layer types for structured summaries.
+//!
+//! Defines the serialisable view models, level enums, and helper builders
+//! used to render a session's accumulated context for downstream consumers.
 use crate::core::structured_context::{ConceptItem, DecisionItem, QuestionItem, QuestionStatus};
 use crate::graph::entity_graph::EntityAnalysis;
 use chrono::{DateTime, Utc};
@@ -26,34 +30,49 @@ use uuid::Uuid;
 /// Main structured summary view that combines all existing data
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct StructuredSummaryView {
+    /// Unique session identifier
     pub session_id: Uuid,
+    /// Timestamp when this summary was generated
     pub generated_at: DateTime<Utc>,
 
     // From StructuredContext
+    /// Key decisions made during the session
     pub key_decisions: Vec<DecisionSummary>,
+    /// Open (unresolved) questions tracked in the session
     pub open_questions: Vec<QuestionSummary>,
+    /// Key concepts defined during the session
     pub key_concepts: Vec<ConceptSummary>,
 
     // From SimpleEntityGraph
+    /// Names of the most important entities in the session
     pub important_entities: Vec<String>,
+    /// Detailed summaries for each important entity
     pub entity_summaries: Vec<EntitySummary>,
 
     // Session metadata
+    /// Aggregate session statistics
     pub session_stats: SessionStats,
 }
 
 /// Decision summary from DecisionItem
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DecisionSummary {
+    /// Human-readable description of the decision
     pub description: String,
+    /// Context in which the decision was made
     pub context: String,
+    /// Alternative options that were considered
     pub alternatives: Vec<String>,
+    /// Confidence score from 0.0 to 1.0
     pub confidence: f32,
+    /// When the decision was recorded
     pub timestamp: DateTime<Utc>,
+    /// Discretized confidence bucket
     pub confidence_level: ConfidenceLevel,
 }
 
 impl DecisionSummary {
+    /// Convert a raw `DecisionItem` into a presentation `DecisionSummary`.
     pub fn from_decision_item(decision: &DecisionItem) -> Self {
         let confidence_level = match decision.confidence {
             f if f >= 0.8 => ConfidenceLevel::High,
@@ -76,16 +95,24 @@ impl DecisionSummary {
 /// Question summary from QuestionItem
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct QuestionSummary {
+    /// The question text
     pub question: String,
+    /// Context surrounding the question
     pub context: String,
+    /// Current resolution status of the question
     pub status: QuestionStatus,
+    /// When the question was first asked
     pub timestamp: DateTime<Utc>,
+    /// When the question was last updated
     pub last_updated: DateTime<Utc>,
+    /// Number of days the question has been open
     pub days_open: i64,
+    /// Computed urgency classification
     pub urgency_level: UrgencyLevel,
 }
 
 impl QuestionSummary {
+    /// Convert a raw `QuestionItem` into a presentation `QuestionSummary`.
     pub fn from_question_item(question: &QuestionItem) -> Self {
         let now = Utc::now();
         let days_open = (now - question.timestamp).num_days();
@@ -114,15 +141,22 @@ impl QuestionSummary {
 /// Concept summary from ConceptItem
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ConceptSummary {
+    /// Name of the concept
     pub name: String,
+    /// Definition or explanation of the concept
     pub definition: String,
+    /// Illustrative examples of the concept
     pub examples: Vec<String>,
+    /// Names of related concepts
     pub related_concepts: Vec<String>,
+    /// When the concept was defined
     pub timestamp: DateTime<Utc>,
+    /// Computed complexity classification
     pub complexity_level: ComplexityLevel,
 }
 
 impl ConceptSummary {
+    /// Convert a raw `ConceptItem` into a presentation `ConceptSummary`.
     pub fn from_concept_item(concept: &ConceptItem) -> Self {
         let complexity_level = match (concept.examples.len(), concept.related_concepts.len()) {
             (examples, related) if examples > 3 && related > 5 => ComplexityLevel::High,
@@ -144,17 +178,26 @@ impl ConceptSummary {
 /// Entity summary from EntityAnalysis
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EntitySummary {
+    /// Name of the entity
     pub entity_name: String,
+    /// Computed importance score
     pub importance_score: f32,
+    /// Number of times the entity was mentioned
     pub mention_count: u32,
+    /// Number of relationships connected to this entity
     pub relationship_count: usize,
+    /// When the entity was first observed
     pub first_seen: DateTime<Utc>,
+    /// When the entity was last observed
     pub last_seen: DateTime<Utc>,
+    /// Discretized importance bucket
     pub importance_level: ImportanceLevel,
+    /// How recently the entity was seen
     pub recency_level: RecencyLevel,
 }
 
 impl EntitySummary {
+    /// Convert a raw `EntityAnalysis` into a presentation `EntitySummary`.
     pub fn from_entity_analysis(analysis: &EntityAnalysis) -> Self {
         let importance_level = match analysis.importance_score {
             score if score >= 2.0 => ImportanceLevel::Critical,
@@ -190,19 +233,33 @@ impl EntitySummary {
 /// Session statistics from ActiveSession data
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SessionStats {
+    /// Unique session identifier
     pub session_id: Uuid,
+    /// Number of entries in the hot (recent) context tier
     pub hot_context_size: usize,
+    /// Number of entries in the warm (compressed) context tier
     pub warm_context_size: usize,
+    /// Number of entries in the cold (summary) context tier
     pub cold_context_size: usize,
+    /// Total number of incremental updates recorded
     pub total_updates: usize,
+    /// Number of distinct entities tracked
     pub entity_count: usize,
+    /// Number of key decisions recorded
     pub decision_count: usize,
+    /// Number of currently open questions
     pub open_question_count: usize,
+    /// Number of concepts defined
     pub concept_count: usize,
+    /// Number of code file references tracked
     pub code_reference_count: usize,
+    /// When the session was created
     pub created_at: DateTime<Utc>,
+    /// When the session was last updated
     pub last_updated: DateTime<Utc>,
+    /// Categorized session duration
     pub session_duration: SessionDuration,
+    /// Categorized activity intensity
     pub activity_level: ActivityLevel,
 }
 
@@ -223,6 +280,7 @@ pub struct SessionStatsBuilder {
 }
 
 impl SessionStatsBuilder {
+    /// Create a new builder with the required identity and timestamp fields.
     pub fn new(session_id: Uuid, created_at: DateTime<Utc>, last_updated: DateTime<Utc>) -> Self {
         Self {
             session_id,
@@ -240,6 +298,7 @@ impl SessionStatsBuilder {
         }
     }
 
+    /// Set the hot, warm, and cold context tier sizes.
     pub fn with_context_sizes(mut self, hot: usize, warm: usize, cold: usize) -> Self {
         self.hot_context_size = hot;
         self.warm_context_size = warm;
@@ -247,6 +306,7 @@ impl SessionStatsBuilder {
         self
     }
 
+    /// Set total update, entity, and decision counts.
     pub fn with_counts(mut self, updates: usize, entities: usize, decisions: usize) -> Self {
         self.total_updates = updates;
         self.entity_count = entities;
@@ -254,6 +314,7 @@ impl SessionStatsBuilder {
         self
     }
 
+    /// Set question, concept, and code reference counts.
     pub fn with_references(mut self, questions: usize, concepts: usize, code_refs: usize) -> Self {
         self.open_question_count = questions;
         self.concept_count = concepts;
@@ -261,6 +322,7 @@ impl SessionStatsBuilder {
         self
     }
 
+    /// Consume the builder and produce a `SessionStats`.
     pub fn build(self) -> SessionStats {
         SessionStats::from_builder(self)
     }
@@ -306,65 +368,94 @@ impl SessionStats {
 /// Confidence level for decisions
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ConfidenceLevel {
-    VeryLow, // 0.0 - 0.4
-    Low,     // 0.4 - 0.6
-    Medium,  // 0.6 - 0.8
-    High,    // 0.8 - 1.0
+    /// Confidence score 0.0 – 0.4
+    VeryLow,
+    /// Confidence score 0.4 – 0.6
+    Low,
+    /// Confidence score 0.6 – 0.8
+    Medium,
+    /// Confidence score 0.8 – 1.0
+    High,
 }
 
 /// Urgency level for questions
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum UrgencyLevel {
+    /// Not time-sensitive
     Low,
+    /// Moderately time-sensitive
     Medium,
+    /// Requires prompt attention
     High,
 }
 
 /// Complexity level for concepts
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ComplexityLevel {
+    /// Few examples and related concepts
     Low,
+    /// Moderate examples and related concepts
     Medium,
+    /// Many examples and related concepts
     High,
 }
 
 /// Importance level for entities
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ImportanceLevel {
-    Minimal,  // < 0.5
-    Low,      // 0.5 - 1.0
-    Medium,   // 1.0 - 1.5
-    High,     // 1.5 - 2.0
-    Critical, // >= 2.0
+    /// Importance score below 0.5
+    Minimal,
+    /// Importance score 0.5 – 1.0
+    Low,
+    /// Importance score 1.0 – 1.5
+    Medium,
+    /// Importance score 1.5 – 2.0
+    High,
+    /// Importance score 2.0 or above
+    Critical,
 }
 
 /// Recency level for entities
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum RecencyLevel {
+    /// Seen today
     Today,
-    Recent,    // 1-3 days
-    ThisWeek,  // 4-7 days
-    ThisMonth, // 8-30 days
-    Old,       // > 30 days
+    /// Seen 1–3 days ago
+    Recent,
+    /// Seen 4–7 days ago
+    ThisWeek,
+    /// Seen 8–30 days ago
+    ThisMonth,
+    /// Seen more than 30 days ago
+    Old,
 }
 
 /// Session duration categorization
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum SessionDuration {
-    Short,    // 0-1 hours
-    Medium,   // 2-4 hours
-    Long,     // 5-8 hours
-    Extended, // > 8 hours
+    /// Session lasted 0–1 hours
+    Short,
+    /// Session lasted 2–4 hours
+    Medium,
+    /// Session lasted 5–8 hours
+    Long,
+    /// Session lasted more than 8 hours
+    Extended,
 }
 
 /// Activity level categorization
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ActivityLevel {
-    Minimal,  // < 1 update per hour
-    Low,      // 1-2 updates per hour
-    Medium,   // 2-5 updates per hour
-    High,     // 5-10 updates per hour
-    VeryHigh, // > 10 updates per hour
+    /// Fewer than 1 update per hour
+    Minimal,
+    /// 1–2 updates per hour
+    Low,
+    /// 2–5 updates per hour
+    Medium,
+    /// 5–10 updates per hour
+    High,
+    /// More than 10 updates per hour
+    VeryHigh,
 }
 
 #[cfg(test)]

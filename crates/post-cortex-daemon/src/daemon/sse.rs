@@ -32,8 +32,11 @@ use uuid::Uuid;
 /// SSE event that can be broadcasted to clients
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SseEvent {
+    /// Unique event identifier.
     pub id: String,
+    /// Event type label.
     pub event_type: String,
+    /// JSON event payload.
     pub data: serde_json::Value,
 }
 
@@ -53,6 +56,7 @@ pub struct SSEBroadcaster {
 }
 
 impl SSEBroadcaster {
+    /// Create a new broadcaster with no connected clients.
     pub fn new() -> Self {
         Self {
             clients: Arc::new(DashMap::new()),

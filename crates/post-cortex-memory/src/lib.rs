@@ -29,9 +29,11 @@
 #![allow(clippy::ptr_arg)]
 
 pub mod content_vectorizer;
+/// Graph-aware context assembly that combines semantic search results with entity-graph traversals.
 pub mod context_assembly;
 pub mod error;
 pub mod memory_system;
+/// Runtime performance monitoring: operation timers, cache trackers, and health snapshots.
 pub mod performance;
 pub mod pipeline;
 pub mod query_cache;
@@ -39,7 +41,11 @@ pub mod scoring;
 pub mod semantic_query_engine;
 pub mod services;
 
+/// Canonical error type and result alias for this crate.
 pub use error::{Error, Result};
+/// Top-level memory orchestrator and its configuration.
 pub use memory_system::{ConversationMemorySystem, SystemConfig};
+/// Non-blocking write pipeline, configuration, and error types.
 pub use pipeline::{Pipeline, PipelineConfig, PipelineError};
+/// gRPC / MCP service implementation backed by [`ConversationMemorySystem`].
 pub use services::MemoryServiceImpl;

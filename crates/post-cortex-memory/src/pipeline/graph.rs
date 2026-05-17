@@ -17,27 +17,41 @@ use super::PipelineError;
 pub enum GraphWorkItem {
     /// Upsert an entity for a session.
     EntityUpsert {
+        /// Session that owns the entity.
         session_id: Uuid,
+        /// Human-readable entity name.
         entity_name: String,
+        /// Entity type classification (e.g. `"Concept"`, `"Technology"`).
         entity_type: String,
     },
     /// Upsert a directed relation between two entities.
     RelationUpsert {
+        /// Session that owns the relationship.
         session_id: Uuid,
+        /// Source entity name.
         from: String,
+        /// Target entity name.
         to: String,
+        /// Relationship type label.
         relation_type: String,
     },
     /// Delete an entity (cascades to its relations on the worker side).
-    EntityDelete { session_id: Uuid, entity_name: String },
+    EntityDelete {
+        /// Session that owns the entity.
+        session_id: Uuid,
+        /// Entity name to remove.
+        entity_name: String,
+    },
 }
 
+/// Bounded MPSC queue feeding the entity-graph worker task.
 pub struct GraphQueue {
     sender: mpsc::Sender<GraphWorkItem>,
     backlog: Arc<AtomicUsize>,
 }
 
 impl GraphQueue {
+    /// Spawn the graph worker on the current Tokio runtime and return the sending handle.
     #[must_use]
     pub fn start(capacity: usize, backlog: Arc<AtomicUsize>) -> Self {
         let (tx, mut rx) = mpsc::channel::<GraphWorkItem>(capacity);
@@ -60,6 +74,7 @@ impl GraphQueue {
         }
     }
 
+    /// Non-blocking submit; returns [`PipelineError::Backpressure`] if the queue is full.
     pub fn submit(&self, item: GraphWorkItem) -> Result<(), PipelineError> {
         match self.sender.try_send(item) {
             Ok(()) => {

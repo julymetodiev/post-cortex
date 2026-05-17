@@ -192,7 +192,8 @@ impl HotContext {
 /// Entity nodes use atomic counters for mention tracking.
 /// Relationships use DashMap with sequential IDs for lock-free access.
 pub struct EntityGraph {
-    pub entities: DashMap<String, EntityNode>, // Public for len() access
+    /// Map of entity name to its node data
+    pub entities: DashMap<String, EntityNode>,
     relationships: DashMap<u64, crate::core::context_update::EntityRelationship>,
     next_rel_id: Arc<AtomicU64>,
 }
@@ -200,12 +201,18 @@ pub struct EntityGraph {
 /// Entity node with atomic tracking
 #[derive(Clone, Debug)]
 pub struct EntityNode {
+    /// Type classification of the entity
     pub entity_type: EntityType,
+    /// Number of times this entity has been mentioned
     pub mention_count: Arc<AtomicUsize>,
+    /// Timestamp (seconds) when the entity was first mentioned
     pub first_mentioned: Arc<AtomicU64>,
+    /// Timestamp (seconds) when the entity was last mentioned
     pub last_mentioned: Arc<AtomicU64>,
-    pub importance_score: Arc<std::sync::atomic::AtomicU32>, // f32 as u32 bits
-    pub description: Option<String>, // Immutable after creation, entity replaced to update
+    /// Importance score stored as f32 bits in an atomic u32
+    pub importance_score: Arc<std::sync::atomic::AtomicU32>,
+    /// Optional human-readable description of the entity
+    pub description: Option<String>,
 }
 
 // Note: Using EntityRelationship from core::context_update instead of defining our own
@@ -325,10 +332,15 @@ impl Default for EntityGraph {
 /// Wrapped in ArcSwap for rare updates without cloning entire session.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionMetadata {
+    /// Unique session identifier
     pub id: Uuid,
+    /// Human-readable session name
     pub name: Option<String>,
+    /// Human-readable session description
     pub description: Option<String>,
+    /// When the session was created
     pub created_at: DateTime<Utc>,
+    /// User-configurable session preferences
     pub user_preferences: UserPreferences,
 }
 

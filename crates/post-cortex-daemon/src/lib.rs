@@ -55,6 +55,7 @@
 #![allow(clippy::too_many_arguments)]
 
 pub mod daemon;
+/// Error types for the daemon crate.
 pub mod error;
 
 pub use daemon::config::DaemonConfig;

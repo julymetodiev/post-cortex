@@ -25,12 +25,16 @@ pub struct SessionManager {
     /// Performance monitoring
     performance_monitor: Arc<PerformanceMonitor>,
 
-    /// Session metrics - all atomic
+    /// Total number of sessions created
     pub session_count: Arc<AtomicUsize>,
+    /// Total number of session operations performed
     pub total_session_operations: Arc<AtomicU64>,
+    /// Number of session cache hits
     pub session_cache_hits: Arc<AtomicU64>,
+    /// Number of session cache misses
     pub session_cache_misses: Arc<AtomicU64>,
-    pub active_sessions: DashMap<Uuid, Arc<AtomicU64>>, // last_access_timestamp
+    /// Active sessions with their last-access timestamps
+    pub active_sessions: DashMap<Uuid, Arc<AtomicU64>>,
 }
 
 impl SessionManager {

@@ -3,14 +3,14 @@
 
 //! gRPC service for Post-Cortex.
 //!
-//! Provides a tonic gRPC interface to [`ConversationMemorySystem`], enabling
+//! Provides a tonic gRPC interface to the memory system, enabling
 //! native binary protocol access for coding agents like Axon.
 //!
 //! Layout: the canonical `impl PostCortex for PcxGrpcService` block lives in
 //! this file. Freshness-tracking methods (Phase 9) delegate to inherent
-//! `*_impl` methods in [`freshness`] to keep this file scoped to the
+//! `*_impl` methods in `freshness` to keep this file scoped to the
 //! interactive surface. Shared parsing/validation helpers live in
-//! [`helpers`].
+//! `helpers`.
 
 use post_cortex_memory::ConversationMemorySystem;
 use post_cortex_storage::rocksdb_storage::SessionCheckpoint;
@@ -42,10 +42,12 @@ pub struct PcxGrpcService {
 }
 
 impl PcxGrpcService {
+    /// Wrap a shared memory system in a new gRPC service handle.
     pub fn new(memory: Arc<ConversationMemorySystem>) -> Self {
         Self { memory }
     }
 
+    /// Consume `self` and return a tonic [`PostCortexServer`] ready to serve.
     pub fn into_server(self) -> PostCortexServer<Self> {
         PostCortexServer::new(self)
     }

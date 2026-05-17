@@ -22,7 +22,7 @@
 //! - [`summary::SummaryQueue`] — submit a session-id, worker
 //!   re-generates the structured summary view.
 //!
-//! Bounded capacities are set per-queue; when full, [`Pipeline::submit_*`]
+//! Bounded capacities are set per-queue; when full, any `submit_*` method
 //! returns [`PipelineError::Backpressure`] so callers can decide
 //! whether to retry, drop, or fall back to inline execution.
 //!
@@ -35,7 +35,7 @@
 //! gRPC handlers migrate to call [`crate::MemoryServiceImpl`] via the
 //! trait — which is the same commit that converts `update_context` to
 //! return early after persist. Until then the legacy in-process
-//! pipeline inside [`ConversationMemorySystem`] continues to run
+//! pipeline inside [`crate::ConversationMemorySystem`] continues to run
 //! synchronously.
 
 use std::sync::Arc;
@@ -81,10 +81,16 @@ impl Default for PipelineConfig {
 pub enum PipelineError {
     /// Queue is full — caller should retry, drop, or fall back.
     #[error("pipeline backpressure: {queue} queue is full")]
-    Backpressure { queue: &'static str },
+    Backpressure {
+        /// Name of the queue that triggered backpressure.
+        queue: &'static str,
+    },
     /// Worker task has shut down — the pipeline is no longer usable.
     #[error("pipeline {queue} worker shut down")]
-    WorkerShutdown { queue: &'static str },
+    WorkerShutdown {
+        /// Name of the queue whose worker shut down.
+        queue: &'static str,
+    },
 }
 
 /// Top-level non-blocking pipeline. Owns all three queue handles and
@@ -94,8 +100,11 @@ pub enum PipelineError {
 /// queue. Drop the [`Pipeline`] to signal shutdown — workers exit as
 /// soon as their queues drain.
 pub struct Pipeline {
+    /// Handle to the embedding work queue.
     embedding: EmbeddingQueue,
+    /// Handle to the graph work queue.
     graph: GraphQueue,
+    /// Handle to the summary work queue.
     summary: SummaryQueue,
     /// Sum of queue depths across all three queues — exposed via
     /// [`Pipeline::backlog`] for the health endpoint.
@@ -152,11 +161,13 @@ impl Pipeline {
         &self.embedding
     }
 
+    /// Borrow the graph queue handle (test / advanced use).
     #[must_use]
     pub fn graph_queue(&self) -> &GraphQueue {
         &self.graph
     }
 
+    /// Borrow the summary queue handle (test / advanced use).
     #[must_use]
     pub fn summary_queue(&self) -> &SummaryQueue {
         &self.summary

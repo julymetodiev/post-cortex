@@ -39,10 +39,15 @@ impl OperationType {
 /// Configuration holder for lazy embedding initialization
 #[cfg(feature = "embeddings")]
 pub struct EmbeddingConfigHolder {
+    /// Embedding model type to use
     pub model_type: EmbeddingModelType,
+    /// Dimension of the embedding vectors
     pub vector_dimension: usize,
+    /// Maximum number of vectors stored per session
     pub max_vectors_per_session: usize,
+    /// Directory where vector index data is stored
     pub data_directory: String,
+    /// Whether cross-session semantic search is enabled
     pub cross_session_search_enabled: bool,
     /// Tracks initialization attempts for retry mechanism
     pub init_attempt_count: AtomicU64,
@@ -54,35 +59,56 @@ pub struct EmbeddingConfigHolder {
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct SystemConfig {
+    /// Maximum number of entries in the hot context tier
     pub max_hot_context_size: usize,
+    /// Maximum number of entries in the warm context tier
     pub max_warm_context_size: usize,
+    /// Threshold at which context is compressed
     pub context_compression_threshold: usize,
+    /// Session inactivity timeout in minutes
     pub session_timeout_minutes: u64,
+    /// Storage operation timeout in seconds
     pub storage_timeout_seconds: u64,
+    /// Maximum number of entries in the session cache
     pub cache_capacity: usize,
+    /// Whether to enable performance monitoring
     pub enable_performance_monitoring: bool,
+    /// Number of failures before the circuit breaker opens
     pub circuit_breaker_failure_threshold: u64,
+    /// Seconds the circuit breaker stays open before allowing retries
     pub circuit_breaker_timeout_seconds: u64,
+    /// Filesystem path where persistent data is stored
     pub data_directory: String,
-    // Embeddings and vectorization configuration
+    /// Whether embedding/vectorization features are enabled
     pub enable_embeddings: bool,
+    /// Name of the embedding model to use
     pub embeddings_model_type: String,
+    /// Dimensionality of embedding vectors
     pub vector_dimension: usize,
+    /// Maximum number of vectors per session
     pub max_vectors_per_session: usize,
+    /// Minimum similarity score for semantic search results
     pub semantic_search_threshold: f32,
+    /// Whether to automatically vectorize content on updates
     pub auto_vectorize_on_update: bool,
+    /// Whether cross-session semantic search is enabled
     pub cross_session_search_enabled: bool,
-    // Storage backend configuration
+    /// Storage backend type
     #[cfg(feature = "surrealdb-storage")]
     pub storage_backend: post_cortex_storage::traits::StorageBackendType,
+    /// SurrealDB connection endpoint
     #[cfg(feature = "surrealdb-storage")]
     pub surrealdb_endpoint: Option<String>,
+    /// SurrealDB authentication username
     #[cfg(feature = "surrealdb-storage")]
     pub surrealdb_username: Option<String>,
+    /// SurrealDB authentication password
     #[cfg(feature = "surrealdb-storage")]
     pub surrealdb_password: Option<String>,
+    /// SurrealDB namespace
     #[cfg(feature = "surrealdb-storage")]
     pub surrealdb_namespace: Option<String>,
+    /// SurrealDB database name
     #[cfg(feature = "surrealdb-storage")]
     pub surrealdb_database: Option<String>,
 }

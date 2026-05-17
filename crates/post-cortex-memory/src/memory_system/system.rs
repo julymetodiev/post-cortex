@@ -31,24 +31,37 @@ const SESSION_CLEANUP_BATCH_SIZE: usize = 50;
 
 /// Conversation memory system using actors and channels
 pub struct ConversationMemorySystem {
+    /// Session lifecycle manager with cache
     pub session_manager: SessionManager,
+    /// Incremental context processing metrics
     pub context_processor: IncrementalContextProcessor,
+    /// Knowledge graph metric container
     pub graph_manager: SimpleGraphManager,
+    /// Workspace management coordinator
     pub workspace_manager: Arc<WorkspaceManager>,
+    /// Handle to the async storage actor
     pub storage_actor: StorageActorHandle,
+    /// Vector storage backend for semantic search
     pub vector_storage: Arc<dyn post_cortex_storage::traits::VectorStorage>,
+    /// System configuration
     pub config: SystemConfig,
+    /// Performance metrics monitor
     pub performance_monitor: Arc<PerformanceMonitor>,
+    /// Circuit breaker for fault tolerance
     pub circuit_breaker: Arc<CircuitBreaker>,
+    /// Global system metrics
     pub system_metrics: Arc<SystemMetrics>,
 
+    /// Lazily initialized content vectorizer
     #[cfg(feature = "embeddings")]
     pub content_vectorizer: Arc<OnceCell<Arc<crate::content_vectorizer::ContentVectorizer>>>,
 
+    /// Lazily initialized semantic query engine
     #[cfg(feature = "embeddings")]
     pub semantic_query_engine:
         Arc<OnceCell<Arc<crate::semantic_query_engine::SemanticQueryEngine>>>,
 
+    /// Configuration holder used for lazy embedding initialization
     #[cfg(feature = "embeddings")]
     pub embedding_config_holder: Arc<EmbeddingConfigHolder>,
 }

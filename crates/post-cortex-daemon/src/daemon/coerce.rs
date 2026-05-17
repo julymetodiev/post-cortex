@@ -10,6 +10,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 
+/// Valid interaction type values accepted by MCP tools.
 pub use crate::daemon::validate::VALID_INTERACTION_TYPES;
 
 /// Coerce and validate a JSON value into the target type.
@@ -224,7 +225,7 @@ pub fn generate_recovery_suggestions(
 pub struct CoercionError {
     /// Human-readable error message
     pub message: String,
-    /// Path to the parameter that failed (e.g., "session_id", "updates[0].interaction_type")
+    /// Path to the parameter that failed (e.g., "session_id", "updates\[0\].interaction_type")
     pub parameter_path: Option<String>,
     /// Expected type description (e.g., "UUID string", "one of: qa, decision_made, ...")
     pub expected_type: Option<String>,

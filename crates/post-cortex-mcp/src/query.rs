@@ -1,3 +1,5 @@
+//! Structured and keyword-based queries over session context.
+
 use post_cortex_core::core::context_update::EntityType;
 use post_cortex_memory::ConversationMemorySystem;
 use post_cortex_core::core::timeout_utils::with_mcp_timeout;
@@ -12,6 +14,7 @@ use std::collections::HashMap;
 use tracing::{debug, error};
 use uuid::Uuid;
 
+/// Execute a typed query against a session using an explicit memory system reference.
 pub async fn query_conversation_context_with_system(
     query_type: String,
     parameters: HashMap<String, String>,
@@ -167,6 +170,7 @@ pub async fn query_conversation_context_with_system(
     }
 }
 
+/// Execute a typed query against a session via the global memory system.
 pub async fn query_conversation_context(
     query_type: String,
     parameters: HashMap<String, String>,
@@ -288,6 +292,7 @@ pub async fn query_conversation_context(
     ))
 }
 
+/// Dispatch a [`ContextQuery`] against a loaded session and return a [`ContextResponse`].
 pub(crate) async fn query_context(
     session: &ActiveSession,
     query: ContextQuery,

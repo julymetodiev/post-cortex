@@ -15,8 +15,11 @@ use super::PipelineError;
 /// One unit of embedding work.
 #[derive(Debug, Clone)]
 pub struct EmbeddingWorkItem {
+    /// Session that owns the content.
     pub session_id: Uuid,
+    /// Context-update entry to vectorise.
     pub entry_id: Uuid,
+    /// Raw text to embed.
     pub text: String,
 }
 

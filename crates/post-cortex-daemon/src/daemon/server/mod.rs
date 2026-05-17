@@ -77,6 +77,7 @@ pub struct DaemonServer {
 }
 
 impl DaemonServer {
+    /// Create a new daemon server, initialising the memory system from `config`.
     pub async fn new(config: DaemonConfig) -> Result<Self, String> {
         info!(
             "Initializing lock-free daemon server on {}:{}",

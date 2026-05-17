@@ -59,9 +59,12 @@ pub const EXPORT_SCHEMA_URL: &str =
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CompressionType {
+    /// No compression — raw JSON.
     #[default]
     None,
+    /// Gzip compression (`.json.gz`).
     Gzip,
+    /// Zstandard compression (`.json.zst`).
     Zstd,
 }
 
@@ -102,9 +105,18 @@ impl CompressionType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExportType {
+    /// Full database export — all sessions, workspaces, checkpoints.
     Full,
-    SelectiveSessions { session_ids: Vec<Uuid> },
-    SelectiveWorkspace { workspace_id: Uuid },
+    /// Selective export of a list of sessions.
+    SelectiveSessions {
+        /// IDs of the sessions included in the export.
+        session_ids: Vec<Uuid>,
+    },
+    /// Selective export of a single workspace (and its member sessions).
+    SelectiveWorkspace {
+        /// ID of the exported workspace.
+        workspace_id: Uuid,
+    },
 }
 
 /// Metadata about the export
@@ -143,22 +155,34 @@ pub struct ExportedSession {
 /// Exported workspace data
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportedWorkspace {
+    /// Workspace ID.
     pub id: Uuid,
+    /// Workspace display name.
     pub name: String,
+    /// Workspace description.
     pub description: String,
+    /// Member sessions and their roles.
     pub sessions: Vec<(Uuid, SessionRole)>,
+    /// Creation timestamp (Unix seconds).
     pub created_at: u64,
 }
 
 /// Exported embedding data
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportedEmbedding {
+    /// Stable content ID this embedding is keyed by.
     pub content_id: String,
+    /// Session ID that produced the embedding.
     pub session_id: String,
+    /// Embedding vector.
     pub vector: Vec<f32>,
+    /// Source text that was embedded.
     pub text: String,
+    /// Content type tag (e.g. `"message"`, `"summary"`).
     pub content_type: String,
+    /// Timestamp of the embedded content (ISO-8601 string).
     pub timestamp: String,
+    /// Free-form key/value metadata attached to the embedding.
     #[serde(default)]
     pub metadata: std::collections::HashMap<String, String>,
 }
@@ -279,13 +303,21 @@ pub struct ImportOptions {
 /// Result of an import operation
 #[derive(Debug, Clone, Default)]
 pub struct ImportResult {
+    /// Number of sessions successfully imported.
     pub sessions_imported: usize,
+    /// Number of sessions skipped (already existed and `skip_existing` was set).
     pub sessions_skipped: usize,
+    /// Number of workspaces successfully imported.
     pub workspaces_imported: usize,
+    /// Number of workspaces skipped.
     pub workspaces_skipped: usize,
+    /// Number of context updates imported.
     pub updates_imported: usize,
+    /// Number of session checkpoints imported.
     pub checkpoints_imported: usize,
+    /// Number of embeddings imported.
     pub embeddings_imported: usize,
+    /// Human-readable errors encountered during import.
     pub errors: Vec<String>,
 }
 

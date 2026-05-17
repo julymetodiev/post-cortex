@@ -1,3 +1,5 @@
+//! Session lifecycle: create, load, checkpoint, list, search, and metadata.
+
 use post_cortex_memory::ConversationMemorySystem;
 use post_cortex_core::core::timeout_utils::with_storage_timeout;
 use post_cortex_core::session::active_session::ActiveSession;
@@ -9,6 +11,7 @@ use std::sync::Arc;
 use tracing::{error, info, instrument};
 use uuid::Uuid;
 
+/// Create a session checkpoint using an explicit memory system reference.
 pub async fn create_session_checkpoint_with_system(
     session_id: Uuid,
     system: &ConversationMemorySystem,
@@ -33,6 +36,7 @@ pub async fn create_session_checkpoint_with_system(
     ))
 }
 
+/// Load a session from a previously saved checkpoint.
 pub async fn load_session_checkpoint_with_system(
     checkpoint_id: String,
     session_id: Uuid,
@@ -81,6 +85,7 @@ pub async fn load_session_checkpoint_with_system(
     ))
 }
 
+/// Create a session checkpoint using the global memory system.
 pub async fn create_session_checkpoint(session_id: Uuid) -> Result<MCPToolResult> {
     let result = with_storage_timeout(async {
         let system = get_memory_system().await?;
@@ -120,6 +125,7 @@ pub async fn create_session_checkpoint(session_id: Uuid) -> Result<MCPToolResult
     }
 }
 
+/// Load a session checkpoint using the global memory system.
 pub async fn load_session_checkpoint(
     checkpoint_id: String,
     session_id: Uuid,
@@ -167,6 +173,7 @@ pub async fn load_session_checkpoint(
     }
 }
 
+/// Mark a specific context update as important within a session.
 pub async fn mark_important(session_id: Uuid, update_id: String) -> Result<MCPToolResult> {
     let update_id = Uuid::parse_str(&update_id)?;
     let system = get_memory_system().await?;
@@ -199,6 +206,7 @@ pub async fn mark_important(session_id: Uuid, update_id: String) -> Result<MCPTo
     }
 }
 
+/// List all persisted sessions using a direct storage reference.
 pub async fn list_sessions_with_storage(
     storage: &post_cortex_storage::rocksdb_storage::RealRocksDBStorage,
 ) -> Result<MCPToolResult> {
@@ -245,6 +253,7 @@ pub async fn list_sessions_with_storage(
     }
 }
 
+/// List all sessions via the global memory system.
 pub async fn list_sessions() -> Result<MCPToolResult> {
     info!("MCP-TOOLS: list_sessions() called");
     let result = with_storage_timeout(async {
@@ -302,6 +311,7 @@ pub async fn list_sessions() -> Result<MCPToolResult> {
     }
 }
 
+/// Load a session by ID using an explicit memory system reference.
 pub async fn load_session_with_system(
     session_id: Uuid,
     system: &ConversationMemorySystem,
@@ -333,6 +343,7 @@ pub async fn load_session_with_system(
     }
 }
 
+/// Load a session by ID via the global memory system.
 pub async fn load_session(session_id: Uuid) -> Result<MCPToolResult> {
     let result = with_storage_timeout(async {
         let system = get_memory_system().await?;
@@ -355,6 +366,7 @@ pub async fn load_session(session_id: Uuid) -> Result<MCPToolResult> {
     }
 }
 
+/// Search sessions by name or description.
 pub async fn search_sessions(query: String) -> Result<MCPToolResult> {
     let result = with_storage_timeout(async {
         let system = get_memory_system().await?;
@@ -399,6 +411,7 @@ pub async fn search_sessions(query: String) -> Result<MCPToolResult> {
     }
 }
 
+/// Update the name and/or description of a session.
 #[instrument(skip(session_id), fields(session_id = %session_id))]
 pub async fn update_session_metadata(
     session_id: Uuid,
@@ -445,6 +458,7 @@ pub async fn update_session_metadata(
     }
 }
 
+/// Build a comprehensive checkpoint snapshot from an active session.
 async fn create_comprehensive_checkpoint(session: &ActiveSession) -> Result<SessionCheckpoint> {
     Ok(SessionCheckpoint {
         id: Uuid::new_v4(),

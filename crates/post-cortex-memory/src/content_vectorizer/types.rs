@@ -58,13 +58,21 @@ impl ContentType {
 /// Search result with enhanced metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SemanticSearchResult {
+    /// Unique identifier of the vectorised content.
     pub content_id: String,
+    /// Session that owns this content.
     pub session_id: Uuid,
+    /// Classification of the content (decision, code, etc.).
     pub content_type: ContentType,
+    /// Raw text that was vectorised.
     pub text_content: String,
+    /// Cosine similarity to the query vector.
     pub similarity_score: f32,
+    /// Importance weight derived from [`ContentType::importance_weight`].
     pub importance_score: f32,
+    /// When the content was originally stored.
     pub timestamp: DateTime<Utc>,
+    /// Blended score combining similarity and importance.
     pub combined_score: f32,
 }
 
@@ -117,14 +125,23 @@ impl SemanticSearchResult {
 /// Configuration for content vectorization
 #[derive(Debug, Clone)]
 pub struct ContentVectorizerConfig {
+    /// Embedding model configuration.
     pub embedding_config: EmbeddingConfig,
+    /// Vector database configuration.
     pub vector_db_config: VectorDbConfig,
+    /// Minimum character length for text to be vectorised.
     pub min_text_length: usize,
+    /// Maximum character length for text to be vectorised.
     pub max_text_length: usize,
+    /// Number of items per vectorisation batch.
     pub batch_size: usize,
+    /// Whether to vectorise entity descriptions.
     pub enable_entity_vectorization: bool,
+    /// Whether to allow search across all sessions.
     pub enable_cross_session_search: bool,
+    /// Configuration for the query result cache.
     pub query_cache_config: QueryCacheConfig,
+    /// Whether to enable query result caching.
     pub enable_query_caching: bool,
     /// Temporal decay factor for recency bias in search results
     /// 0.0 = disabled (default, backward compatible)

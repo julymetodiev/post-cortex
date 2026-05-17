@@ -36,15 +36,24 @@ pub enum Error {
 
     /// Pipeline applied backpressure — the bounded queue was full.
     #[error("pipeline backpressure on {queue}")]
-    Backpressure { queue: &'static str },
+    Backpressure {
+        /// Name of the saturated queue.
+        queue: &'static str,
+    },
 
     /// Pipeline worker shut down before the work could be processed.
     #[error("pipeline worker shut down: {queue}")]
-    WorkerShutdown { queue: &'static str },
+    WorkerShutdown {
+        /// Name of the shut-down queue.
+        queue: &'static str,
+    },
 
     /// Operation timed out.
     #[error("operation timeout after {ms}ms")]
-    Timeout { ms: u64 },
+    Timeout {
+        /// Elapsed wall-clock time in milliseconds.
+        ms: u64,
+    },
 
     /// Catch-all for migrating call sites that still use `anyhow`.
     #[error(transparent)]

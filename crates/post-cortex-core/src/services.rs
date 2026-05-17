@@ -3,7 +3,7 @@
 
 //! Canonical service trait for post-cortex.
 //!
-//! [`PostCortexService`] is the **single internal entrypoint** that every
+//! `PostCortexService` is the **single internal entrypoint** that every
 //! transport layer (gRPC, MCP, REST, future SDKs) delegates to. Per
 //! TODO.md:106-117 we never want two transports re-implementing the same
 //! operation with subtly different validation; they each translate their
@@ -16,10 +16,10 @@
 //! Phase 4 introduces the trait skeleton with the **read/write/search/manage**
 //! operations every transport exposes. Phases 6 + 7 (MCP and daemon
 //! extraction) migrate the existing handlers to delegate here; until then
-//! both transports still call into [`ConversationMemorySystem`] directly.
+//! both transports still call into `ConversationMemorySystem` directly.
 //!
 //! Trait methods intentionally take small, immediately-usable request
-//! types defined in [`types`] rather than huge proto structs — keeping
+//! types defined in `types` rather than huge proto structs — keeping
 //! the surface readable from non-gRPC consumers. gRPC handlers do the
 //! proto-to-domain translation in a single `From`/`Into` module at the
 //! transport boundary (Phase 7).

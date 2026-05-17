@@ -10,7 +10,7 @@
 // The above copyright notice and this permission notice shall be included in all
 // copies or substantial portions of the Software.
 
-//! Hash-based static embedding fallback. Used by [`EmbeddingModelType::StaticSimilarityMRL`].
+//! Hash-based static embedding fallback. Used by \[`EmbeddingModelType::StaticSimilarityMRL`\].
 //!
 //! **Warning**: this is a synthetic embedding — every text is mapped to a
 //! deterministic, pseudo-random unit vector keyed by its hash. Semantically

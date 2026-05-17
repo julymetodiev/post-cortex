@@ -1,3 +1,5 @@
+//! Workspace CRUD and session-to-workspace membership.
+
 use post_cortex_memory::ConversationMemorySystem;
 use crate::{get_memory_system, MCPToolResult};
 use anyhow::Result;
@@ -28,6 +30,7 @@ async fn persist_workspace_after_mutation(
         .await
 }
 
+/// Create a new workspace with the given name and description.
 #[instrument(skip_all, fields(workspace_name = %name))]
 pub async fn create_workspace(name: String, description: String) -> Result<MCPToolResult> {
     info!("MCP-TOOLS: create_workspace() called with name: '{}'", name);
@@ -67,6 +70,7 @@ pub async fn create_workspace(name: String, description: String) -> Result<MCPTo
     ))
 }
 
+/// Retrieve workspace details including all associated sessions.
 #[instrument(skip_all, fields(workspace_id = %workspace_id))]
 pub async fn get_workspace(workspace_id: Uuid) -> Result<MCPToolResult> {
     info!("MCP-TOOLS: get_workspace() called for ID: {}", workspace_id);
@@ -104,6 +108,7 @@ pub async fn get_workspace(workspace_id: Uuid) -> Result<MCPToolResult> {
     }
 }
 
+/// List all workspaces with session counts.
 pub async fn list_workspaces() -> Result<MCPToolResult> {
     info!("MCP-TOOLS: list_workspaces() called");
     let system = get_memory_system().await?;
@@ -131,6 +136,7 @@ pub async fn list_workspaces() -> Result<MCPToolResult> {
     ))
 }
 
+/// Delete a workspace (sessions are not removed).
 pub async fn delete_workspace(workspace_id: Uuid) -> Result<MCPToolResult> {
     info!(
         "MCP-TOOLS: delete_workspace() called for ID: {}",
@@ -169,6 +175,7 @@ pub async fn delete_workspace(workspace_id: Uuid) -> Result<MCPToolResult> {
     }
 }
 
+/// Add a session to a workspace with a specific role.
 pub async fn add_session_to_workspace(
     workspace_id: Uuid,
     session_id: Uuid,
@@ -222,6 +229,7 @@ pub async fn add_session_to_workspace(
     }
 }
 
+/// Remove a session from a workspace.
 pub async fn remove_session_from_workspace(
     workspace_id: Uuid,
     session_id: Uuid,

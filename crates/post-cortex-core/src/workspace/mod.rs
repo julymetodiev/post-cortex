@@ -65,9 +65,13 @@ pub struct WorkspaceMetadata {
 /// All operations are lock-free using DashMap and ArcSwap.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workspace {
+    /// Unique workspace identifier
     pub id: Uuid,
+    /// Human-readable workspace name
     pub name: String,
+    /// Workspace description
     pub description: String,
+    /// When the workspace was created
     pub created_at: SystemTime,
 
     /// Lock-free session tracking with roles
@@ -80,6 +84,7 @@ pub struct Workspace {
 }
 
 impl Workspace {
+/// Creates a new workspace with the given ID, name, and description
     pub fn new(id: Uuid, name: String, description: String) -> Self {
         Self {
             id,
@@ -141,6 +146,7 @@ pub struct WorkspaceManager {
 }
 
 impl WorkspaceManager {
+    /// Creates a new empty workspace manager
     pub fn new() -> Self {
         Self {
             workspaces: Arc::new(DashMap::new()),

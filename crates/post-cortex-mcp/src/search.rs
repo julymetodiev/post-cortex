@@ -1,3 +1,5 @@
+//! Semantic and embedding-powered search across sessions.
+
 use post_cortex_core::core::timeout_utils::with_storage_timeout;
 use crate::{get_memory_system, MCPToolResult};
 use anyhow::Result;
@@ -103,6 +105,7 @@ fn format_results_message(
     message
 }
 
+/// Unified semantic search dispatcher supporting session, workspace, and global scopes.
 pub async fn semantic_search(
     query: String,
     scope: Option<serde_json::Value>,
@@ -198,6 +201,7 @@ pub async fn semantic_search(
     }
 }
 
+/// Search across all sessions using AI semantic understanding (embeddings feature required).
 #[cfg(feature = "embeddings")]
 pub async fn semantic_search_global(
     query: String,
@@ -264,6 +268,7 @@ pub async fn semantic_search_global(
     ))
 }
 
+/// Search within a single session using AI semantic understanding (embeddings feature required).
 #[cfg(feature = "embeddings")]
 pub async fn semantic_search_session(
     session_id: Uuid,
@@ -329,6 +334,7 @@ pub async fn semantic_search_session(
     ))
 }
 
+/// Find content related to a topic within a session (embeddings feature required).
 #[cfg(feature = "embeddings")]
 pub async fn find_related_content(
     session_id: Uuid,
@@ -409,6 +415,7 @@ pub async fn find_related_content(
     }
 }
 
+/// Manually trigger embedding vectorization for a session (embeddings feature required).
 #[cfg(feature = "embeddings")]
 pub async fn vectorize_session(session_id: Uuid) -> Result<MCPToolResult> {
     info!(
@@ -436,6 +443,7 @@ pub async fn vectorize_session(session_id: Uuid) -> Result<MCPToolResult> {
     }
 }
 
+/// Retrieve vectorization statistics for the embedding index (embeddings feature required).
 #[cfg(feature = "embeddings")]
 pub async fn get_vectorization_stats() -> Result<MCPToolResult> {
     info!("MCP-TOOLS: get_vectorization_stats() called");
@@ -459,6 +467,7 @@ pub async fn get_vectorization_stats() -> Result<MCPToolResult> {
     }
 }
 
+/// Check whether the embeddings feature is available and return supported models.
 pub async fn enable_embeddings(model_type: Option<String>) -> Result<MCPToolResult> {
     if !cfg!(feature = "embeddings") {
         return Ok(MCPToolResult::error(
@@ -478,6 +487,7 @@ pub async fn enable_embeddings(model_type: Option<String>) -> Result<MCPToolResu
     ))
 }
 
+/// Stub: returns an error when the embeddings feature is not compiled in.
 #[cfg(not(feature = "embeddings"))]
 pub async fn semantic_search_global(
     _query: String,
@@ -492,6 +502,7 @@ pub async fn semantic_search_global(
     ))
 }
 
+/// Stub: returns an error when the embeddings feature is not compiled in.
 #[cfg(not(feature = "embeddings"))]
 pub async fn semantic_search_session(
     _session_id: Uuid,
@@ -507,6 +518,7 @@ pub async fn semantic_search_session(
     ))
 }
 
+/// Stub: returns an error when the embeddings feature is not compiled in.
 #[cfg(not(feature = "embeddings"))]
 pub async fn find_related_content(
     _session_id: Uuid,
@@ -518,6 +530,7 @@ pub async fn find_related_content(
     ))
 }
 
+/// Stub: returns an error when the embeddings feature is not compiled in.
 #[cfg(not(feature = "embeddings"))]
 pub async fn vectorize_session(_session_id: Uuid) -> Result<MCPToolResult> {
     Ok(MCPToolResult::error(
@@ -525,6 +538,7 @@ pub async fn vectorize_session(_session_id: Uuid) -> Result<MCPToolResult> {
     ))
 }
 
+/// Stub: returns an error when the embeddings feature is not compiled in.
 #[cfg(not(feature = "embeddings"))]
 pub async fn get_vectorization_stats() -> Result<MCPToolResult> {
     Ok(MCPToolResult::error(

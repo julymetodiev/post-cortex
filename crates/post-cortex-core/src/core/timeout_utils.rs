@@ -17,6 +17,9 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
+
+//! Timeout utilities with exponential backoff retry support
+
 use std::time::Duration;
 use thiserror::Error;
 use tokio::time::timeout;
@@ -35,8 +38,12 @@ pub const DEFAULT_ENTITY_PROCESSING_TIMEOUT: Duration = Duration::from_secs(5);
 /// Timeout error for operations that exceed their time limit
 #[derive(Error, Debug)]
 pub enum TimeoutError {
+    /// Operation exceeded the allowed duration
     #[error("Operation timed out after {duration:?}")]
-    Timeout { duration: Duration },
+    Timeout {
+        /// The duration that was exceeded
+        duration: Duration,
+    },
 }
 
 /// Execute an async operation with a timeout wrapper

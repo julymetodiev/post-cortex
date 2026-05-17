@@ -43,7 +43,10 @@ pub enum ContextSource {
     /// Direct semantic search match
     SemanticMatch,
     /// Found via entity graph traversal (entity → related content)
-    GraphTraversal { via_entity: String },
+    GraphTraversal {
+        /// Entity name that was traversed.
+        via_entity: String,
+    },
     /// Recent update in the session
     RecentUpdate,
 }
@@ -64,6 +67,7 @@ pub struct AssembledContext {
 /// An entity and its graph neighborhood relevant to the query
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityContext {
+    /// Entity name as stored in the graph.
     pub name: String,
     /// How this entity relates to the query (direct mention, or via graph)
     pub relevance: EntityRelevance,
@@ -71,12 +75,18 @@ pub struct EntityContext {
     pub relationships: Vec<EntityRelationship>,
 }
 
+/// How an entity relates to the original query.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum EntityRelevance {
     /// Directly mentioned in the query
     DirectMention,
     /// Connected via typed edge in the graph
-    GraphNeighbor { via: String, relation: String },
+    GraphNeighbor {
+        /// Entity through which this neighbor was discovered.
+        via: String,
+        /// Type of the graph edge connecting the entities.
+        relation: String,
+    },
 }
 
 /// An entity that would be impacted by changes to a query entity

@@ -1,3 +1,5 @@
+//! Helpers for recording context updates (single and bulk).
+
 use post_cortex_core::core::context_update::CodeReference;
 use post_cortex_memory::ConversationMemorySystem;
 use post_cortex_core::core::timeout_utils::with_mcp_timeout;
@@ -176,6 +178,7 @@ fn parse_entity_extras(
     (entities, relationships)
 }
 
+/// Record a single context update using an explicit memory system reference.
 #[instrument(skip(system, content), fields(
     session_id = %session_id,
     interaction_type = %interaction_type,
@@ -286,6 +289,7 @@ pub async fn update_conversation_context_with_system(
     }
 }
 
+/// Record multiple context updates in a single batch operation.
 pub async fn bulk_update_conversation_context(
     updates: Vec<ContextUpdateItem>,
     session_id: Uuid,
@@ -408,6 +412,7 @@ pub async fn bulk_update_conversation_context(
     ))
 }
 
+/// Record a single context update via the global memory system.
 pub async fn update_conversation_context(
     interaction_type: String,
     content: HashMap<String, String>,

@@ -32,107 +32,122 @@ use uuid::Uuid;
 /// System-wide error type for Post-Cortex
 #[derive(Error, Debug)]
 pub enum SystemError {
-    // Storage errors — concrete backend errors (rocksdb / surrealdb) are
-    // wrapped as strings here so post-cortex-core stays free of those deps.
-    // Backends in post-cortex-storage call `SystemError::Database(e.to_string())`.
+    /// Database backend error (RocksDB / SurrealDB)
     #[error("Database error: {0}")]
     Database(String),
 
+    /// Session lookup failed
     #[error("Session {0} not found")]
     SessionNotFound(Uuid),
 
+    /// Workspace lookup failed
     #[error("Workspace {0} not found")]
     WorkspaceNotFound(Uuid),
 
+    /// Checkpoint lookup failed
     #[error("Checkpoint {0} not found")]
     CheckpointNotFound(Uuid),
 
-    // Serialization
+    /// Serialization encoding failure
     #[error("Serialization failed: {0}")]
     Serialization(String),
 
+    /// Deserialization decoding failure
     #[error("Deserialization failed: {0}")]
     Deserialization(String),
 
-    // Vector DB
+    /// Vector embedding dimension mismatch
     #[error("Vector dimension mismatch: expected {expected}, got {actual}")]
-    VectorDimensionMismatch { expected: usize, actual: usize },
+    VectorDimensionMismatch {
+        /// Expected vector dimension
+        expected: usize,
+        /// Actual vector dimension received
+        actual: usize,
+    },
 
+    /// HNSW index has not been built yet
     #[error("HNSW index not built")]
     IndexNotBuilt,
 
+    /// Vector lookup failed
     #[error("Vector {0} not found")]
     VectorNotFound(u32),
 
+    /// Product quantization compression/decompression error
     #[error("Product Quantization error: {0}")]
     ProductQuantization(String),
 
-    // Context processing
+    /// Named entity extraction failure
     #[error("Entity extraction failed: {0}")]
     EntityExtractionFailed(String),
 
+    /// Context update processing exceeded its deadline
     #[error("Update processing timeout after {0}ms")]
     UpdateTimeout(u64),
 
+    /// Entity graph mutation failure
     #[error("Entity graph update failed: {0}")]
     GraphUpdateFailed(String),
 
-    // Embeddings — error variants are now unconditional. Whether the
-    // embedding backend is wired (BERT vs static-hash vs custom) is a
-    // runtime concern of post-cortex-embeddings.
+    /// Embedding model inference error
     #[error("Embedding model error: {0}")]
     EmbeddingModel(String),
 
+    /// Text-to-vector conversion failure
     #[error("Vectorization failed: {0}")]
     VectorizationFailed(String),
 
-    // System
+    /// Background storage actor terminated unexpectedly
     #[error("Storage actor channel closed")]
     StorageActorDown,
 
+    /// General operation timeout
     #[error("Operation timeout after {0}s")]
     OperationTimeout(u64),
 
+    /// Circuit breaker is open, rejecting requests
     #[error("Circuit breaker open: {0}")]
     CircuitBreakerOpen(String),
 
+    /// Invalid configuration value
     #[error("Configuration error: {0}")]
     Configuration(String),
 
-    // I/O
+    /// I/O error from the filesystem or network
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
-    // Task
+    /// Tokio task join failure
     #[error("Task join error: {0}")]
     TaskJoin(String),
 
-    // Catch-all for backward compatibility
+    /// Unspecified internal error for backward compatibility
     #[error("Internal error: {0}")]
     Internal(String),
 }
 
-// Bincode conversions
+/// Converts a bincode encode error into a serialization error
 impl From<bincode::error::EncodeError> for SystemError {
     fn from(err: bincode::error::EncodeError) -> Self {
         SystemError::Serialization(err.to_string())
     }
 }
 
+/// Converts a bincode decode error into a deserialization error
 impl From<bincode::error::DecodeError> for SystemError {
     fn from(err: bincode::error::DecodeError) -> Self {
         SystemError::Deserialization(err.to_string())
     }
 }
 
-// Tokio join error
+/// Converts a tokio task join error into a task join error
 impl From<tokio::task::JoinError> for SystemError {
     fn from(err: tokio::task::JoinError) -> Self {
         SystemError::TaskJoin(err.to_string())
     }
 }
 
-// Anyhow conversion for gradual migration
+/// Converts an anyhow error into an internal error for gradual migration
 impl From<anyhow::Error> for SystemError {
     fn from(err: anyhow::Error) -> Self {
         SystemError::Internal(err.to_string())

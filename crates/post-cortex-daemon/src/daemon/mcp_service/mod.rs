@@ -150,6 +150,7 @@ pub(crate) fn parse_date_range(
 
 #[tool_router]
 impl PostCortexService {
+    /// Create a new MCP service backed by the given memory system.
     pub fn new(memory_system: Arc<ConversationMemorySystem>) -> Self {
         info!("Initializing Post-Cortex MCP Service (9 consolidated tools)");
         Self {

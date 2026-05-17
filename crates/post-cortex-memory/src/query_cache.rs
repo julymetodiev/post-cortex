@@ -300,15 +300,25 @@ impl QueryCacheStats {
 /// Snapshot of cache statistics for reporting
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryCacheStatsSnapshot {
+    /// Total queries processed since last reset.
     pub total_queries: u64,
+    /// Number of cache hits.
     pub cache_hits: u64,
+    /// Number of cache misses.
     pub cache_misses: u64,
+    /// Expired entries removed by cleanup.
     pub expired_removed: u64,
+    /// Entries evicted due to capacity pressure.
     pub evicted_entries: u64,
+    /// Average similarity score of cache hits.
     pub avg_hit_similarity: f32,
+    /// Number of entries currently in the cache.
     pub current_cache_size: usize,
+    /// Estimated memory consumption in bytes.
     pub estimated_memory_bytes: usize,
+    /// Cache hit rate as a percentage (0–100).
     pub hit_rate: f32,
+    /// Average wall-clock time saved per cache hit in milliseconds.
     pub avg_time_saved_ms: f32,
 }
 

@@ -90,16 +90,22 @@ impl Default for GraphRagConfig {
 /// Cached relation data with expiry
 #[derive(Debug, Clone)]
 struct CachedRelations {
+    /// Cached relation results
     relations: Vec<RelationInfo>,
+    /// When this cache entry was created
     cached_at: Instant,
 }
 
 /// Information about a single relation
 #[derive(Debug, Clone)]
 pub struct RelationInfo {
+    /// Name of the related entity
     pub target_entity: String,
+    /// Kind of relationship
     pub relation_type: RelationType,
+    /// Free-text context for this relationship
     pub context: String,
+    /// Traversal depth at which this relation was found
     pub depth: usize,
 }
 

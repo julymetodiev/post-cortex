@@ -1,3 +1,6 @@
+//! JSON Schema descriptors for every MCP tool.
+
+/// Return the full set of MCP tool JSON Schema descriptors.
 pub fn get_all_tool_schemas() -> Vec<serde_json::Value> {
     use serde_json::json;
 

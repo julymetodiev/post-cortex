@@ -14,8 +14,10 @@ use serde::Deserialize;
 // Tool 7: assemble_context
 // =============================================================================
 
+/// Request payload for the `assemble_context` tool.
 #[derive(Deserialize, JsonSchema, Debug)]
 pub struct AssembleContextRequest {
+    /// Optional session UUID; ignored when `workspace_id` is set.
     #[schemars(description = r#"Session UUID. Required when workspace_id is not provided.
 
 Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
@@ -23,6 +25,7 @@ Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 Note: If both session_id and workspace_id are provided, workspace_id takes precedence
 (context is merged across all sessions in the workspace)."#)]
     pub session_id: Option<String>,
+    /// Optional workspace UUID; takes precedence over `session_id`.
     #[schemars(
         description = r#"Workspace UUID. When provided, context is merged across all sessions in the workspace.
 
@@ -31,12 +34,14 @@ Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 Note: Takes precedence over session_id."#
     )]
     pub workspace_id: Option<String>,
+    /// Query topic used to seed entity extraction and graph traversal.
     #[schemars(description = r#"The query/topic to assemble context for.
 
 Example: "How does authentication interact with the user profile service?"
 
 Note: Entity extraction runs on this query to seed graph traversal."#)]
     pub query: String,
+    /// Maximum token budget for assembled context output.
     #[schemars(
         description = r#"Token budget for the assembled context (default: 4000).
 
@@ -54,8 +59,10 @@ Note: Must be > 0. Items are packed highest-score-first until budget is consumed
 // Tool 8: manage_entity
 // =============================================================================
 
+/// Request payload for the `manage_entity` tool.
 #[derive(Deserialize, JsonSchema, Debug)]
 pub struct ManageEntityRequest {
+    /// Entity management action (`delete` or `delete_update`).
     #[schemars(description = r#"Action to perform on session content.
 
 Valid values:
@@ -64,16 +71,19 @@ Valid values:
 
 Note: Must be lowercase. Additional actions may be added later."#)]
     pub action: String,
+    /// Session UUID that contains the target entity or update.
     #[schemars(description = r#"Session UUID containing the entity/update.
 
 Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"#)]
     pub session_id: String,
+    /// Entity name for the `delete` action.
     #[schemars(description = r#"Entity name to operate on (required for action=delete).
 
 Example: "RocksDB"
 
 Note: Names are matched case-insensitively in the entity graph."#)]
     pub entity_name: Option<String>,
+    /// Context-update ID for the `delete_update` action.
     #[schemars(description = r#"Context-update id (required for action=delete_update).
 
 Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
@@ -87,8 +97,10 @@ ContextUpdate stored in the session. Use it to remove ghost / mis-shaped writes.
 // Tool 9: admin
 // =============================================================================
 
+/// Request payload for the `admin` tool.
 #[derive(Deserialize, JsonSchema, Debug)]
 pub struct AdminRequest {
+    /// Administrative action (`health`, `vectorize_session`, `vectorize_stats`, `create_checkpoint`).
     #[schemars(description = r#"Administrative action on the Post-Cortex daemon.
 
 Valid values:
@@ -105,6 +117,7 @@ Examples:
 
 Note: Must be lowercase."#)]
     pub action: String,
+    /// Session UUID for actions that target a specific session.
     #[schemars(description = r#"Session UUID for vectorize_session and create_checkpoint.
 
 Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"#)]
@@ -115,8 +128,10 @@ Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"#)]
 // Tool 1: session
 // =============================================================================
 
+/// Request payload for the `session` tool.
 #[derive(Deserialize, JsonSchema, Debug)]
 pub struct SessionRequest {
+    /// Session management action (`create`, `list`, `load`, `search`, `update_metadata`, `delete`).
     #[schemars(description = r#"Action to perform on sessions.
 
 Valid values:
@@ -136,6 +151,7 @@ Examples:
 
 Note: Must be lowercase."#)]
     pub action: String,
+    /// Session name (used by `create` and `update_metadata`).
     #[schemars(description = r#"Session name (used by create and update_metadata).
 
 Examples:
@@ -144,18 +160,21 @@ Examples:
 
 Note: For update_metadata, only provided fields are changed."#)]
     pub name: Option<String>,
+    /// Session description (used by `create` and `update_metadata`).
     #[schemars(description = r#"Session description (used by create and update_metadata).
 
 Example: "Working on implementing OAuth2 login flow"
 
 Note: For update_metadata, only provided fields are changed."#)]
     pub description: Option<String>,
+    /// Session UUID (required for `load`, `update_metadata`, `delete`).
     #[schemars(description = r#"Session UUID (required for load, update_metadata, delete).
 
 Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
 Example: "60c598e2-d602-4e07-a328-c458006d48c7""#)]
     pub session_id: Option<String>,
+    /// Search query for the `search` action.
     #[schemars(description = r#"Search query for the search action.
 
 Examples:
@@ -170,8 +189,10 @@ Note: Matches session name or description (case-insensitive substring)."#)]
 // Tool 2: update_conversation_context (single + bulk)
 // =============================================================================
 
+/// Single context-update item used in bulk mode.
 #[derive(Deserialize, JsonSchema, Debug, Clone)]
 pub struct ContextUpdateItem {
+    /// Interaction type classifier (e.g., `qa`, `decision_made`).
     #[schemars(description = r#"Type of interaction (must be exact lowercase value).
 
 Valid values:
@@ -187,6 +208,7 @@ Examples:
 ❌ "DecisionMade" (wrong - must be lowercase)
 ❌ "made_decision" (wrong - use exact term)"#)]
     pub interaction_type: String,
+    /// Key-value content payload for the update.
     #[schemars(
         description = r#"Content as key-value pairs (all values must be strings).
 
@@ -199,6 +221,7 @@ Complex: {"criteria": "{\"performance\": 9, \"safety\": 10}", "date": "2025-01-1
 Note: For complex nested data, stringify as JSON first. Do not pass nested objects directly."#
     )]
     pub content: std::collections::HashMap<String, String>,
+    /// Optional code location reference.
     #[schemars(description = r#"Optional code reference for context.
 
 Can be a simple string or complex object:
@@ -211,8 +234,10 @@ Note: Helps link context to specific code locations."#)]
     pub code_reference: Option<serde_json::Value>,
 }
 
+/// Request payload for the `update_conversation_context` tool.
 #[derive(Deserialize, JsonSchema, Debug)]
 pub struct UpdateConversationContextRequest {
+    /// Session UUID to add context to.
     #[schemars(description = r#"Session ID (36-char UUID format with hyphens).
 
 Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
@@ -225,6 +250,7 @@ Example: "60c598e2-d602-4e07-a328-c458006d48c7"
 
 Note: Must be a string, not a number. UUIDs are always strings."#)]
     pub session_id: String,
+    /// Interaction type for single-update mode.
     #[schemars(
         description = r#"Type of interaction for single update (must be exact lowercase value).
 
@@ -239,6 +265,7 @@ Valid values:
 Note: Required for single update mode (when 'updates' array is not provided)."#
     )]
     pub interaction_type: Option<String>,
+    /// Key-value content for single-update mode.
     #[schemars(
         description = r#"Content as key-value pairs for single update (all values must be strings).
 
@@ -251,6 +278,7 @@ Complex: {"criteria": "{\"performance\": 9}", "date": "2025-01-12"}
 Note: For complex nested data, stringify as JSON first. Required for single update mode."#
     )]
     pub content: Option<std::collections::HashMap<String, String>>,
+    /// Optional code reference for single-update mode.
     #[schemars(description = r#"Optional code reference for single update.
 
 Can be a simple string or complex object:
@@ -259,6 +287,7 @@ Examples:
 - Simple: "src/main.rs:42"
 - Complex: {"file": "src/main.rs", "line": 42, "function": "process_data"}"#)]
     pub code_reference: Option<serde_json::Value>,
+    /// Bulk update array; overrides single-update fields when present.
     #[schemars(
         description = r#"Array of updates for bulk operation (overrides single fields if provided).
 
@@ -284,6 +313,7 @@ Example:
 Note: When provided, 'interaction_type' and 'content' fields are ignored."#
     )]
     pub updates: Option<Vec<ContextUpdateItem>>,
+    /// Validate without persisting when `true`.
     #[schemars(
         description = r#"If true, validate the request without making any changes.
 
@@ -306,8 +336,10 @@ Note: No changes are made to the session when dry_run is true."#
 // Tool 3: semantic_search (unified)
 // =============================================================================
 
+/// Request payload for the `semantic_search` tool.
 #[derive(Deserialize, JsonSchema, Debug)]
 pub struct SemanticSearchRequest {
+    /// Natural-language search query.
     #[schemars(description = r#"Search query for semantic search.
 
 Examples:
@@ -317,6 +349,7 @@ Examples:
 
 Note: Natural language queries work best. The search understands context."#)]
     pub query: String,
+    /// Search scope (`session`, `workspace`, or `global`).
     #[schemars(
         description = r#"Search scope: 'session', 'workspace', or 'global' (default: 'global').
 
@@ -333,6 +366,7 @@ Examples:
 Note: scope must be lowercase. When using 'session' or 'workspace', you must provide scope_id."#
     )]
     pub scope: Option<String>,
+    /// UUID identifying the session or workspace to search.
     #[schemars(
         description = r#"Session ID or Workspace ID (required when scope is 'session' or 'workspace').
 
@@ -351,6 +385,7 @@ Examples:
 Note: Must be a valid UUID string. Use 'session' or 'semantic_search' tools to find UUIDs."#
     )]
     pub scope_id: Option<String>,
+    /// Maximum number of results to return.
     #[schemars(
         description = r#"Maximum number of results to return (default: 10, max: 100).
 
@@ -362,6 +397,7 @@ Examples:
 Note: Higher values may slow down search. Maximum allowed is 100."#
     )]
     pub limit: Option<usize>,
+    /// ISO 8601 lower bound for date filtering.
     #[schemars(
         description = r#"Filter results from this date onwards (ISO 8601 format).
 
@@ -374,6 +410,7 @@ Examples:
 Note: Use with date_to to specify a date range."#
     )]
     pub date_from: Option<String>,
+    /// ISO 8601 upper bound for date filtering.
     #[schemars(description = r#"Filter results up to this date (ISO 8601 format).
 
 Format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ
@@ -384,6 +421,7 @@ Examples:
 
 Note: Use with date_from to specify a date range."#)]
     pub date_to: Option<String>,
+    /// Filter results to these interaction types.
     #[schemars(description = r#"Filter by interaction types (array of strings).
 
 Valid types:
@@ -401,6 +439,7 @@ Examples:
 
 Note: Must be exact lowercase values. Filters reduce results to only these types."#)]
     pub interaction_type: Option<Vec<String>>,
+    /// Temporal decay factor favouring recent content.
     #[schemars(
         description = r#"Temporal decay factor to prioritize recent content (default: 0.0 = disabled).
 
@@ -436,24 +475,33 @@ Note: Only affects ranking order, doesn't filter out old results."#
 // Tool 4: get_structured_summary (extended)
 // =============================================================================
 
+/// Request payload for the `get_structured_summary` tool.
 #[derive(Deserialize, JsonSchema, Debug)]
 pub struct GetStructuredSummaryRequest {
+    /// Session UUID to summarize.
     #[schemars(description = "Session ID")]
     pub session_id: String,
+    /// Sections to include (`decisions`, `insights`, `entities`, `all`).
     #[schemars(
         description = "Sections to include: decisions, insights, entities, all (default: all)"
     )]
     pub include: Option<Vec<String>>,
+    /// Maximum number of decisions to include.
     #[schemars(description = "Maximum decisions to include")]
     pub decisions_limit: Option<usize>,
+    /// Maximum number of entities to include.
     #[schemars(description = "Maximum entities to include")]
     pub entities_limit: Option<usize>,
+    /// Maximum number of questions to include.
     #[schemars(description = "Maximum questions to include")]
     pub questions_limit: Option<usize>,
+    /// Maximum number of concepts to include.
     #[schemars(description = "Maximum concepts to include")]
     pub concepts_limit: Option<usize>,
+    /// Minimum confidence level for included items.
     #[schemars(description = "Minimum confidence level")]
     pub min_confidence: Option<f32>,
+    /// Whether to use compact output format.
     #[schemars(description = "Use compact format for large sessions")]
     pub compact: Option<bool>,
 }
@@ -462,14 +510,18 @@ pub struct GetStructuredSummaryRequest {
 // Tool 5: query_conversation_context
 // =============================================================================
 
+/// Request payload for the `query_conversation_context` tool.
 #[derive(Deserialize, JsonSchema, Debug)]
 pub struct QueryConversationContextRequest {
+    /// Session UUID to query.
     #[schemars(description = "Session ID")]
     pub session_id: String,
+    /// Query type selector.
     #[schemars(
         description = "Query type. Supported: find_related_entities, get_entity_context, search_updates, entity_importance, entity_network, find_related_content (topic, max_results), key_decisions, key_insights (limit), session_statistics, structured_summary, decisions, open_questions, related_entities, all_entities, trace_relationships, get_most_important_entities, get_recently_mentioned_entities, analyze_entity_importance, find_entities_by_type, assemble_context, recent_changes, code_references."
     )]
     pub query_type: String,
+    /// Key-value query parameters.
     #[schemars(description = "Query parameters as key-value pairs")]
     pub parameters: std::collections::HashMap<String, String>,
 }
@@ -478,8 +530,10 @@ pub struct QueryConversationContextRequest {
 // Tool 6: manage_workspace
 // =============================================================================
 
+/// Request payload for the `manage_workspace` tool.
 #[derive(Deserialize, JsonSchema, Debug)]
 pub struct ManageWorkspaceRequest {
+    /// Workspace action (`create`, `list`, `get`, `delete`, `add_session`, `remove_session`).
     #[schemars(description = r#"Action to perform on workspaces.
 
 Valid values:
@@ -497,6 +551,7 @@ Examples:
 
 Note: Must be lowercase. Different actions require different parameters."#)]
     pub action: String,
+    /// Workspace UUID for actions that target a specific workspace.
     #[schemars(
         description = r#"Workspace ID (36-char UUID) for get/delete/add_session/remove_session actions.
 
@@ -515,6 +570,7 @@ Example: "f1d2e3a4-b5c6-7d8e-9f0a-1b2c3d4e5f6f"
 Note: Must be a valid UUID string. Not a number."#
     )]
     pub workspace_id: Option<String>,
+    /// Session UUID for `add_session`/`remove_session`.
     #[schemars(
         description = r#"Session ID (36-char UUID) for add_session/remove_session actions.
 
@@ -533,18 +589,21 @@ Example: "60c598e2-d602-4e07-a328-c458006d48c7"
 Note: Must be a valid UUID string. Not a number."#
     )]
     pub session_id: Option<String>,
+    /// Workspace name (used by `create`).
     #[schemars(description = r#"Workspace name (for create action).
 
 Example: "Authentication Feature" or "API Design"
 
 Note: Only used when action='create'. Helps identify the workspace."#)]
     pub name: Option<String>,
+    /// Workspace description (used by `create`).
     #[schemars(description = r#"Workspace description (for create action).
 
 Example: "Working on OAuth2 authentication and user management"
 
 Note: Only used when action='create'. Provides context for the workspace."#)]
     pub description: Option<String>,
+    /// Session role within the workspace (used by `add_session`).
     #[schemars(
         description = r#"Session role in workspace (for add_session action, default: 'related').
 

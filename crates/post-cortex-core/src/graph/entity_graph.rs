@@ -17,6 +17,9 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
+
+//! Petgraph-backed entity graph with deterministic serialization
+
 use crate::core::context_update::{EntityData, EntityRelationship, EntityType, RelationType};
 use chrono::{DateTime, Utc};
 use petgraph::Direction;
@@ -30,7 +33,9 @@ use tracing::warn;
 /// Supports backwards-compatible deserialization from v1.0.0 format (RelationType only)
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct EdgeData {
+    /// Kind of relationship between two entities
     pub relation_type: RelationType,
+    /// Free-text context describing this relationship
     #[serde(default)]
     pub context: String,
 }
@@ -257,6 +262,7 @@ impl Default for SimpleEntityGraph {
 }
 
 impl SimpleEntityGraph {
+/// Creates a new empty entity graph
     pub fn new() -> Self {
         Self {
             entities: BTreeMap::new(),
@@ -1011,29 +1017,43 @@ impl SimpleEntityGraph {
 /// Entity network structure - uses BTreeMap for deterministic serialization
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EntityNetwork {
+    /// Name of the central entity
     pub center: String,
+    /// All entities reachable within the traversal depth
     pub entities: BTreeMap<String, EntityData>,
+    /// Relationships connecting the entities in this network
     pub relationships: Vec<EntityRelationship>,
 }
 
 /// Entity analysis structure - unchanged for compatibility
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EntityAnalysis {
+    /// Name of the analyzed entity
     pub entity_name: String,
+    /// Combined importance score including graph centrality
     pub importance_score: f32,
+    /// Total number of times the entity was mentioned
     pub mention_count: u32,
+    /// Number of graph edges connected to this entity
     pub relationship_count: usize,
+    /// Number of context updates referencing this entity
     pub update_references: usize,
+    /// Timestamp when the entity was first seen
     pub first_seen: DateTime<Utc>,
+    /// Timestamp when the entity was last referenced
     pub last_seen: DateTime<Utc>,
 }
 
-/// New graph statistics structure
+/// Summary statistics for the entity graph
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GraphStats {
+    /// Number of nodes in the petgraph
     pub node_count: usize,
+    /// Number of directed edges in the petgraph
     pub edge_count: usize,
+    /// Number of entities in the metadata map
     pub entity_count: usize,
+    /// Average degree (edges × 2 / nodes)
     pub avg_degree: f64,
 }
 

@@ -39,6 +39,7 @@ use uuid::Uuid;
 /// Report returned when checking if sources are still fresh
 #[derive(Debug, Clone)]
 pub struct FreshnessReportExt {
+    /// Freshness entries, one per checked source.
     pub entries: Vec<FreshnessEntry>,
 }
 
@@ -47,8 +48,11 @@ pub struct FreshnessReportExt {
 /// been re-registered.  Returned by `get_stale_entries_by_source`.
 #[derive(Debug, Clone)]
 pub struct StaleEntryInfo {
+    /// Entry ID that was marked stale.
     pub entry_id: String,
+    /// Symbol name associated with the entry (when known).
     pub symbol_name: Option<String>,
+    /// Symbol type (e.g. `"fn"`, `"struct"`) associated with the entry.
     pub symbol_type: Option<String>,
 }
 ///

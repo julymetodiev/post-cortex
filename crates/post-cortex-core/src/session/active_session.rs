@@ -17,6 +17,12 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
+//! Core active session type with lock-free, Arc-wrapped components.
+//!
+//! `ActiveSession` is the primary mutable session object used throughout
+//! the crate. It stores tiered context (hot / warm / cold), a structured
+//! state snapshot, code references, an entity graph, and vectorization
+//! tracking — all wrapped in `Arc` for cheap clone-on-write semantics.
 use crate::core::context_update::{ContextUpdate, EntityType, UpdateType};
 use crate::core::structured_context::StructuredContext;
 use crate::graph::entity_graph::SimpleEntityGraph;
@@ -46,26 +52,37 @@ use uuid::Uuid;
 #[derive(Clone, Debug)]
 pub struct ActiveSession {
     // Metadata (immutable or rare updates)
+    /// Immutable session metadata (id, name, preferences)
     pub metadata: Arc<SessionMetadata>,
+    /// Timestamp of the last modification
     pub last_updated: DateTime<Utc>,
 
     // Lock-free tiered context storage
-    pub hot_context: Arc<HotContext>, // Lock-free hot updates (DashMap-based)
-    pub warm_context: Arc<Vec<CompressedUpdate>>, // CoW: Compressed updates (storage)
-    pub cold_context: Arc<Vec<StructuredSummary>>, // CoW: Periodic summaries (storage)
+    /// Lock-free hot updates (DashMap-based)
+    pub hot_context: Arc<HotContext>,
+    /// CoW compressed updates (storage tier)
+    pub warm_context: Arc<Vec<CompressedUpdate>>,
+    /// CoW periodic summaries (storage tier)
+    pub cold_context: Arc<Vec<StructuredSummary>>,
 
     // Structured context - CoW wrapped for efficient updates
-    pub current_state: Arc<StructuredContext>, // CoW: Current queryable state
-    pub incremental_updates: Arc<Vec<ContextUpdate>>, // CoW: All incremental updates (biggest!)
+    /// Current queryable structured state
+    pub current_state: Arc<StructuredContext>,
+    /// All incremental updates (biggest CoW vector)
+    pub incremental_updates: Arc<Vec<ContextUpdate>>,
 
     // Code integration - CoW wrapped
-    pub code_references: Arc<HashMap<String, Vec<CodeReference>>>, // CoW: By file path
-    pub change_history: Arc<Vec<ChangeRecord>>,                    // CoW: Change history
+    /// Code references indexed by file path
+    pub code_references: Arc<HashMap<String, Vec<CodeReference>>>,
+    /// Recorded change history
+    pub change_history: Arc<Vec<ChangeRecord>>,
 
     // Entity graph - CoW wrapped for efficient graph updates
+    /// Named-entity graph with relationships
     pub entity_graph: Arc<SimpleEntityGraph>,
 
     // Vectorization tracking (lock-free set for concurrent access)
+    /// IDs of updates that have been vectorized
     pub vectorized_update_ids: Arc<DashSet<Uuid>>,
 }
 
@@ -90,30 +107,48 @@ struct ActiveSessionData {
     vectorized_update_ids: Vec<Uuid>,
 }
 
+/// A compressed (summarised) context update stored in the warm tier.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CompressedUpdate {
+    /// The original context update
     pub update: ContextUpdate,
+    /// Compression ratio achieved (0.0–1.0)
     pub compression_ratio: f32,
+    /// When the compression was performed
     pub compressed_at: DateTime<Utc>,
 }
 
+/// A periodic snapshot of the structured context stored in the cold tier.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct StructuredSummary {
+    /// Unique identifier for this summary
     pub summary_id: Uuid,
+    /// When this summary was created
     pub created_at: DateTime<Utc>,
+    /// Snapshot of the structured context at summary time
     pub context_snapshot: StructuredContext,
+    /// IDs of the updates covered by this summary
     pub referenced_updates: Vec<Uuid>,
+    /// Quality score of the summary (0.0–1.0)
     pub summary_quality: f32,
 }
 
+/// A reference to a code region associated with a context update.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CodeReference {
+    /// File path of the referenced code
     pub file_path: String,
+    /// Start line number (1-based)
     pub start_line: u32,
+    /// End line number (inclusive)
     pub end_line: u32,
+    /// The actual code snippet
     pub code_snippet: String,
+    /// Git commit hash, if available
     pub commit_hash: Option<String>,
+    /// Git branch name, if available
     pub branch: Option<String>,
+    /// Human-readable description of the change
     pub change_description: String,
 }
 
@@ -121,21 +156,33 @@ pub struct CodeReference {
 // Removed duplicate field declarations - using CodeReference from core::context_update
 // No extra closing brace needed here
 
+/// A record of a change event within the session.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ChangeRecord {
+    /// Unique identifier for this change record
     pub id: Uuid,
+    /// When the change occurred
     pub timestamp: DateTime<Utc>,
+    /// Categorisation of the change type
     pub change_type: String,
+    /// Human-readable description of the change
     pub description: String,
+    /// ID of the originating context update, if any
     pub related_update_id: Option<Uuid>,
 }
 
+/// User-configurable session preferences.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct UserPreferences {
+    /// Whether automatic saving is enabled
     pub auto_save_enabled: bool,
+    /// How many days to retain context before pruning
     pub context_retention_days: u32,
+    /// Maximum number of entries in the hot context tier
     pub max_hot_context_size: usize,
+    /// Number of updates before auto-generating a summary
     pub auto_summary_threshold: usize,
+    /// Keywords the user considers important for prioritisation
     pub important_keywords: Vec<String>,
 }
 
@@ -229,6 +276,7 @@ fn truncate_safe(s: &mut String, max_bytes: usize) {
 }
 
 impl ActiveSession {
+    /// Create a new empty session with default preferences.
     pub fn new(id: Uuid, name: Option<String>, description: Option<String>) -> Self {
         let user_preferences = UserPreferences {
             auto_save_enabled: true,
@@ -307,26 +355,32 @@ impl ActiveSession {
     }
 
     // Convenience getters for metadata fields
+    /// Returns the session's unique identifier.
     pub fn id(&self) -> Uuid {
         self.metadata.id
     }
 
+    /// Returns the session's display name, if set.
     pub fn name(&self) -> Option<String> {
         self.metadata.name.clone()
     }
 
+    /// Returns the session's description, if set.
     pub fn description(&self) -> Option<String> {
         self.metadata.description.clone()
     }
 
+    /// Returns the session creation timestamp.
     pub fn created_at(&self) -> DateTime<Utc> {
         self.metadata.created_at
     }
 
+    /// Returns a reference to the session's user preferences.
     pub fn user_preferences(&self) -> &UserPreferences {
         &self.metadata.user_preferences
     }
 
+    /// Add an incremental update, processing entity graph, code refs, and state.
     #[instrument(skip(self, update), fields(session_id = %self.id()))]
     pub async fn add_incremental_update(&mut self, update: ContextUpdate) -> anyhow::Result<()> {
         info!(

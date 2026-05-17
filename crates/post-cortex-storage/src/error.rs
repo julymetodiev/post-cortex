@@ -30,7 +30,12 @@ pub enum Error {
     /// Logical "not found" — referenced session / workspace / entity
     /// missing from the backend.
     #[error("not found: {kind} {id}")]
-    NotFound { kind: &'static str, id: String },
+    NotFound {
+        /// Kind of entity that was missing (e.g. `"session"`, `"workspace"`).
+        kind: &'static str,
+        /// Identifier of the missing entity.
+        id: String,
+    },
 
     /// Export / import file format error (corrupt header, unsupported
     /// version, compression failure).

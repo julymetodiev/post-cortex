@@ -17,6 +17,9 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
+
+//! Lock-free LRU cache backed by DashMap with atomic metrics
+
 use atomic_float::AtomicF64;
 use crossbeam_channel::{Receiver, Sender, bounded};
 use dashmap::DashMap;
@@ -33,39 +36,59 @@ pub struct Cache<K, V> {
     /// Main storage - completely lock-free
     data: DashMap<K, CacheEntry<V>>,
 
-    /// Cache configuration - atomic
+    /// Maximum number of entries
     capacity: AtomicUsize,
+
+    /// Current number of entries
     current_size: AtomicUsize,
 
-    /// LRU approximation using access counters
+    /// Monotonically increasing counter used as a logical clock for LRU
     global_access_counter: AtomicU64,
 
-    /// Metrics - all atomic
+    /// Total number of get requests
     total_requests: AtomicU64,
+
+    /// Number of cache hits
     hits: AtomicU64,
+
+    /// Number of cache misses
     misses: AtomicU64,
+
+    /// Number of evicted entries
     evictions: AtomicU64,
+
+    /// Cumulative lookup time in nanoseconds
     total_lookup_time_ns: AtomicU64,
 
-    /// Cached computed values for performance
+    /// Cached hit rate for fast reads
     hit_rate: AtomicF64,
+
+    /// Cached average lookup time in nanoseconds
     avg_lookup_time_ns: AtomicU64,
 
-    /// Cache metadata
+    /// Human-readable cache name for logging
     name: String,
+
+    /// Unix timestamp when the cache was created
     created_at: AtomicU64,
 
-    /// Eviction channel for async processing (optional)
+    /// Sender half of the eviction notification channel
     eviction_sender: Sender<EvictionEvent<K>>,
+
+    /// Receiver half of the eviction notification channel
     eviction_receiver: Receiver<EvictionEvent<K>>,
 }
 
 /// Cache entry with access tracking for LRU approximation
 #[derive(Debug)]
 struct CacheEntry<V> {
+    /// The stored value
     value: V,
+    /// Number of times this entry has been accessed
     access_count: AtomicU64,
+    /// Logical timestamp of the last access
     last_accessed: AtomicU64,
+    /// Logical timestamp when the entry was created
     #[allow(dead_code)]
     created_at: AtomicU64,
 }
@@ -73,15 +96,22 @@ struct CacheEntry<V> {
 /// Event for async eviction processing
 #[derive(Debug, Clone)]
 pub enum EvictionEvent<K> {
+    /// An entry is a candidate for eviction
     #[allow(dead_code)]
     ShouldEvict {
+        /// Key of the candidate entry
         key: K,
+        /// How many times the entry was accessed
         access_count: u64,
+        /// Logical timestamp of the last access
         last_accessed: u64,
     },
+    /// An entry was successfully evicted
     Evicted {
+        /// Key of the evicted entry
         #[allow(dead_code)]
         key: K,
+        /// Unix timestamp when eviction occurred
         #[allow(dead_code)]
         timestamp: u64,
     },
@@ -90,18 +120,31 @@ pub enum EvictionEvent<K> {
 /// Cache statistics snapshot
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheStats {
+    /// Human-readable cache name
     pub name: String,
+    /// Current number of entries
     pub current_size: usize,
+    /// Maximum number of entries
     pub capacity: usize,
+    /// Current utilization ratio (0.0 – 1.0)
     pub utilization: f64,
+    /// Total number of get requests
     pub total_requests: u64,
+    /// Number of cache hits
     pub hits: u64,
+    /// Number of cache misses
     pub misses: u64,
+    /// Number of evicted entries
     pub evictions: u64,
+    /// Hit rate as a ratio (0.0 – 1.0)
     pub hit_rate: f64,
+    /// Miss rate as a ratio (0.0 – 1.0)
     pub miss_rate: f64,
+    /// Average lookup time in nanoseconds
     pub avg_lookup_time_ns: u64,
+    /// Unix timestamp when the cache was created
     pub created_at: u64,
+    /// Seconds since cache creation
     pub uptime_seconds: u64,
 }
 
@@ -552,18 +595,27 @@ pub type SessionCache<K, V> = Cache<K, V>;
 
 /// Multi-cache manager using lock-free caches
 pub struct CacheManager {
+    /// Registered caches keyed by name
     caches: DashMap<String, Arc<dyn CacheProvider + Send + Sync>>,
+    /// Aggregate request counter across all caches
     total_requests: AtomicU64,
+    /// Aggregate hit counter across all caches
     total_hits: AtomicU64,
+    /// Aggregate miss counter across all caches
     total_misses: AtomicU64,
+    /// Aggregate eviction counter across all caches
     total_evictions: AtomicU64,
 }
 
 /// Trait for generic cache operations
 pub trait CacheProvider {
+    /// Returns a snapshot of cache statistics
     fn get_stats(&self) -> CacheStats;
+    /// Resets all metric counters to zero
     fn reset_metrics(&self);
+    /// Returns true if the cache exhibits performance problems
     fn has_performance_issues(&self) -> bool;
+    /// Returns actionable recommendations for improving cache performance
     fn get_recommendations(&self) -> Vec<String>;
 }
 
@@ -596,6 +648,7 @@ where
 }
 
 impl CacheManager {
+    /// Creates a new empty cache manager
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -607,6 +660,7 @@ impl CacheManager {
         }
     }
 
+    /// Registers a named cache with the manager
     pub fn register_cache<K, V>(&self, name: &str, cache: Cache<K, V>)
     where
         K: Hash + Eq + Clone + Send + Sync + 'static,
@@ -616,6 +670,7 @@ impl CacheManager {
         info!("Registered cache: {}", name);
     }
 
+    /// Returns statistics for every registered cache
     pub fn get_all_stats(&self) -> Vec<CacheStats> {
         self.caches
             .iter()
@@ -623,12 +678,14 @@ impl CacheManager {
             .collect()
     }
 
+    /// Returns true if any registered cache has performance issues
     pub fn has_any_performance_issues(&self) -> bool {
         self.caches
             .iter()
             .any(|entry| entry.value().has_performance_issues())
     }
 
+    /// Resets metrics on all registered caches
     pub fn reset_all_metrics(&self) {
         for entry in &self.caches {
             entry.value().reset_metrics();
@@ -642,6 +699,7 @@ impl CacheManager {
         info!("Reset all cache metrics");
     }
 
+    /// Returns an aggregated summary across all registered caches
     pub fn get_summary(&self) -> CacheManagerSummary {
         let stats: Vec<CacheStats> = self.get_all_stats();
         let cache_count = stats.len();
@@ -689,14 +747,22 @@ impl Default for CacheManager {
     }
 }
 
+/// Aggregated summary across all caches managed by a [`CacheManager`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheManagerSummary {
+    /// Number of registered caches
     pub cache_count: usize,
+    /// Aggregate total requests
     pub total_requests: u64,
+    /// Aggregate total hits
     pub total_hits: u64,
+    /// Aggregate total evictions
     pub total_evictions: u64,
+    /// Average hit rate across all caches
     pub average_hit_rate: f64,
+    /// Names of caches experiencing performance issues
     pub problematic_caches: Vec<String>,
+    /// Per-cache statistics
     pub individual_stats: Vec<CacheStats>,
 }
 
@@ -704,10 +770,12 @@ pub struct CacheManagerSummary {
 static GLOBAL_CACHE_MANAGER: std::sync::OnceLock<CacheManager> =
     std::sync::OnceLock::new();
 
+/// Initializes the global cache manager (idempotent)
 pub fn init_global_cache_manager() {
     let _ = GLOBAL_CACHE_MANAGER.set(CacheManager::new());
 }
 
+/// Returns a reference to the global cache manager, creating it if needed
 pub fn get_global_cache_manager() -> &'static CacheManager {
     GLOBAL_CACHE_MANAGER.get_or_init(CacheManager::new)
 }

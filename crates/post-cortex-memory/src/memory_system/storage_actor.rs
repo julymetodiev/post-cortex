@@ -37,109 +37,189 @@ pub struct StorageActorHandle {
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum StorageMessage {
+    /// Load a session by its ID.
     LoadSession {
+        /// ID of the session to load.
         session_id: Uuid,
+        /// One-shot channel for returning the result.
         response_tx: oneshot::Sender<Result<Option<ActiveSession>, String>>,
     },
+    /// Save a complete session to storage.
     SaveSession {
+        /// Session to persist.
         session: Box<ActiveSession>,
+        /// One-shot channel for returning the result.
         response_tx: oneshot::Sender<Result<(), String>>,
     },
+    /// Delete a session by its ID.
     DeleteSession {
+        /// ID of the session to delete.
         session_id: Uuid,
+        /// One-shot channel for returning whether the session existed.
         response_tx: oneshot::Sender<Result<bool, String>>,
     },
+    /// Clear all entities and relationships for a session.
     ClearSessionEntities {
+        /// ID of the session whose entities should be cleared.
         session_id: Uuid,
+        /// One-shot channel for returning the result.
         response_tx: oneshot::Sender<Result<(), String>>,
     },
+    /// Delete a specific entity from a session.
     DeleteEntity {
+        /// Session that owns the entity.
         session_id: Uuid,
+        /// Name of the entity to delete.
         entity_name: String,
+        /// One-shot channel for returning the result.
         response_tx: oneshot::Sender<Result<(), String>>,
     },
+    /// List all stored session IDs.
     ListSessions {
+        /// One-shot channel for returning the session list.
         response_tx: oneshot::Sender<Result<Vec<Uuid>, String>>,
     },
+    /// Save a session checkpoint.
     SaveCheckpoint {
+        /// Checkpoint data to persist.
         checkpoint: post_cortex_storage::rocksdb_storage::SessionCheckpoint,
+        /// One-shot channel for returning the result.
         response_tx: oneshot::Sender<Result<(), String>>,
     },
+    /// Load a session checkpoint by ID.
     LoadCheckpoint {
+        /// ID of the checkpoint to load.
         checkpoint_id: Uuid,
+        /// One-shot channel for returning the checkpoint.
         response_tx: oneshot::Sender<Result<post_cortex_storage::rocksdb_storage::SessionCheckpoint, String>>,
     },
+    /// Save or update workspace metadata.
     SaveWorkspaceMetadata {
+        /// Workspace ID.
         workspace_id: Uuid,
+        /// Human-readable workspace name.
         name: String,
+        /// Workspace description.
         description: String,
+        /// Sessions belonging to this workspace.
         session_ids: Vec<Uuid>,
+        /// One-shot channel for returning the result.
         response_tx: oneshot::Sender<Result<(), String>>,
     },
+    /// Delete a workspace by its ID.
     DeleteWorkspace {
+        /// ID of the workspace to delete.
         workspace_id: Uuid,
+        /// One-shot channel for returning the result.
         response_tx: oneshot::Sender<Result<(), String>>,
     },
+    /// Add a session to a workspace with a given role.
     AddSessionToWorkspace {
+        /// Target workspace.
         workspace_id: Uuid,
+        /// Session to add.
         session_id: Uuid,
+        /// Role assigned to the session within the workspace.
         role: post_cortex_core::workspace::SessionRole,
+        /// One-shot channel for returning the result.
         response_tx: oneshot::Sender<Result<(), String>>,
     },
+    /// Remove a session from a workspace.
     RemoveSessionFromWorkspace {
+        /// Workspace to remove from.
         workspace_id: Uuid,
+        /// Session to remove.
         session_id: Uuid,
+        /// One-shot channel for returning the result.
         response_tx: oneshot::Sender<Result<(), String>>,
     },
+    /// List all stored workspaces.
     ListAllWorkspaces {
+        /// One-shot channel for returning the workspace list.
         response_tx: oneshot::Sender<Result<Vec<post_cortex_storage::rocksdb_storage::StoredWorkspace>, String>>,
     },
+    /// Batch-save multiple context updates for a session.
     BatchSaveUpdates {
+        /// Target session.
         session_id: Uuid,
+        /// Updates to persist.
         updates: Vec<post_cortex_core::core::context_update::ContextUpdate>,
+        /// One-shot channel for returning the result.
         response_tx: oneshot::Sender<Result<(), String>>,
     },
     /// Fire-and-forget: persist session + updates without blocking caller.
     PersistSessionAndUpdate {
+        /// Session snapshot to persist.
         session: Box<ActiveSession>,
+        /// ID of the session being persisted.
         session_id: Uuid,
+        /// Context updates accompanying this persist.
         updates: Vec<post_cortex_core::core::context_update::ContextUpdate>,
     },
+    /// Register a source reference for freshness tracking.
     RegisterSource {
+        /// Session that owns the source.
         session_id: Uuid,
+        /// Source reference to register.
         source_ref: SourceReference,
+        /// One-shot channel for returning the result.
         response_tx: oneshot::Sender<Result<(), String>>,
     },
+    /// Check freshness of a single cache entry.
     CheckFreshness {
+        /// Cache entry identifier.
         entry_id: String,
+        /// Current file content hash.
         file_hash: Vec<u8>,
+        /// Current AST hash, if available.
         ast_hash: Option<Vec<u8>>,
+        /// Symbol name for semantic-level checks.
         symbol_name: Option<String>,
+        /// One-shot channel for returning the freshness result.
         response_tx: oneshot::Sender<Result<FreshnessEntry, String>>,
     },
+    /// Check freshness of multiple cache entries in one call.
     CheckFreshnessBatch {
+        /// Batch of (entry_id, file_hash, ast_hash, symbol_name) tuples.
         entries: Vec<(String, Vec<u8>, Option<Vec<u8>>, Option<String>)>,
+        /// One-shot channel for returning the batch results.
         response_tx: oneshot::Sender<Result<Vec<FreshnessEntry>, String>>,
     },
+    /// Invalidate all cache entries derived from a source file.
     InvalidateSource {
+        /// Path of the source file to invalidate.
         file_path: String,
+        /// One-shot channel for returning the number of invalidated entries.
         response_tx: oneshot::Sender<Result<u32, String>>,
     },
+    /// Register dependency edges from one symbol to a set of target symbols.
     RegisterSymbolDependencies {
+        /// Source symbol.
         from: SymbolId,
+        /// Target symbols that `from` depends on.
         to_symbols: Vec<SymbolId>,
+        /// One-shot channel for returning the number of edges created.
         response_tx: oneshot::Sender<Result<u32, String>>,
     },
+    /// Cascade invalidation from a changed symbol to its transitive dependents.
     CascadeInvalidate {
+        /// Symbol that changed.
         changed: SymbolId,
+        /// New AST hash for the changed symbol.
         new_ast_hash: Vec<u8>,
+        /// Maximum traversal depth for the cascade.
         max_depth: u32,
+        /// One-shot channel for returning the cascade report.
         response_tx: oneshot::Sender<Result<CascadeInvalidateReport, String>>,
     },
+    /// Retrieve stale entries associated with a source file.
     GetStaleEntriesBySource {
+        /// Source file path to query.
         file_path: String,
+        /// One-shot channel for returning the stale entries.
         response_tx: oneshot::Sender<Result<Vec<post_cortex_storage::traits::StaleEntryInfo>, String>>,
     },
+    /// Shut down the storage actor loop.
     Shutdown,
 }
 
@@ -175,6 +255,7 @@ impl StorageActorHandle {
         }
     }
 
+    /// Load a session from storage by ID.
     pub async fn load_session(&self, session_id: Uuid) -> Result<Option<ActiveSession>, String> {
         self.send_request(
             OperationType::Fast,
@@ -187,6 +268,7 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Save a complete session to storage.
     pub async fn save_session(&self, session: ActiveSession) -> Result<(), String> {
         let session_id = session.id();
         self.send_request(
@@ -252,6 +334,7 @@ impl StorageActorHandle {
         }
     }
 
+    /// Delete a session from storage by ID.
     pub async fn delete_session(&self, session_id: Uuid) -> Result<bool, String> {
         self.send_request(
             OperationType::Medium,
@@ -264,6 +347,7 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Delete a specific entity from a session.
     pub async fn delete_entity(
         &self,
         session_id: Uuid,
@@ -283,6 +367,7 @@ impl StorageActorHandle {
         .await
     }
 
+    /// List all stored session IDs.
     pub async fn list_sessions(&self) -> Result<Vec<Uuid>, String> {
         self.send_request(
             OperationType::Slow,
@@ -292,6 +377,7 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Save a session checkpoint to storage.
     pub async fn save_checkpoint(
         &self,
         checkpoint: &post_cortex_storage::rocksdb_storage::SessionCheckpoint,
@@ -308,6 +394,7 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Load a session checkpoint by ID.
     pub async fn load_checkpoint(
         &self,
         checkpoint_id: Uuid,
@@ -323,6 +410,7 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Save or update workspace metadata including its sessions.
     pub async fn save_workspace_metadata(
         &self,
         workspace_id: Uuid,
@@ -347,6 +435,7 @@ impl StorageActorHandle {
         .await
     }
 
+    /// List all stored workspaces.
     pub async fn list_all_workspaces(
         &self,
     ) -> Result<Vec<post_cortex_storage::rocksdb_storage::StoredWorkspace>, String> {
@@ -358,6 +447,7 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Delete a workspace by its ID.
     pub async fn delete_workspace(&self, workspace_id: Uuid) -> Result<(), String> {
         self.send_request(
             OperationType::Medium,
@@ -370,6 +460,7 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Add a session to a workspace with a given role.
     pub async fn add_session_to_workspace(
         &self,
         workspace_id: Uuid,
@@ -389,6 +480,7 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Remove a session from a workspace.
     pub async fn remove_session_from_workspace(
         &self,
         workspace_id: Uuid,
@@ -406,6 +498,7 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Batch-save multiple context updates for a session.
     pub async fn batch_save_updates(
         &self,
         session_id: Uuid,
@@ -423,6 +516,7 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Register a source reference for freshness tracking.
     pub async fn register_source(
         &self,
         session_id: Uuid,
@@ -440,6 +534,7 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Check freshness of a cache entry using file hash only.
     pub async fn check_freshness(
         &self,
         entry_id: String,
@@ -449,6 +544,7 @@ impl StorageActorHandle {
             .await
     }
 
+    /// Check freshness of a cache entry with optional AST hash and symbol name.
     pub async fn check_freshness_semantic(
         &self,
         entry_id: String,
@@ -471,6 +567,7 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Check freshness of multiple cache entries in a single batch call.
     pub async fn check_freshness_batch(
         &self,
         entries: Vec<(String, Vec<u8>, Option<Vec<u8>>, Option<String>)>,
@@ -486,6 +583,7 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Invalidate all cache entries derived from a source file.
     pub async fn invalidate_source(&self, file_path: &str) -> Result<u32, String> {
         let file_path = file_path.to_string();
         self.send_request(
@@ -503,6 +601,7 @@ impl StorageActorHandle {
         })
     }
 
+    /// Register dependency edges from one symbol to a set of target symbols.
     pub async fn register_symbol_dependencies(
         &self,
         from: SymbolId,
@@ -520,6 +619,7 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Cascade invalidation from a changed symbol to its transitive dependents.
     pub async fn cascade_invalidate(
         &self,
         changed: SymbolId,
@@ -539,6 +639,7 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Retrieve stale entries associated with a source file.
     pub async fn get_stale_entries_by_source(
         &self,
         file_path: &str,
@@ -557,6 +658,7 @@ impl StorageActorHandle {
 }
 
 impl StorageActor {
+    /// Spawn the storage actor on a new tokio task and return a handle for sending messages.
     pub async fn spawn(
         storage: Arc<dyn post_cortex_storage::traits::GraphStorage>,
         performance_monitor: Arc<PerformanceMonitor>,

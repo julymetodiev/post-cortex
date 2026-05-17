@@ -15,15 +15,18 @@ use super::PipelineError;
 /// Refresh the structured summary view for a session.
 #[derive(Debug, Clone)]
 pub struct SummaryWorkItem {
+    /// Session whose summary should be regenerated.
     pub session_id: Uuid,
 }
 
+/// Bounded MPSC queue feeding the summary-refresh worker task.
 pub struct SummaryQueue {
     sender: mpsc::Sender<SummaryWorkItem>,
     backlog: Arc<AtomicUsize>,
 }
 
 impl SummaryQueue {
+    /// Spawn the summary worker on the current Tokio runtime and return the sending handle.
     #[must_use]
     pub fn start(capacity: usize, backlog: Arc<AtomicUsize>) -> Self {
         let (tx, mut rx) = mpsc::channel::<SummaryWorkItem>(capacity);
@@ -47,6 +50,7 @@ impl SummaryQueue {
         }
     }
 
+    /// Non-blocking submit; returns [`PipelineError::Backpressure`] if the queue is full.
     pub fn submit(&self, item: SummaryWorkItem) -> Result<(), PipelineError> {
         match self.sender.try_send(item) {
             Ok(()) => {

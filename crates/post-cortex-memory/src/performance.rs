@@ -36,9 +36,13 @@ pub struct PerformanceMonitor {
     caches: DashMap<String, Arc<CacheMetrics>>,
 
     /// Global counters - all atomic
+    /// Total number of operations recorded
     total_operations: AtomicU64,
+    /// Total number of errors encountered
     total_errors: AtomicU64,
+    /// Number of currently active operations
     active_operations: AtomicUsize,
+    /// UNIX timestamp when monitoring started
     started_at_timestamp: AtomicU64,
 
     /// Session info - atomic
@@ -53,96 +57,129 @@ pub struct PerformanceMonitor {
 /// Operation metrics using atomics
 #[derive(Debug)]
 pub struct OperationMetrics {
+    /// Name of the tracked operation
     operation_name: String,
 
-    // Basic counters
+    /// Total number of times this operation was called
     total_calls: AtomicU64,
+    /// Number of times this operation resulted in an error
     error_count: AtomicU64,
 
-    // Duration tracking (all in nanoseconds for precision)
+    /// Cumulative duration of all calls in nanoseconds
     total_duration_ns: AtomicU64,
-    min_duration_ns: AtomicU64, // Use AtomicU64::MAX as initial value
+    /// Minimum observed duration in nanoseconds
+    min_duration_ns: AtomicU64,
+    /// Maximum observed duration in nanoseconds
     max_duration_ns: AtomicU64,
 
-    // Recent performance tracking
+    /// UNIX timestamp of the most recent execution
     last_execution_timestamp: AtomicU64,
 
-    // Performance indicators
-    avg_duration_ns: AtomicU64, // Cached average, updated on each operation
-    error_rate: AtomicF64,      // Cached error rate
+    /// Cached average duration in nanoseconds
+    avg_duration_ns: AtomicU64,
+    /// Cached error rate as a percentage (0–100)
+    error_rate: AtomicF64,
 
-    // Trend tracking - simple moving average
-    recent_duration_sum: AtomicU64,    // Sum of last N operations
-    recent_operation_count: AtomicU64, // Count for recent operations (max 100)
+    /// Sum of durations in the recent sliding window
+    recent_duration_sum: AtomicU64,
+    /// Number of operations in the recent sliding window (max 100)
+    recent_operation_count: AtomicU64,
 }
 
 /// Cache metrics using atomics
 #[derive(Debug)]
 pub struct CacheMetrics {
+    /// Name of the tracked cache
     cache_name: String,
 
-    // Request counters
+    /// Total number of cache requests
     total_requests: AtomicU64,
+    /// Number of cache hits
     hits: AtomicU64,
+    /// Number of cache misses
     misses: AtomicU64,
+    /// Number of cache evictions
     evictions: AtomicU64,
 
-    // Performance counters
+    /// Cumulative lookup time across all requests in nanoseconds
     total_lookup_time_ns: AtomicU64,
-    avg_lookup_time_ns: AtomicU64, // Cached average
+    /// Cached average lookup time in nanoseconds
+    avg_lookup_time_ns: AtomicU64,
 
-    // Rates (cached for performance)
+    /// Cached hit rate (0.0–1.0)
     hit_rate: AtomicF64,
+    /// Cached miss rate (0.0–1.0)
     miss_rate: AtomicF64,
 
-    // Timestamps
+    /// UNIX timestamp of the most recent metric update
     last_updated_timestamp: AtomicU64,
     #[allow(dead_code)]
+    /// UNIX timestamp when this cache was first tracked
     created_timestamp: AtomicU64,
 }
 
-/// Operation timer
+/// Operation timer that tracks elapsed time for a named operation
 pub struct OperationTimer {
     #[allow(dead_code)]
+    /// Name of the operation being timed
     operation_name: String,
+    /// Instant when timing started
     start_time: Instant,
-    monitor: Option<Arc<PerformanceMonitor>>, // Make monitor optional to avoid unsafe code
+    /// Optional reference to the performance monitor
+    monitor: Option<Arc<PerformanceMonitor>>,
+    /// Whether the timer has already been finished
     is_finished: AtomicBool,
 }
 
 /// Events for async metrics processing (if needed)
 #[derive(Debug, Clone)]
 enum MetricsEvent {
+    /// An operation completed
     OperationCompleted {
         #[allow(dead_code)]
+        /// Name of the completed operation
         operation_name: String,
         #[allow(dead_code)]
+        /// Duration of the operation in nanoseconds
         duration_ns: u64,
         #[allow(dead_code)]
+        /// Whether the operation resulted in an error
         is_error: bool,
         #[allow(dead_code)]
+        /// UNIX timestamp when the operation completed
         timestamp: u64,
     },
+    /// A cache hit occurred
     CacheHit {
         #[allow(dead_code)]
+        /// Name of the cache
         cache_name: String,
         #[allow(dead_code)]
+        /// Lookup time in nanoseconds
         lookup_time_ns: u64,
         #[allow(dead_code)]
+        /// UNIX timestamp of the hit
         timestamp: u64,
     },
+    /// A cache miss occurred
     CacheMiss {
         #[allow(dead_code)]
+        /// Name of the cache
         cache_name: String,
         #[allow(dead_code)]
+        /// Lookup time in nanoseconds
         lookup_time_ns: u64,
         #[allow(dead_code)]
+        /// UNIX timestamp of the miss
         timestamp: u64,
     },
+    /// A cache eviction occurred
     CacheEviction {
         #[allow(dead_code)]
+        /// Name of the cache
         cache_name: String,
         #[allow(dead_code)]
+        /// UNIX timestamp of the eviction
         timestamp: u64,
     },
 }
@@ -150,45 +187,76 @@ enum MetricsEvent {
 /// Serializable performance snapshot
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerformanceSnapshot {
+    /// Optional session identifier
     pub session_id: Option<String>,
+    /// UNIX timestamp when monitoring started
     pub started_at_timestamp: u64,
+    /// Total number of operations recorded
     pub total_operations: u64,
+    /// Total number of errors encountered
     pub total_errors: u64,
+    /// Global error rate as a percentage
     pub global_error_rate: f64,
+    /// Number of currently active operations
     pub active_operations: usize,
+    /// Per-operation metric snapshots
     pub operations: Vec<OperationSnapshot>,
+    /// Per-cache metric snapshots
     pub caches: Vec<CacheSnapshot>,
+    /// Operations with high average latency (name, duration_ms)
     pub slow_operations: Vec<(String, f64)>,
+    /// Operations with high error rates (name, rate)
     pub error_prone_operations: Vec<(String, f64)>,
+    /// Caches with identified issues (name, description)
     pub cache_issues: Vec<(String, String)>,
 }
 
+/// Snapshot of a single operation's metrics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationSnapshot {
+    /// Name of the operation
     pub operation_name: String,
+    /// Total number of calls
     pub total_calls: u64,
+    /// Number of errors
     pub error_count: u64,
+    /// Error rate as a percentage
     pub error_rate: f64,
+    /// Average duration in milliseconds
     pub avg_duration_ms: f64,
+    /// Minimum observed duration in milliseconds
     pub min_duration_ms: f64,
+    /// Maximum observed duration in milliseconds
     pub max_duration_ms: f64,
+    /// UNIX timestamp of the most recent execution
     pub last_execution_timestamp: u64,
 }
 
+/// Snapshot of a single cache's metrics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheSnapshot {
+    /// Name of the cache
     pub cache_name: String,
+    /// Total number of cache requests
     pub total_requests: u64,
+    /// Number of cache hits
     pub hits: u64,
+    /// Number of cache misses
     pub misses: u64,
+    /// Number of cache evictions
     pub evictions: u64,
+    /// Hit rate (0.0–1.0)
     pub hit_rate: f64,
+    /// Miss rate (0.0–1.0)
     pub miss_rate: f64,
+    /// Average lookup time in nanoseconds
     pub avg_lookup_time_ns: u64,
+    /// UNIX timestamp of the most recent update
     pub last_updated_timestamp: u64,
 }
 
 impl PerformanceMonitor {
+    /// Create a new performance monitor for the given optional session
     pub fn new(session_id: Option<String>) -> Self {
         let (sender, receiver) = bounded(10000); // Large buffer for high-throughput
 
@@ -451,6 +519,7 @@ impl PerformanceMonitor {
 }
 
 impl OperationMetrics {
+    /// Create a new metrics tracker for the named operation
     pub fn new(operation_name: &str) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -472,6 +541,7 @@ impl OperationMetrics {
         }
     }
 
+    /// Record a single operation execution with its duration and error status
     pub fn record_operation(&self, duration_ns: u64, timestamp: u64, is_error: bool) {
         // Update counters
         let total_calls = self.total_calls.fetch_add(1, Ordering::Relaxed) + 1;
@@ -538,6 +608,7 @@ impl OperationMetrics {
         }
     }
 
+    /// Produce a serializable snapshot of the current operation metrics
     pub fn snapshot(&self) -> OperationSnapshot {
         let total_calls = self.total_calls.load(Ordering::Relaxed);
         let avg_duration_ns = if total_calls > 0 {
@@ -558,6 +629,7 @@ impl OperationMetrics {
         }
     }
 
+    /// Check whether this operation is exhibiting problematic performance
     pub fn is_problematic(&self) -> bool {
         let error_rate = self.error_rate.load(Ordering::Relaxed);
         let avg_duration_ns = self.avg_duration_ns.load(Ordering::Relaxed);
@@ -570,6 +642,7 @@ impl OperationMetrics {
 }
 
 impl CacheMetrics {
+    /// Create a new metrics tracker for the named cache
     pub fn new(cache_name: &str) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -591,6 +664,7 @@ impl CacheMetrics {
         }
     }
 
+    /// Record a cache hit with the given lookup time
     pub fn record_hit(&self, lookup_time_ns: u64, timestamp: u64) {
         let total_requests = self.total_requests.fetch_add(1, Ordering::Relaxed) + 1;
         let hits = self.hits.fetch_add(1, Ordering::Relaxed) + 1;
@@ -612,6 +686,7 @@ impl CacheMetrics {
         self.avg_lookup_time_ns.store(avg_lookup, Ordering::Relaxed);
     }
 
+    /// Record a cache miss with the given lookup time
     pub fn record_miss(&self, lookup_time_ns: u64, timestamp: u64) {
         let total_requests = self.total_requests.fetch_add(1, Ordering::Relaxed) + 1;
         let total_lookup_time = self
@@ -633,12 +708,14 @@ impl CacheMetrics {
         self.avg_lookup_time_ns.store(avg_lookup, Ordering::Relaxed);
     }
 
+    /// Record a cache eviction
     pub fn record_eviction(&self, timestamp: u64) {
         self.evictions.fetch_add(1, Ordering::Relaxed);
         self.last_updated_timestamp
             .store(timestamp, Ordering::Relaxed);
     }
 
+    /// Produce a serializable snapshot of the current cache metrics
     pub fn snapshot(&self) -> CacheSnapshot {
         CacheSnapshot {
             cache_name: self.cache_name.clone(),
@@ -653,6 +730,7 @@ impl CacheMetrics {
         }
     }
 
+    /// Check whether this cache is exhibiting issues such as low hit rate or slow lookups
     pub fn has_issues(&self) -> bool {
         let hit_rate = self.hit_rate.load(Ordering::Relaxed);
         let avg_lookup_ns = self.avg_lookup_time_ns.load(Ordering::Relaxed);
@@ -663,6 +741,7 @@ impl CacheMetrics {
 }
 
 impl OperationTimer {
+    /// Mark the timed operation as finished with an error
     pub fn finish_with_error(self) {
         if !self.is_finished.load(Ordering::Relaxed) {
             self.is_finished.store(true, Ordering::Relaxed);
@@ -674,10 +753,12 @@ impl OperationTimer {
         }
     }
 
+    /// Return the duration elapsed since the timer started
     pub fn current_duration(&self) -> Duration {
         self.start_time.elapsed()
     }
 
+    /// Consume the timer; actual cleanup is handled by `Drop`
     pub fn finish(self) {
         // Handled by Drop
     }
@@ -701,15 +782,18 @@ impl Drop for OperationTimer {
 static GLOBAL_MONITOR: std::sync::OnceLock<Arc<PerformanceMonitor>> =
     std::sync::OnceLock::new();
 
+/// Initialize the global performance monitor with an optional session identifier
 pub fn init_monitoring(session_id: Option<String>) {
     let monitor = Arc::new(PerformanceMonitor::new(session_id));
     let _ = GLOBAL_MONITOR.set(monitor);
 }
 
+/// Retrieve the global performance monitor, if initialized
 pub fn get_monitor() -> Option<&'static Arc<PerformanceMonitor>> {
     GLOBAL_MONITOR.get()
 }
 
+/// Start a timer for the named operation using the global monitor
 pub fn start_timer(operation_name: &str) -> Option<OperationTimer> {
     get_monitor().map(|monitor| monitor.start_timer(operation_name))
 }

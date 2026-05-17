@@ -17,6 +17,10 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
+//! Summary generation and presentation types.
+//!
+//! Provides the `SummaryGenerator` which produces structured summary views
+//! from an `ActiveSession`, along with filtering options.
 pub mod presentation;
 
 pub use presentation::{
@@ -31,11 +35,17 @@ use chrono::Utc;
 #[derive(Debug, Clone)]
 #[derive(Default)]
 pub struct SummaryOptions {
+    /// Maximum number of decisions to include
     pub decisions_limit: Option<usize>,
+    /// Maximum number of entities to include
     pub entities_limit: Option<usize>,
+    /// Maximum number of questions to include
     pub questions_limit: Option<usize>,
+    /// Maximum number of concepts to include
     pub concepts_limit: Option<usize>,
+    /// Minimum confidence threshold for decisions
     pub min_confidence: Option<f32>,
+    /// Whether to produce a compact (minimal) summary
     pub compact: bool,
 }
 

@@ -1,8 +1,11 @@
+//! Analysis, summaries, insights, and session statistics.
+
 use post_cortex_core::summary::SummaryGenerator;
 use crate::{get_memory_system, MCPToolResult};
 use anyhow::Result;
 use uuid::Uuid;
 
+/// Generate a structured summary of the session with optional filtering.
 pub async fn get_structured_summary(
     session_id: String,
     decisions_limit: Option<usize>,
@@ -80,6 +83,7 @@ pub async fn get_structured_summary(
     ))
 }
 
+/// Extract a timeline of key architectural and technical decisions.
 pub async fn get_key_decisions(session_id: String) -> Result<MCPToolResult> {
     let uuid =
         Uuid::parse_str(&session_id).map_err(|e| anyhow::anyhow!("Invalid session ID: {}", e))?;
@@ -99,6 +103,7 @@ pub async fn get_key_decisions(session_id: String) -> Result<MCPToolResult> {
     ))
 }
 
+/// Extract the top insights from a session ranked by importance.
 pub async fn get_key_insights(session_id: String, limit: Option<usize>) -> Result<MCPToolResult> {
     let uuid =
         Uuid::parse_str(&session_id).map_err(|e| anyhow::anyhow!("Invalid session ID: {}", e))?;
@@ -118,6 +123,7 @@ pub async fn get_key_insights(session_id: String, limit: Option<usize>) -> Resul
     ))
 }
 
+/// Analyse entity importance with optional minimum-score and limit filters.
 pub async fn get_entity_importance_analysis(
     session_id: String,
     limit: Option<usize>,
@@ -165,6 +171,7 @@ pub async fn get_entity_importance_analysis(
     ))
 }
 
+/// Build a network view of entities and their relationships.
 pub async fn get_entity_network_view(
     session_id: String,
     center_entity: Option<String>,
@@ -244,6 +251,7 @@ pub async fn get_entity_network_view(
     ))
 }
 
+/// Return detailed statistics about a session's size and activity.
 pub async fn get_session_statistics(session_id: String) -> Result<MCPToolResult> {
     let uuid =
         Uuid::parse_str(&session_id).map_err(|e| anyhow::anyhow!("Invalid session ID: {}", e))?;
@@ -312,6 +320,7 @@ pub async fn get_session_statistics(session_id: String) -> Result<MCPToolResult>
     ))
 }
 
+/// Return a JSON catalog describing every available MCP tool and its usage.
 pub async fn get_tool_catalog() -> Result<MCPToolResult> {
     let catalog = serde_json::json!({
         "total_tools": 26,

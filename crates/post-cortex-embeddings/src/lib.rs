@@ -10,7 +10,7 @@
 //! static-hash fallback) and ships [`VectorDB`] (HNSW with optional
 //! product quantization).
 //!
-//! Shared types — [`post_cortex_embeddings::VectorMetadata`]
+//! Shared types — \[`post_cortex_embeddings::VectorMetadata`\]
 //! and friends — live in `post-cortex-core` so the storage trait API
 //! can reference them without depending on the ML stack.
 

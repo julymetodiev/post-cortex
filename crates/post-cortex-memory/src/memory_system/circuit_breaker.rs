@@ -8,17 +8,25 @@ use super::metrics::CircuitBreakerStats;
 /// Circuit breaker using atomics
 #[derive(Debug)]
 pub struct CircuitBreaker {
+    /// Whether the circuit breaker is currently open (blocking requests)
     pub is_open: AtomicBool,
+    /// Consecutive failure count
     pub failure_count: AtomicU64,
+    /// UNIX timestamp of the most recent failure
     pub last_failure_timestamp: AtomicU64,
+    /// Consecutive success count
     pub success_count: AtomicU64,
+    /// UNIX timestamp of the most recent success
     pub last_success_timestamp: AtomicU64,
 
+    /// Number of failures required to open the circuit
     pub failure_threshold: u64,
+    /// Seconds to wait before allowing retries after opening
     pub timeout_seconds: u64,
 }
 
 impl CircuitBreaker {
+    /// Create a new circuit breaker with the given failure threshold and timeout
     pub fn new(failure_threshold: u64, timeout_seconds: u64) -> Self {
         Self {
             is_open: AtomicBool::new(false),
@@ -31,6 +39,7 @@ impl CircuitBreaker {
         }
     }
 
+    /// Check whether the circuit breaker is currently open, resetting after the timeout period
     pub fn is_open(&self) -> bool {
         if !self.is_open.load(Ordering::Relaxed) {
             return false;
@@ -52,6 +61,7 @@ impl CircuitBreaker {
         }
     }
 
+    /// Record a failure, potentially opening the circuit breaker
     pub fn record_failure(&self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -66,6 +76,7 @@ impl CircuitBreaker {
         }
     }
 
+    /// Record a success, gradually reducing the failure count
     pub fn record_success(&self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -81,6 +92,7 @@ impl CircuitBreaker {
         }
     }
 
+    /// Return a snapshot of the current circuit breaker statistics
     pub fn get_stats(&self) -> CircuitBreakerStats {
         CircuitBreakerStats {
             is_open: self.is_open.load(Ordering::Relaxed),

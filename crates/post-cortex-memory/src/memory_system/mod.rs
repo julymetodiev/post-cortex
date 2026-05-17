@@ -12,13 +12,20 @@
 
 //! Conversation memory system with actor-based storage and lock-free session management.
 
+/// Circuit-breaker pattern for graceful degradation under sustained failures.
 pub mod circuit_breaker;
+/// Operation types and system configuration
 pub mod config;
 mod embeddings;
+/// Metric containers for incremental context processing and graph management
 pub mod managers;
+/// System-level and session-level metrics snapshots
 pub mod metrics;
+/// Session lifecycle management with DashMap-based caching
 pub mod session_manager;
+/// Actor-based storage communication layer
 pub mod storage_actor;
+/// Top-level conversation memory system orchestrator
 pub mod system;
 
 pub use circuit_breaker::CircuitBreaker;

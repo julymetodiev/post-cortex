@@ -11,7 +11,7 @@
 //! The 9 consolidated tool surfaces live as top-level modules: see
 //! [`session`], [`update_context`], [`query`], [`search`], [`analysis`],
 //! [`workspace`], and [`schemas`]. Headline helpers
-//! ([`MCPToolResult`], [`MEMORY_SYSTEM`], [`get_memory_system`]) are
+//! ([`MCPToolResult`], `MEMORY_SYSTEM`, `get_memory_system`) are
 //! re-exported below.
 //!
 //! ## Phase 6 status
@@ -29,6 +29,7 @@
 #![allow(clippy::result_large_err)]
 #![allow(clippy::type_complexity)]
 
+/// Typed error hierarchy for the MCP tool layer.
 pub mod error;
 pub use error::{Error, Result as McpResult};
 
@@ -44,12 +45,19 @@ use uuid::Uuid;
 
 use post_cortex_memory::{ConversationMemorySystem, SystemConfig};
 
+/// Helpers for recording context updates (single and bulk).
 pub mod update_context;
+/// Structured and keyword-based queries over session context.
 pub mod query;
+/// Session lifecycle: create, load, checkpoint, list, search, metadata.
 pub mod session;
+/// Semantic and embedding-powered search across sessions.
 pub mod search;
+/// Analysis, summaries, insights, and session statistics.
 pub mod analysis;
+/// Workspace CRUD and session-to-workspace membership.
 pub mod workspace;
+/// JSON Schema descriptors for every MCP tool.
 pub mod schemas;
 
 pub use update_context::{
@@ -80,120 +88,195 @@ pub use workspace::{
 };
 pub use schemas::get_all_tool_schemas;
 
+/// Convert a plain string into an `anyhow::Error`.
 fn string_to_anyhow(s: String) -> anyhow::Error {
     anyhow::Error::msg(s)
 }
 
+/// Typed query descriptors dispatched by `query::query_context`.
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ContextQuery {
+    /// Retrieve context updates created after a given timestamp.
     GetRecentChanges {
+        /// Earliest timestamp to include.
         since: chrono::DateTime<chrono::Utc>,
     },
+    /// Look up code references for a specific file path.
     FindCodeReferences {
+        /// File path to search references for.
         file_path: String,
     },
+    /// Return the current structured summary of the session.
     GetStructuredSummary,
+    /// Keyword search over stored context updates.
     SearchUpdates {
+        /// Search query string.
         query: String,
     },
+    /// Retrieve decision-type updates, optionally after a timestamp.
     GetDecisions {
+        /// Optional lower-bound timestamp filter.
         since: Option<chrono::DateTime<chrono::Utc>>,
     },
+    /// Return open questions tracked in the session.
     GetOpenQuestions,
+    /// Return change history, optionally filtered by file path.
     GetChangeHistory {
+        /// Optional file path to narrow results.
         file_path: Option<String>,
     },
 
+    /// Find entity names related to a given entity.
     FindRelatedEntities {
+        /// Name of the entity to search relations for.
         entity_name: String,
     },
+    /// Return full context string for a named entity.
     GetEntityContext {
+        /// Name of the entity.
         entity_name: String,
     },
+    /// List all known entities, optionally filtered by type.
     GetAllEntities {
+        /// Optional entity-type filter.
         entity_type: Option<EntityType>,
     },
+    /// Traverse relationship edges starting from an entity.
     TraceRelationships {
+        /// Entity name to start traversal from.
         from_entity: String,
+        /// Maximum graph traversal depth.
         max_depth: usize,
     },
 
+    /// Build a sub-graph network centered on an entity.
     GetEntityNetwork {
+        /// Entity to place at the center of the network.
         center_entity: String,
+        /// Maximum traversal depth.
         max_depth: usize,
     },
+    /// Find the shortest relationship path between two entities.
     FindConnectionPath {
+        /// Starting entity.
         from_entity: String,
+        /// Target entity.
         to_entity: String,
+        /// Maximum path length to explore.
         max_depth: usize,
     },
+    /// Return the top-N entities ranked by importance score.
     GetMostImportantEntities {
+        /// Maximum number of entities to return.
         limit: usize,
     },
+    /// Return the most recently mentioned entities.
     GetRecentlyMentionedEntities {
+        /// Maximum number of entities to return.
         limit: usize,
     },
+    /// Perform a full importance analysis across all entities.
     AnalyzeEntityImportance,
+    /// List entities matching a specific type.
     FindEntitiesByType {
+        /// Entity type to filter by.
         entity_type: EntityType,
     },
 
+    /// Return a hierarchical tree rooted at an entity.
     GetEntityHierarchy {
+        /// Root entity for the hierarchy.
         root_entity: String,
+        /// Maximum depth of the hierarchy.
         max_depth: usize,
     },
+    /// Detect clusters of closely related entities.
     FindEntityClusters {
+        /// Minimum number of entities to form a cluster.
         min_cluster_size: usize,
     },
 
+    /// Return a timeline of mentions for a specific entity.
     GetEntityTimeline {
+        /// Entity name to track.
         entity_name: String,
+        /// Optional start of the time window.
         start_time: Option<chrono::DateTime<chrono::Utc>>,
+        /// Optional end of the time window.
         end_time: Option<chrono::DateTime<chrono::Utc>>,
     },
+    /// Analyse how entity activity trends over a time window.
     AnalyzeEntityTrends {
+        /// Width of the rolling time window in days.
         time_window_days: i64,
     },
 
+    /// Graph-aware retrieval combining semantic search and traversal.
     AssembleContext {
+        /// Natural-language query for relevance scoring.
         query: String,
+        /// Maximum approximate token count for the returned context.
         token_budget: usize,
     },
 }
 
+/// Typed response payloads returned by `query::query_context`.
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ContextResponse {
+    /// Recent context updates since a given timestamp.
     RecentChanges(Vec<ContextUpdate>),
+    /// Code references matching a file path.
     CodeReferences(Vec<CodeReference>),
+    /// Full structured summary of the session.
     StructuredSummary(post_cortex_core::core::structured_context::StructuredContext),
+    /// Context updates matching a keyword search.
     SearchResults(Vec<ContextUpdate>),
+    /// Decision-type context updates.
     Decisions(Vec<ContextUpdate>),
+    /// Open questions tracked in the session.
     OpenQuestions(Vec<String>),
+    /// Change history for a file or across all files.
     ChangeHistory(Vec<ContextUpdate>),
+    /// Entity names related to a target entity.
     RelatedEntities(Vec<String>),
+    /// Human-readable context summary for a single entity.
     EntityContext(String),
+    /// All entity names, optionally filtered by type.
     AllEntities(Vec<String>),
+    /// Entity names discovered by relationship traversal.
     EntityRelationships(Vec<String>),
+    /// Serialized entity network graph.
     EntityNetwork(String),
+    /// Serialized shortest path between two entities.
     ConnectionPath(String),
+    /// Generic list of entity names.
     Entities(Vec<String>),
+    /// Human-readable entity importance analysis.
     ImportanceAnalysis(String),
+    /// Serialized entity hierarchy tree.
     EntityHierarchy(String),
+    /// Serialized entity cluster data.
     EntityClusters(String),
+    /// Serialized entity timeline data.
     EntityTimeline(String),
+    /// Serialized entity trend analysis.
     EntityTrends(String),
+    /// Graph-aware assembled context within a token budget.
     AssembledContext(post_cortex_memory::context_assembly::AssembledContext),
 }
 
+/// Global singleton holding the optional injected memory system.
 static MEMORY_SYSTEM: LazyLock<ArcSwap<Option<Arc<ConversationMemorySystem>>>> =
     LazyLock::new(|| ArcSwap::new(Arc::new(None)));
 
+/// Inject a pre-built memory system for daemon mode.
 pub fn inject_memory_system(system: Arc<ConversationMemorySystem>) {
     info!("MCP-TOOLS: Injecting external memory system for daemon mode");
     MEMORY_SYSTEM.store(Arc::new(Some(system)));
     info!("MCP-TOOLS: Memory system injection complete");
 }
 
+/// Create a new memory system from the given configuration.
 pub async fn get_memory_system_with_config(
     config: SystemConfig,
 ) -> Result<ConversationMemorySystem> {
@@ -202,6 +285,7 @@ pub async fn get_memory_system_with_config(
         .map_err(anyhow::Error::msg)
 }
 
+/// Return the global memory system, lazily initialising it if needed.
 pub async fn get_memory_system() -> Result<Arc<ConversationMemorySystem>> {
     info!("MCP-TOOLS: get_memory_system() called");
 
@@ -262,48 +346,78 @@ pub async fn get_memory_system() -> Result<Arc<ConversationMemorySystem>> {
     Ok(MEMORY_SYSTEM.load().as_ref().as_ref().unwrap().clone())
 }
 
+/// Typed interaction payloads matching MCP `interaction_type` values.
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Interaction {
+    /// A question-answer pair.
     QA {
+        /// The question asked.
         question: String,
+        /// The answer provided.
         answer: String,
+        /// Supplementary detail lines.
         details: Vec<String>,
     },
+    /// A code change recorded in the session.
     CodeChange {
+        /// Path to the changed file.
         file_path: String,
+        /// Diff or change description.
         diff: String,
+        /// Supplementary detail lines.
         details: Vec<String>,
     },
+    /// A problem that was solved.
     ProblemSolved {
+        /// Description of the problem.
         problem: String,
+        /// Description of the solution.
         solution: String,
+        /// Supplementary detail lines.
         details: Vec<String>,
     },
+    /// An architectural or technical decision.
     DecisionMade {
+        /// The decision that was made.
         decision: String,
+        /// Rationale behind the decision.
         rationale: String,
+        /// Supplementary detail lines.
         details: Vec<String>,
     },
+    /// A new requirement added to the project.
     RequirementAdded {
+        /// The requirement text.
         requirement: String,
+        /// Priority level (e.g. "high", "medium", "low").
         priority: String,
+        /// Supplementary detail lines.
         details: Vec<String>,
     },
+    /// A concept definition recorded for future reference.
     ConceptDefined {
+        /// Name of the concept.
         concept: String,
+        /// Definition of the concept.
         definition: String,
+        /// Supplementary detail lines.
         details: Vec<String>,
     },
 }
 
+/// Standardised result envelope for every MCP tool.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MCPToolResult {
+    /// Whether the tool invocation succeeded.
     pub success: bool,
+    /// Human-readable status or error message.
     pub message: String,
+    /// Optional structured payload.
     pub data: Option<serde_json::Value>,
 }
 
 impl MCPToolResult {
+    /// Build a successful result with an optional JSON payload.
     pub fn success(message: String, data: Option<serde_json::Value>) -> Self {
         Self {
             success: true,
@@ -312,6 +426,7 @@ impl MCPToolResult {
         }
     }
 
+    /// Build an error result with no payload.
     pub fn error(message: String) -> Self {
         Self {
             success: false,
@@ -321,13 +436,18 @@ impl MCPToolResult {
     }
 }
 
+/// A single context update item accepted by the bulk-update tool.
 #[derive(Serialize, Deserialize, Debug, JsonSchema, Clone)]
 pub struct ContextUpdateItem {
+    /// Interaction type discriminator (e.g. `"qa"`, `"decision_made"`).
     pub interaction_type: String,
+    /// Key-value content fields for the interaction.
     pub content: HashMap<String, String>,
+    /// Optional code reference attached to the update.
     pub code_reference: Option<CodeReference>,
 }
 
+/// Convert an [`Interaction`] into a domain-layer [`ContextUpdate`].
 pub(crate) fn interaction_to_context_update(
     interaction: Interaction,
     code_reference: Option<CodeReference>,
@@ -437,6 +557,9 @@ pub(crate) fn interaction_to_context_update(
     })
 }
 
+/// Parse a datetime string in RFC 3339, `%Y-%m-%d %H:%M:%S`, or `%Y-%m-%d` format.
+///
+/// Returns 30 days ago when the input is empty.
 pub(crate) fn parse_datetime(date_str: &str) -> Result<chrono::DateTime<chrono::Utc>> {
     if date_str.is_empty() {
         return Ok(chrono::Utc::now() - chrono::Duration::days(30));

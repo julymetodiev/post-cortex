@@ -34,43 +34,66 @@ use crate::content_vectorizer::{ContentVectorizer, SemanticSearchResult};
 /// Related experience from other sessions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelatedExperience {
+    /// Session where the experience originated.
     pub session_id: Uuid,
+    /// Cosine similarity between the query and the experience content.
     pub similarity_score: f32,
+    /// Combined relevance score (similarity weighted by importance).
     pub relevance_score: f32,
+    /// Short excerpt of the matching content.
     pub content_snippet: String,
+    /// Type of the matched content (e.g. `"DecisionPoint"`).
     pub content_type: String,
+    /// When the experience was originally recorded.
     pub timestamp: DateTime<Utc>,
+    /// Human-readable context description.
     pub context: String,
 }
 
 /// Enhanced context with semantic relationships
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnhancedContext {
+    /// Search results from the current session.
     pub primary_content: Vec<SemanticSearchResult>,
+    /// Related experiences discovered in other sessions.
     pub related_experiences: Vec<RelatedExperience>,
+    /// Overall confidence in the assembled context (0.0–1.0).
     pub confidence_score: f32,
+    /// Dominant themes extracted from primary and related content.
     pub semantic_themes: Vec<String>,
+    /// Suggested follow-up actions for the caller.
     pub suggested_actions: Vec<String>,
 }
 
 /// Semantic insights about a query or topic
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SemanticInsights {
+    /// Most frequently occurring themes across matched content.
     pub dominant_themes: Vec<String>,
+    /// Concepts related to the query topic.
     pub related_concepts: Vec<String>,
+    /// Detected patterns in user behaviour.
     pub user_patterns: Vec<String>,
+    /// Past decisions relevant to the topic.
     pub decision_history: Vec<String>,
+    /// Recurring problem-solving patterns.
     pub problem_patterns: Vec<String>,
+    /// Topics where little context was found.
     pub knowledge_gaps: Vec<String>,
 }
 
 /// Configuration for semantic query engine
 #[derive(Debug, Clone)]
 pub struct SemanticQueryConfig {
+    /// Maximum number of related experiences to return.
     pub max_related_experiences: usize,
+    /// Minimum similarity score for results to be included.
     pub similarity_threshold: f32,
+    /// Whether cross-session search is enabled.
     pub cross_session_enabled: bool,
+    /// Minimum confidence for insights to be surfaced.
     pub insight_confidence_threshold: f32,
+    /// Default limit for search result counts.
     pub max_context_results: usize,
     /// Temporal decay factor for recency bias (0.0 = disabled)
     pub recency_bias: f32,
