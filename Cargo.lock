@@ -4319,6 +4319,7 @@ version = "0.1.23"
 dependencies = [
  "anyhow",
  "arc-swap",
+ "async-trait",
  "axum 0.8.8",
  "chrono",
  "criterion",
@@ -4333,6 +4334,7 @@ dependencies = [
  "post-cortex-proto",
  "post-cortex-storage",
  "proptest",
+ "prost 0.13.5",
  "reqwest 0.12.26",
  "schemars",
  "serde",
@@ -4470,10 +4472,6 @@ dependencies = [
  "tracing",
  "uuid",
 ]
-
-[[package]]
-name = "post-cortex-facade"
-version = "0.1.23"
 
 [[package]]
 name = "post-cortex-mcp"

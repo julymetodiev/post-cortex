@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    ".",
     "crates/post-cortex-proto",
     "crates/post-cortex-core",
     "crates/post-cortex-embeddings",
@@ -12,11 +11,9 @@ members = [
     "crates/post-cortex",
 ]
 
-# Default `cargo` operations run against the legacy root crate so the existing
-# build / test / bench flows keep working while we migrate content into the
-# crates/* members. After Phase 8 the root [package] is deleted and the facade
-# crate becomes the default.
-default-members = ["."]
+# Default cargo operations run against the facade crate — `cargo test`
+# at the workspace root exercises the full end-to-end integration suite.
+default-members = ["crates/post-cortex"]
 
 [workspace.package]
 version = "0.1.23"
@@ -121,78 +118,3 @@ codegen-units = 1
 [profile.bench]
 debug = true   # so flamegraph / pprof can resolve symbols
 
-# ---------------------------------------------------------------------------
-# Legacy root crate (single-crate post-cortex 0.1.23). Stays in place until
-# Phase 8 deletes it in favour of the facade crate.
-# ---------------------------------------------------------------------------
-[package]
-name = "post-cortex"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-repository.workspace = true
-rust-version.workspace = true
-description = "An intelligent conversation memory system for AI assistants that provides persistent knowledge storage, semantic search, and automatic relationship mapping with lock-free concurrency guarantees"
-keywords = ["conversation", "memory", "semantic-search", "lock-free", "mcp"]
-categories = ["data-structures", "database-implementations", "concurrency"]
-
-[dependencies]
-# After Phase 7, the legacy root crate is a pure re-export facade. It
-# carries no code beyond src/lib.rs — every direct dep below feeds the
-# `pub use` shim that keeps the historical `post_cortex::*` paths
-# resolving for integration tests under tests/ until Phase 8 retires
-# this crate entirely.
-post-cortex-proto.workspace = true
-post-cortex-core.workspace = true
-post-cortex-embeddings = { workspace = true, features = ["bert"] }
-post-cortex-storage.workspace = true
-post-cortex-memory.workspace = true
-post-cortex-mcp.workspace = true
-post-cortex-daemon.workspace = true
-
-[dev-dependencies]
-# Test helpers + the deps integration tests under tests/ use directly.
-# Phase 12 will move per-crate tests into their owning crate's tests/;
-# until then this is the full list.
-tokio.workspace = true
-tokio-test.workspace = true
-tempfile.workspace = true
-criterion.workspace = true
-portpicker.workspace = true
-proptest.workspace = true
-serial_test.workspace = true
-tokio-stream.workspace = true
-anyhow.workspace = true
-uuid.workspace = true
-chrono.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-futures.workspace = true
-axum.workspace = true
-tower.workspace = true
-tower-http.workspace = true
-hyper.workspace = true
-tonic.workspace = true
-reqwest.workspace = true
-schemars.workspace = true
-tracing.workspace = true
-arc-swap.workspace = true
-
-[[bench]]
-name = "query_cache_bench"
-harness = false
-
-[features]
-default = ["embeddings"]
-llm-integration = []
-# The legacy root crate's `embeddings` and `surrealdb-storage` features
-# now forward to the corresponding features on post-cortex-memory (which
-# owns the legacy code under the new layout). post-cortex-memory in turn
-# forwards `surrealdb-storage` to post-cortex-storage. End result: the
-# `cargo build --features embeddings,surrealdb-storage` invocation that
-# existed for the single-crate package keeps producing an identical
-# build of the legacy daemon + tools tree.
-embeddings = ["post-cortex-memory/embeddings", "post-cortex-mcp/embeddings"]
-surrealdb-storage = ["post-cortex-memory/surrealdb-storage"]
-surrealdb-tikv = ["post-cortex-memory/surrealdb-storage", "post-cortex-storage/surrealdb-tikv"]

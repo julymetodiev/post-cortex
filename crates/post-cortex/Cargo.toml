@@ -1,23 +1,68 @@
 [package]
-name = "post-cortex-facade"
+name = "post-cortex"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Facade meta-crate for the post-cortex workspace. Re-exports post-cortex-core and (feature-gated) post-cortex-mcp / post-cortex-daemon for one-stop integration."
-keywords = ["post-cortex", "facade", "memory", "ai", "rust-sdk"]
-categories = ["data-structures"]
+description = "Intelligent conversation memory system for AI assistants — persistent knowledge storage, semantic search, knowledge graph, MCP + gRPC transports. Facade crate re-exporting the post-cortex workspace stack."
+keywords = ["conversation", "memory", "semantic-search", "mcp", "ai"]
+categories = ["data-structures", "database-implementations"]
 readme = "README.md"
 documentation = "https://docs.rs/post-cortex"
 
-# NOTE: the published name on crates.io will be `post-cortex` once the legacy
-# root crate is retired in Phase 8 (the legacy package currently owns that
-# name in the workspace). Until then, this crate publishes as
-# `post-cortex-facade` internally to avoid the name clash; Phase 8 renames it
-# back via `[package] name = "post-cortex"` plus deletion of the legacy root
-# [package] section.
-
 [dependencies]
-# Phase 8 fills in: post-cortex-core (always), and feature-gated mcp/daemon re-exports.
+# The facade re-exports every member crate so end-to-end consumers get
+# one dependency line and the full stack.
+post-cortex-proto.workspace = true
+post-cortex-core.workspace = true
+post-cortex-embeddings = { workspace = true, features = ["bert"] }
+post-cortex-storage.workspace = true
+post-cortex-memory.workspace = true
+post-cortex-mcp.workspace = true
+post-cortex-daemon.workspace = true
+
+[dev-dependencies]
+# The integration tests live under tests/. They use the full transport
+# stack (axum, tonic, rmcp) plus the test helpers shared across crates.
+anyhow.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+tokio-test.workspace = true
+tokio-stream.workspace = true
+tempfile.workspace = true
+serial_test.workspace = true
+portpicker.workspace = true
+proptest.workspace = true
+criterion.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+futures.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+hyper.workspace = true
+tonic.workspace = true
+prost.workspace = true
+reqwest.workspace = true
+schemars.workspace = true
+tracing.workspace = true
+arc-swap.workspace = true
+
+[[bench]]
+name = "query_cache_bench"
+harness = false
+
+[features]
+default = ["embeddings"]
+embeddings = ["post-cortex-memory/embeddings", "post-cortex-mcp/embeddings", "post-cortex-daemon/embeddings"]
+surrealdb-storage = ["post-cortex-memory/surrealdb-storage", "post-cortex-daemon/surrealdb-storage"]
+surrealdb-tikv = ["surrealdb-storage", "post-cortex-storage/surrealdb-tikv"]
+otel = []
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

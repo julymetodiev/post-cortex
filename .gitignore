@@ -12,7 +12,6 @@ data/
 
 mcp.json
 start-mcp-server.sh
-benches
 
 # OS
 .DS_Store
