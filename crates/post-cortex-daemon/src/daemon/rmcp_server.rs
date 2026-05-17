@@ -42,11 +42,19 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
 
     #[cfg(feature = "embeddings")]
     {
+        // Inherit `embeddings_model_type` + `vector_dimension` from
+        // `SystemConfig::default()` (PotionMultilingual / 256-dim as of
+        // 0.3.0) — hard-coding `"MultilingualMiniLM"` here used to
+        // silently downgrade the embedding model regardless of the
+        // workspace default and pinned the HNSW index to 384-dim,
+        // mismatching the runtime vectoriser.
         system_config.enable_embeddings = true;
-        system_config.embeddings_model_type = "MultilingualMiniLM".to_string();
         system_config.auto_vectorize_on_update = true;
         system_config.cross_session_search_enabled = true;
-        info!("Embeddings enabled in daemon config");
+        info!(
+            "Embeddings enabled in daemon config (model={}, dim={})",
+            system_config.embeddings_model_type, system_config.vector_dimension,
+        );
     }
 
     // Configure storage backend if surrealdb-storage feature is enabled

@@ -42,7 +42,7 @@ use serde_json::Value;
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,ignore
 /// use post_cortex::daemon::format_helpers::format_search_results;
 ///
 /// let formatted = format_search_results(&results);

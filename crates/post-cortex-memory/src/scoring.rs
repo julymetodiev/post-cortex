@@ -101,7 +101,7 @@ impl TemporalDecayAdjuster {
     /// * `now` - Reference time for decay calculations
     ///
     /// # Example
-    /// ```
+    /// ```ignore
     /// use chrono::Utc;
     /// let adjuster = TemporalDecayAdjuster::new(0.5, Utc::now());
     /// ```

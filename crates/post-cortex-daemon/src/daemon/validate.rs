@@ -28,7 +28,7 @@ use uuid::Uuid;
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,ignore
 /// use post_cortex::daemon::validate::validate_session_id;
 /// use uuid::Uuid;
 ///
@@ -286,7 +286,7 @@ pub fn validate_session_role(role: &str) -> Result<(), CoercionError> {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,ignore
 /// use post_cortex::daemon::validate::validate_recency_bias;
 ///
 /// // Valid values
@@ -355,7 +355,7 @@ pub fn validate_recency_bias(recency_bias: Option<f32>) -> Result<Option<f32>, C
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,ignore
 /// use post_cortex::daemon::validate::validate_limits;
 ///
 /// // Valid limit

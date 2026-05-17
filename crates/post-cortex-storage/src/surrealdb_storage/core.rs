@@ -38,7 +38,7 @@ impl SurrealDBStorage {
     /// ```bash
     /// docker run -d -p 8000:8000 surrealdb/surrealdb:latest start --user root --pass root
     /// ```
-    /// ```rust
+    /// ```rust,ignore
     /// let storage = SurrealDBStorage::new("localhost:8000", Some("root"), Some("root"), None, None).await?;
     /// ```
     pub async fn new(

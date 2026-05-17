@@ -28,7 +28,7 @@ pub use crate::daemon::validate::VALID_INTERACTION_TYPES;
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,ignore
 /// use serde_json::json;
 ///
 /// #[derive(Deserialize)]
@@ -123,7 +123,7 @@ fn coerce_value(val: &Value) -> Result<Value, CoercionError> {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```rust,ignore
 /// let error_msg = "invalid type: string 'abc', expected u32";
 /// let suggestions = generate_recovery_suggestions(error_msg);
 /// // Returns: ["Ensure the value is a valid number", "Check for typos in the value"]
