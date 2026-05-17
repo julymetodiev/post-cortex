@@ -31,7 +31,9 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build pcx binary
-        run: cargo build --release --bin pcx --target ${{ matrix.target }} --features "embeddings,surrealdb-storage"
+        # pcx is shipped by post-cortex-daemon as of the 8-crate workspace
+        # refactor; `-p` selects the right member crate to build.
+        run: cargo build --release --bin pcx -p post-cortex-daemon --target ${{ matrix.target }} --features "post-cortex-daemon/embeddings,post-cortex-daemon/surrealdb-storage"
 
       - name: Strip pcx binary
         run: strip target/${{ matrix.target }}/release/pcx

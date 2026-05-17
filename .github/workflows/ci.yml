@@ -1,0 +1,200 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Surface deprecations as errors so the workspace stays clean.
+  RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Format
+  # -------------------------------------------------------------------------
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  # -------------------------------------------------------------------------
+  # Clippy — workspace-wide, all targets, all features. Treats warnings as
+  # errors so the strict lint suite stays clean.
+  # -------------------------------------------------------------------------
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  # -------------------------------------------------------------------------
+  # Build + test matrix. Three configurations:
+  #   1. default features          — confirms the headline path works
+  #   2. --no-default-features     — confirms nothing relies on default features
+  #   3. --features all            — confirms feature combinations compile
+  # -------------------------------------------------------------------------
+  test:
+    name: cargo test (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - features: default
+            flags: ""
+          - features: no-default
+            flags: --no-default-features
+          - features: all
+            flags: --all-features
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - run: cargo build --workspace ${{ matrix.flags }}
+      - run: cargo test --workspace --lib ${{ matrix.flags }}
+        # Lib tests only — integration tests under crates/post-cortex/tests/
+        # spin up RocksDB + bind ports + need orchestration; covered by the
+        # `integration` job below.
+
+  integration:
+    name: integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - run: cargo test -p post-cortex --tests --features embeddings,surrealdb-storage
+        # serial_test ensures the RocksDB/SurrealDB integration tests don't
+        # collide on the data directory.
+
+  # -------------------------------------------------------------------------
+  # Doctest sweep — every doctest in every crate must compile + run.
+  # -------------------------------------------------------------------------
+  doctest:
+    name: cargo test --doc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - run: cargo test --workspace --doc --all-features
+
+  # -------------------------------------------------------------------------
+  # Documentation — must build cleanly. RUSTDOCFLAGS at the env level
+  # rejects broken intra-doc links workspace-wide.
+  # -------------------------------------------------------------------------
+  docs:
+    name: cargo doc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - run: cargo doc --workspace --no-deps --all-features
+
+  # -------------------------------------------------------------------------
+  # Supply-chain checks — cargo-audit (vulnerabilities) + cargo-deny
+  # (license / multiple-versions / source whitelist).
+  # -------------------------------------------------------------------------
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --workspace --all-features
+
+  # -------------------------------------------------------------------------
+  # MSRV enforcement — declared as rust-version = "1.85" in
+  # [workspace.package]. cargo-msrv verifies the workspace compiles on
+  # exactly that toolchain.
+  # -------------------------------------------------------------------------
+  msrv:
+    name: cargo msrv
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - run: cargo check --workspace --all-features
+
+  # -------------------------------------------------------------------------
+  # Coverage — cargo-llvm-cov on the lib-test surface; uploaded to
+  # Codecov for trend tracking. Integration tests deliberately excluded
+  # (they bind ports / start daemons and would skew coverage numbers).
+  # -------------------------------------------------------------------------
+  coverage:
+    name: cargo llvm-cov
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - run: cargo llvm-cov --workspace --lib --features embeddings,surrealdb-storage --lcov --output-path lcov.info
+      - uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          fail_ci_if_error: false  # coverage upload is informational
+
+  # -------------------------------------------------------------------------
+  # Workspace publish dry-run. Runs on every tag push to verify that
+  # `cargo workspaces publish` would succeed in topological order before
+  # the actual release job consumes the tag.
+  # -------------------------------------------------------------------------
+  publish-dry-run:
+    name: cargo workspaces publish --dry-run
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install cargo-workspaces
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-workspaces
+      - run: cargo workspaces publish --from-git --dry-run --yes
