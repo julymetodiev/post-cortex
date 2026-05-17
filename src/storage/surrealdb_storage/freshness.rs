@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use surrealdb::types::SurrealValue;
 
-use crate::daemon::grpc_service::pb::{
+use post_cortex_proto::pb::{
     CascadeInvalidateReport, FreshnessEntry, FreshnessStatus, SourceReference, SymbolId,
 };
 use crate::storage::traits::FreshnessStorage;
@@ -39,7 +39,7 @@ impl FreshnessStorage for SurrealDBStorage {
         // Extract scope info if present
         let (symbol_name, symbol_type, ast_hash, imports) = if let Some(ref scope) = reference.scope
         {
-            use crate::daemon::grpc_service::pb::source_scope::Scope;
+            use post_cortex_proto::pb::source_scope::Scope;
             match &scope.scope {
                 Some(Scope::Function(func)) => (
                     Some(func.name.clone()),

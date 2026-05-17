@@ -19,9 +19,12 @@ use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-pub mod pb {
-    tonic::include_proto!("pcx.v1");
-}
+// Phase 2 of the workspace refactor moved the proto-generated bindings into
+// the dedicated `post-cortex-proto` crate. The re-export below preserves the
+// long-standing `crate::daemon::grpc_service::pb::…` path for in-tree
+// callers inside `src/daemon/` while every consumer in `src/core/` and
+// `src/storage/` now imports from `post_cortex_proto::pb` directly.
+pub use post_cortex_proto::pb;
 
 mod freshness;
 mod helpers;

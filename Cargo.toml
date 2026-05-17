@@ -181,8 +181,15 @@ tonic.workspace = true
 prost.workspace = true
 prost-types.workspace = true
 
-[build-dependencies]
-tonic-build.workspace = true
+# Phase 2 — gRPC types now live in a sibling crate. The legacy root keeps
+# `crate::daemon::grpc_service::pb` working via a re-export inside
+# src/daemon/grpc_service/mod.rs, but all 30+ call sites that used to be
+# under `core/` and `storage/` now import `post_cortex_proto::pb::…`
+# directly so the upcoming Phase 3 core extraction is unblocked.
+post-cortex-proto.workspace = true
+
+# [build-dependencies] section intentionally absent — the legacy root no
+# longer compiles proto. tonic-build moved to crates/post-cortex-proto.
 
 [dev-dependencies]
 tokio-test.workspace = true

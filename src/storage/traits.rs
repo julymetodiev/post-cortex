@@ -25,7 +25,7 @@
 
 use crate::core::context_update::{ContextUpdate, EntityData, EntityRelationship, RelationType};
 use crate::core::vector_db::{SearchMatch, VectorMetadata};
-use crate::daemon::grpc_service::pb::{
+use post_cortex_proto::pb::{
     CascadeInvalidateReport, FreshnessEntry, SourceReference, SymbolId,
 };
 use crate::graph::entity_graph::EntityNetwork;
@@ -364,7 +364,7 @@ pub trait FreshnessStorage: Send + Sync {
                 .unwrap_or_else(|_| FreshnessEntry {
                     entry_id: entry_id.clone(),
                     file_path: String::new(),
-                    status: crate::daemon::grpc_service::pb::FreshnessStatus::Unknown as i32,
+                    status: post_cortex_proto::pb::FreshnessStatus::Unknown as i32,
                     stored_hash: Vec::new(),
                     current_hash: file_hash,
                 });

@@ -13,7 +13,13 @@ readme = "README.md"
 documentation = "https://docs.rs/post-cortex-proto"
 
 [dependencies]
-# Phase 2 fills in: prost, prost-types, tonic = { default-features = false, features = ["prost"] }
+prost.workspace = true
+prost-types.workspace = true
+# Full tonic features (transport, codegen, etc.) so the generated server +
+# client traits are usable. Downstream consumers that only need message
+# types still pay no extra cost — tonic's `prost` feature is the
+# critical one, and the transport modules compile away when unused.
+tonic.workspace = true
 
 [build-dependencies]
-# Phase 2 fills in: tonic-build with build_server / build_client toggles
+tonic-build.workspace = true

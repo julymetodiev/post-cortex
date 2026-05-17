@@ -4344,6 +4344,7 @@ dependencies = [
  "parking_lot",
  "petgraph 0.8.3",
  "portpicker",
+ "post-cortex-proto",
  "proptest",
  "prost 0.13.5",
  "prost-types 0.13.5",
@@ -4368,7 +4369,6 @@ dependencies = [
  "tokio-util",
  "toml",
  "tonic 0.12.3",
- "tonic-build",
  "tower 0.5.2",
  "tower-http",
  "tracing",
@@ -4397,6 +4397,12 @@ version = "0.1.23"
 [[package]]
 name = "post-cortex-proto"
 version = "0.1.23"
+dependencies = [
+ "prost 0.13.5",
+ "prost-types 0.13.5",
+ "tonic 0.12.3",
+ "tonic-build",
+]
 
 [[package]]
 name = "potential_utf"

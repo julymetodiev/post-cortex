@@ -3,14 +3,43 @@
 
 //! Protobuf + tonic-generated wire types for post-cortex.
 //!
-//! This crate is intentionally a thin schema package: it owns
-//! [`proto/pcx.proto`](../proto/pcx.proto) and re-exports the generated
-//! `pcx.v1` module. Downstream gRPC clients can depend on this crate alone
-//! without pulling the full `post-cortex-daemon` server runtime.
+//! Single source of truth for the post-cortex gRPC schema. Downstream
+//! gRPC clients can depend on this crate alone — they pull `prost`,
+//! `prost-types`, and `tonic` (with its default transport features),
+//! but **not** the post-cortex-daemon server runtime or rmcp.
 //!
-//! Status: **Phase 1 stub.** The proto + build.rs are migrated in Phase 2
-//! of the workspace refactor (see
-//! `/Users/julius/.claude/plans/stateful-hugging-hopper.md`).
+//! # Public surface
+//!
+//! The [`pb`] module re-exports everything generated from
+//! `proto/pcx.proto` (package `pcx.v1`). For convenience the most
+//! frequently used wire types are also re-exported at the crate root —
+//! see the top-level `pub use pb::*` below.
+//!
+//! # Stability
+//!
+//! Breaking changes to the proto schema are breaking changes to this
+//! crate. SemVer applies normally; consumers should pin a minor version
+//! (`= "0.x"`) until 1.0.
 
 #![forbid(unsafe_code)]
-#![deny(missing_docs, rustdoc::broken_intra_doc_links)]
+// Generated code from prost/tonic does not satisfy the strict doc lints;
+// scope the deny to our own modules only.
+#![deny(rustdoc::broken_intra_doc_links)]
+
+/// Tonic-generated bindings for the `pcx.v1` proto package.
+///
+/// Equivalent to `include!(concat!(env!("OUT_DIR"), "/pcx.v1.rs"))` —
+/// see `proto/pcx.proto` for the source schema.
+#[allow(clippy::all, missing_docs)]
+pub mod pb {
+    tonic::include_proto!("pcx.v1");
+}
+
+// Top-level re-exports of the most commonly-used wire types so the rest of
+// the workspace can write `post_cortex_proto::FreshnessEntry` instead of
+// `post_cortex_proto::pb::FreshnessEntry`. Matches the names that used to
+// live under `crate::daemon::grpc_service::pb` in the legacy single-crate
+// layout — this is the migration that unblocks the Phase 3 core split.
+pub use pb::{
+    CascadeInvalidateReport, FreshnessEntry, FreshnessStatus, SourceReference, SymbolId,
+};

@@ -9,7 +9,7 @@ use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use crate::core::performance::PerformanceMonitor;
-use crate::daemon::grpc_service::pb::{
+use post_cortex_proto::pb::{
     CascadeInvalidateReport, FreshnessEntry, SourceReference, SymbolId,
 };
 use crate::session::active_session::ActiveSession;

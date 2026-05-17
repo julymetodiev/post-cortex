@@ -20,7 +20,7 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use surrealdb::types::SurrealValue;
 
-use crate::daemon::grpc_service::pb::SourceReference;
+use post_cortex_proto::pb::SourceReference;
 
 // ============================================================================
 // SurrealDB Deserialization Helpers
@@ -212,7 +212,7 @@ pub(super) struct SymbolDepRecord {
 }
 
 pub(super) fn source_record_to_reference(r: SourceReferenceRecord) -> SourceReference {
-    use crate::daemon::grpc_service::pb::{FunctionScope, SourceScope, source_scope};
+    use post_cortex_proto::pb::{FunctionScope, SourceScope, source_scope};
     let scope = r.symbol_name.as_ref().map(|name| SourceScope {
         scope: Some(source_scope::Scope::Function(FunctionScope {
             name: name.clone(),

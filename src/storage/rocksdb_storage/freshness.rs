@@ -20,7 +20,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use prost::Message;
 
-use crate::daemon::grpc_service::pb::SourceReference;
+use post_cortex_proto::pb::SourceReference;
 use crate::storage::traits::FreshnessStorage;
 
 use super::RealRocksDBStorage;
@@ -49,12 +49,12 @@ impl FreshnessStorage for RealRocksDBStorage {
         &self,
         entry_id: &str,
         file_hash: &[u8],
-    ) -> Result<crate::daemon::grpc_service::pb::FreshnessEntry> {
+    ) -> Result<post_cortex_proto::pb::FreshnessEntry> {
         let db = self.db.clone();
         let entry_id = entry_id.to_string();
         let current_hash = file_hash.to_vec();
 
-        tokio::task::spawn_blocking(move || -> Result<crate::daemon::grpc_service::pb::FreshnessEntry> {
+        tokio::task::spawn_blocking(move || -> Result<post_cortex_proto::pb::FreshnessEntry> {
             let key = format!("source_ref:{}", entry_id);
             match db.get(key.as_bytes())? {
                 Some(data) => {
@@ -64,12 +64,12 @@ impl FreshnessStorage for RealRocksDBStorage {
                     let is_fresh = reference.content_hash == current_hash;
 
                     let status = if is_fresh {
-                        crate::daemon::grpc_service::pb::FreshnessStatus::Fresh as i32
+                        post_cortex_proto::pb::FreshnessStatus::Fresh as i32
                     } else {
-                        crate::daemon::grpc_service::pb::FreshnessStatus::Stale as i32
+                        post_cortex_proto::pb::FreshnessStatus::Stale as i32
                     };
 
-                    Ok(crate::daemon::grpc_service::pb::FreshnessEntry {
+                    Ok(post_cortex_proto::pb::FreshnessEntry {
                         entry_id,
                         file_path: reference.file_path,
                         status,
@@ -79,10 +79,10 @@ impl FreshnessStorage for RealRocksDBStorage {
                 }
                 None => {
                     // Entry has no source tracking
-                    Ok(crate::daemon::grpc_service::pb::FreshnessEntry {
+                    Ok(post_cortex_proto::pb::FreshnessEntry {
                         entry_id,
                         file_path: String::new(),
-                        status: crate::daemon::grpc_service::pb::FreshnessStatus::Unknown as i32,
+                        status: post_cortex_proto::pb::FreshnessStatus::Unknown as i32,
                         stored_hash: Vec::new(),
                         current_hash,
                     })
@@ -135,11 +135,11 @@ impl FreshnessStorage for RealRocksDBStorage {
     async fn get_entries_by_source(
         &self,
         file_path: &str,
-    ) -> Result<Vec<crate::daemon::grpc_service::pb::SourceReference>> {
+    ) -> Result<Vec<post_cortex_proto::pb::SourceReference>> {
         let db = self.db.clone();
         let query_path = file_path.to_string();
 
-        tokio::task::spawn_blocking(move || -> Result<Vec<crate::daemon::grpc_service::pb::SourceReference>> {
+        tokio::task::spawn_blocking(move || -> Result<Vec<post_cortex_proto::pb::SourceReference>> {
             let mut matches = Vec::new();
             let iter = db.iterator(rocksdb::IteratorMode::From(
                 b"source_ref:",
@@ -182,13 +182,13 @@ impl FreshnessStorage for RealRocksDBStorage {
         file_hash: &[u8],
         ast_hash: Option<&[u8]>,
         _symbol_name: Option<&str>,
-    ) -> Result<crate::daemon::grpc_service::pb::FreshnessEntry> {
+    ) -> Result<post_cortex_proto::pb::FreshnessEntry> {
         let db = self.db.clone();
         let entry_id = entry_id.to_string();
         let current_file_hash = file_hash.to_vec();
         let current_ast_hash = ast_hash.map(|h| h.to_vec());
 
-        tokio::task::spawn_blocking(move || -> Result<crate::daemon::grpc_service::pb::FreshnessEntry> {
+        tokio::task::spawn_blocking(move || -> Result<post_cortex_proto::pb::FreshnessEntry> {
             let key = format!("source_ref:{}", entry_id);
             match db.get(key.as_bytes())? {
                 Some(data) => {
@@ -199,7 +199,7 @@ impl FreshnessStorage for RealRocksDBStorage {
                     let is_fresh = if let (Some(client_ast), Some(scope)) =
                         (&current_ast_hash, &reference.scope)
                     {
-                        use crate::daemon::grpc_service::pb::source_scope::Scope;
+                        use post_cortex_proto::pb::source_scope::Scope;
                         match &scope.scope {
                             Some(Scope::Function(func)) if !func.ast_hash.is_empty() => {
                                 // AST-level: compare function body hashes
@@ -213,12 +213,12 @@ impl FreshnessStorage for RealRocksDBStorage {
                     };
 
                     let status = if is_fresh {
-                        crate::daemon::grpc_service::pb::FreshnessStatus::Fresh as i32
+                        post_cortex_proto::pb::FreshnessStatus::Fresh as i32
                     } else {
-                        crate::daemon::grpc_service::pb::FreshnessStatus::Stale as i32
+                        post_cortex_proto::pb::FreshnessStatus::Stale as i32
                     };
 
-                    Ok(crate::daemon::grpc_service::pb::FreshnessEntry {
+                    Ok(post_cortex_proto::pb::FreshnessEntry {
                         entry_id,
                         file_path: reference.file_path,
                         status,
@@ -226,10 +226,10 @@ impl FreshnessStorage for RealRocksDBStorage {
                         current_hash: current_file_hash,
                     })
                 }
-                None => Ok(crate::daemon::grpc_service::pb::FreshnessEntry {
+                None => Ok(post_cortex_proto::pb::FreshnessEntry {
                     entry_id,
                     file_path: String::new(),
-                    status: crate::daemon::grpc_service::pb::FreshnessStatus::Unknown as i32,
+                    status: post_cortex_proto::pb::FreshnessStatus::Unknown as i32,
                     stored_hash: Vec::new(),
                     current_hash: current_file_hash,
                 }),
@@ -241,8 +241,8 @@ impl FreshnessStorage for RealRocksDBStorage {
 
     async fn register_symbol_dependencies(
         &self,
-        from: crate::daemon::grpc_service::pb::SymbolId,
-        to_symbols: Vec<crate::daemon::grpc_service::pb::SymbolId>,
+        from: post_cortex_proto::pb::SymbolId,
+        to_symbols: Vec<post_cortex_proto::pb::SymbolId>,
     ) -> Result<u32> {
         let db = self.db.clone();
 
@@ -281,13 +281,13 @@ impl FreshnessStorage for RealRocksDBStorage {
 
     async fn cascade_invalidate(
         &self,
-        changed: crate::daemon::grpc_service::pb::SymbolId,
+        changed: post_cortex_proto::pb::SymbolId,
         _new_ast_hash: Vec<u8>,
         max_depth: u32,
-    ) -> Result<crate::daemon::grpc_service::pb::CascadeInvalidateReport> {
+    ) -> Result<post_cortex_proto::pb::CascadeInvalidateReport> {
         let db = self.db.clone();
 
-        tokio::task::spawn_blocking(move || -> Result<crate::daemon::grpc_service::pb::CascadeInvalidateReport> {
+        tokio::task::spawn_blocking(move || -> Result<post_cortex_proto::pb::CascadeInvalidateReport> {
             use std::collections::{HashSet, VecDeque};
 
             let changed_key = format!("{}::{}", changed.file_path, changed.symbol_name);
@@ -356,7 +356,7 @@ impl FreshnessStorage for RealRocksDBStorage {
 
                 if let Ok(reference) = SourceReference::decode(&value[..]) {
                     if let Some(ref scope) = reference.scope {
-                        use crate::daemon::grpc_service::pb::source_scope::Scope;
+                        use post_cortex_proto::pb::source_scope::Scope;
                         if let Some(Scope::Function(ref func)) = scope.scope {
                             let ref_key = format!("{}::{}", reference.file_path, func.name);
                             if ref_key == changed_key {
@@ -375,7 +375,7 @@ impl FreshnessStorage for RealRocksDBStorage {
                 db.delete(&key)?;
             }
 
-            Ok(crate::daemon::grpc_service::pb::CascadeInvalidateReport {
+            Ok(post_cortex_proto::pb::CascadeInvalidateReport {
                 direct_invalidations: direct_count,
                 cascade_invalidations: cascade_count,
                 invalidated_symbols: dependent_symbols,
