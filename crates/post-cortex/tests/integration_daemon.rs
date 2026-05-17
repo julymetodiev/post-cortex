@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 // Integration tests for daemon HTTP server with in-memory testing
 // Tests are run serially to avoid race conditions with shared resources
 mod helpers;

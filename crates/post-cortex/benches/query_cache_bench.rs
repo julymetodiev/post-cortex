@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 use chrono::Utc;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;

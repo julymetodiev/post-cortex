@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 // Integration tests for workspace functionality with real RocksDB
 use post_cortex::{ConversationMemorySystem, SystemConfig};
 use serial_test::serial;

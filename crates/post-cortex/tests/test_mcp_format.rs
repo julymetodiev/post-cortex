@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 use anyhow::Result;
 use post_cortex::core::context_update::{ContextUpdate, UpdateContent, UpdateType};
 use post_cortex_memory::{ConversationMemorySystem, SystemConfig};

@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 // Copyright (c) 2025 Julius ML
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy

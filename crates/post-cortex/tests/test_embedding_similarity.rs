@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 use anyhow::Result;
 use post_cortex_embeddings::{EmbeddingConfig, LocalEmbeddingEngine};
 use serial_test::serial;

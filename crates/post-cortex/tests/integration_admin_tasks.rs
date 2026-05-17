@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 // Integration tests for Admin CLI functionality (Workspace and Session management)
 use post_cortex::{ConversationMemorySystem, SystemConfig};
 use post_cortex::workspace::SessionRole;

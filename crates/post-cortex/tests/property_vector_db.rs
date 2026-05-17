@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 // Property-based tests for VectorDB using proptest
 //
 // These tests verify key invariants of the lock-free vector database:

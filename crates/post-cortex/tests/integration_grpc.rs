@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 // // Integration tests for gRPC service — validates UpdateContext → QueryContext round-trip
 // //
 // // These tests verify that data stored via gRPC UpdateContext is correctly
