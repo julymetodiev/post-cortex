@@ -5,6 +5,70 @@ All notable changes to Post-Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-05-17 — Workspace split
+
+The single-crate `post-cortex` package is now a Cargo workspace of eight publishable crates. Existing imports through `post_cortex::*` keep working via the facade meta-crate.
+
+### Added
+
+- **Eight publishable crates** on crates.io:
+  - `post-cortex-proto` — gRPC wire types (prost + tonic-generated, depend on this if you only need the schema).
+  - `post-cortex-core` — lean domain library: types, error, traits (`Storage`, `EmbeddingBackend`, `PostCortexService`), graph, session, workspace, summary. **No rocksdb, no candle, no axum/tonic transport.** Downstream Rust projects can take this for the type system alone.
+  - `post-cortex-embeddings` — BERT (Candle + tokenizers + hf-hub) and HNSW vector DB. The `bert` feature gates the ML stack; `default-features = false` leaves only the data types (`VectorMetadata`, `SearchMatch`, …).
+  - `post-cortex-storage` — RocksDB (default) and SurrealDB (`surrealdb-storage` feature) backends implementing the `Storage` trait.
+  - `post-cortex-memory` — `ConversationMemorySystem` orchestrator + non-blocking write `Pipeline` + `MemoryServiceImpl`.
+  - `post-cortex-mcp` — pure-library MCP tool functions; no transport runtime, embed in any MCP host.
+  - `post-cortex-daemon` — `pcx` CLI + rmcp + axum + tonic + SSE server.
+  - `post-cortex` — facade meta-crate re-exporting the stack.
+- **`services::PostCortexService` trait** in `post-cortex-core` — the canonical service surface; every transport (gRPC / MCP / REST) is migrating to delegate here so there's exactly one implementation per operation (`update_context`, `semantic_search`, `query_context`, `assemble_context`, session / workspace / entity / admin lifecycle, `get_structured_summary`). `MemoryServiceImpl` in `post-cortex-memory` is the canonical impl.
+- **Non-blocking write pipeline** in `post-cortex-memory::pipeline` — three bounded MPSC queues (`EmbeddingQueue`, `GraphQueue`, `SummaryQueue`) with worker tasks. `Pipeline::backlog()` exposes the gauge for health endpoints. Submission is non-blocking (`PipelineError::Backpressure` when full).
+- **Typed error hierarchy** — every crate gets its own `Error` + `Result<T>` aliases with `thiserror`-derived variants, source chains, and a stable `kind()` discriminant for metrics. Transport adapters get explicit `mcp_code()` (MCP JSON-RPC error code) and `grpc_status()` / `http_status()` mappings.
+- **OpenTelemetry observability infrastructure** behind an `otel` cargo feature on `post-cortex-memory` and `post-cortex-daemon`. `daemon::observability::init()` installs a `tracing_subscriber` with EnvFilter + fmt layer (compact/pretty/json switchable via `OTEL_LOG_FORMAT`); the OTLP exporter activates when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Every `PostCortexService` method on `MemoryServiceImpl` carries `#[tracing::instrument(name = "post_cortex.<op>")]`. See `crates/post-cortex-daemon/examples/with_otel.rs` for the local-collector demo.
+- **`README.md` per crate** with elevator pitch, install snippet, runnable example, feature matrix, and license note.
+- **`SECURITY.md`** at the workspace root — supported-versions matrix, vulnerability reporting protocol, threat model (local-first deployment, `127.0.0.1` default bind), build-time integrity guarantees.
+- **`RELEASING.md`** at the workspace root — pre-flight checklist, step-by-step cut process, hotfix protocol for stable 0.X lines, yank procedure.
+- **`.github/workflows/ci.yml`** — comprehensive CI matrix: `fmt`, `clippy -D warnings`, build/test matrix (default / no-default-features / all-features), integration tests, doctest sweep, `cargo doc` with `RUSTDOCFLAGS=-D rustdoc::broken_intra_doc_links`, `cargo audit`, `cargo deny`, MSRV verification on Rust 1.85, `cargo llvm-cov` to Codecov, `cargo workspaces publish --dry-run` on tag pushes.
+- **`deny.toml`** — license allow-list (MIT / Apache-2.0 / BSD-2/3 / ISC / Unicode-3.0 / CC0 / Zlib / MPL-2.0 / OpenSSL), `openssl-sys` banned in favour of `rustls`, RUSTSEC baseline ignored with explicit rationale (Phase 0 audit in `docs/audit-baseline-0.1.23.md`).
+- **`rustfmt.toml`** with edition 2024 + StdExternalCrate import grouping + format_code_in_doc_comments.
+- **`docs/perf-baseline-0.1.23.md`**, **`docs/audit-baseline-0.1.23.md`**, **`docs/api-baseline-0.1.23/README.md`** — Phase 0 baselines captured before the split.
+- **`docs/TODO-documentation.md`** — tracks the ~1073 undocumented public struct fields + enum variants slated for the 0.3.0 docs-complete release.
+
+### Changed
+
+- **`pcx` CLI binary** moved from the legacy root crate to `post-cortex-daemon`. Existing users running `pcx start` / `pcx setup` see no behavioural change; the binary install path (`cargo install post-cortex-daemon`) is new.
+- **Workspace `[profile.release]`** now uses `panic = "abort"` + `lto = "thin"` + `codegen-units = 1` to surface bugs hard and produce tighter release binaries.
+- **`SystemError::Database`** now carries a `String` (was `rocksdb::Error`) so `post-cortex-core` no longer needs `rocksdb` as a direct dependency. Storage backends call `SystemError::Database(e.to_string())` at the boundary.
+- **Workspace lints** centralised in `[workspace.lints.clippy]` and `[workspace.lints.rust]`; member crates opt in via `[lints] workspace = true`. Strict lints (`unsafe_code`, `rustdoc::broken_intra_doc_links`) stay denied; cosmetic categories (`result_large_err`, `type_complexity`, `field_reassign_with_default`, etc.) are allowed with documented rationale.
+- **`embeddings`** and **`surrealdb-storage`** feature flags are now per-crate concerns of `post-cortex-memory` and `post-cortex-storage`. The facade crate forwards them transparently — existing `cargo build --features embeddings,surrealdb-storage` invocations keep working.
+- **MSRV** declared as Rust 1.85 (edition 2024) in `[workspace.package].rust-version`. Enforced via `cargo-msrv verify` in CI.
+- **README.md** at the workspace root gains a "Workspace layout" section with the 8-crate table + ASCII dependency-graph diagram.
+
+### Fixed
+
+- **`daemon::validate::test_validate_session_action_invalid`** — long-standing baseline failure noted in `TODO.md`. The test asserted that `validate_session_action("delete")` returned an error, but `"delete"` was added to the valid actions list during a later refactor. Switched the test input to `"nuke_everything"`.
+- **`daemon::coerce::test_coerce_float_to_string`** — `clippy::approx_constant` flagged the 3.14 magic float as an approximation of `f64::consts::PI`. Replaced with 2.71.
+- **Lib test pass count: 163 / 0** across the workspace (post-cortex-core 53, post-cortex-daemon 48, post-cortex-memory 26, post-cortex-storage 20, post-cortex-embeddings 16). Was 148 / 1 at the Phase 0 baseline.
+- **`cargo clippy --workspace --all-targets --all-features` is clean** (0 warnings, 0 errors). Was 116 warnings + 1 hard error pre-fix.
+
+### Removed
+
+- **`src/main.rs`** — the legacy alternative CLI driver. Per the Phase 0 audit, no external consumers; superseded by `pcx`.
+- **Direct workspace-root dependencies** on `candle-core`/`-nn`/`-transformers` (moved to `post-cortex-embeddings`), `surrealdb` (moved to `post-cortex-storage`), `tokenizers`, `hf-hub` (same), and the ~25 transport crates that the daemon now owns.
+
+### Migration notes
+
+- Existing consumers of `post-cortex 0.1.x`: `Cargo.toml` line stays the same (`post-cortex = "0.2"`), and the headline import paths (`post_cortex::ConversationMemorySystem`, `post_cortex::SystemConfig`, `post_cortex::storage::*`, `post_cortex::tools::mcp::*`, `post_cortex::daemon::*`) all keep resolving via the facade crate's re-exports.
+- Direct dependence on a single member crate is now preferable for production deployments — smaller compile times, fewer transitive deps. See the workspace `README.md` "Picking the right crate" table.
+- `pcx` binary install: `cargo install post-cortex-daemon` (was `cargo install post-cortex` in 0.1.x).
+
+### Deferred to 0.3.0
+
+- **Full migration of `anyhow::Result` in public APIs to typed `Result`** — the typed `Error` enums shipped in 0.2.0 are the migration breadcrumb (every variant has an `External(#[from] anyhow::Error)` catch-all). Per-function sweep is a follow-up.
+- **Full `missing_docs` compliance** — 1073 undocumented public struct fields + enum variants are catalogued in `docs/TODO-documentation.md`. `missing_docs` is `warn` in 0.2.0; flips to `deny` in 0.3.0.
+- **Full OTLP exporter wiring** — feature flag + env-var detection ship in 0.2.0; the actual `opentelemetry-otlp::new_pipeline()` install + W3C tracecontext propagation across gRPC/MCP is bench-gated work.
+- **Per-crate `tests/`** — integration tests still live in `crates/post-cortex/tests/` and exercise the full stack via the facade. Phase 12 follow-up moves them per-crate.
+- **`cargo public-api` baseline + diff in CI** — snapshot scaffolding lives in `docs/api-baseline-0.1.23/`; CI integration deferred.
+
 ## [0.1.22] - 2026-02-27
 
 ### Fixed
