@@ -33,10 +33,13 @@ use post_cortex_core::services::{
     SemanticSearchRequest, SemanticSearchResponse, StructuredSummaryRequest,
     StructuredSummaryResponse, UpdateContextRequest, UpdateContextResponse,
 };
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::memory_system::ConversationMemorySystem;
-use crate::pipeline::{Pipeline, PipelineConfig};
+use crate::pipeline::{
+    EmbeddingWorkItem, GraphWorkItem, Pipeline, PipelineConfig, PipelineError, SummaryWorkItem,
+};
 
 /// Canonical [`PostCortexService`] implementation backed by
 /// [`ConversationMemorySystem`].
@@ -64,7 +67,7 @@ impl MemoryServiceImpl {
         system: Arc<ConversationMemorySystem>,
         config: PipelineConfig,
     ) -> Self {
-        let pipeline = Arc::new(Pipeline::start(config));
+        let pipeline = Arc::new(Pipeline::start(config, Arc::clone(&system)));
         Self { system, pipeline }
     }
 
@@ -129,11 +132,14 @@ impl PostCortexService for MemoryServiceImpl {
         validate_update_request(&req)?;
 
         let description = build_description(&req);
-        let metadata = build_metadata(&req);
+        let context_update = build_context_update(&req);
+        let metadata = serde_json::to_value(&context_update)
+            .expect("ContextUpdate serialization cannot fail");
+        let session_id = req.session_id;
 
         let entry_id_str = self
             .system
-            .add_incremental_update(req.session_id, description, Some(metadata))
+            .add_incremental_update(session_id, description.clone(), Some(metadata))
             .await
             .map_err(SystemError::Internal)?;
 
@@ -143,9 +149,22 @@ impl PostCortexService for MemoryServiceImpl {
             ))
         })?;
 
+        // Hand derived work to the bounded pipeline. Best-effort: a full
+        // queue logs `Backpressure` but doesn't fail the durable write
+        // — the legacy in-system `tokio::spawn`s in
+        // `ConversationMemorySystem::add_incremental_update_internal`
+        // remain as the safety net until they're fully retired in 0.4.0.
+        submit_derived_work(
+            &self.pipeline,
+            session_id,
+            entry_id,
+            &description,
+            context_update,
+        );
+
         Ok(UpdateContextResponse {
             entry_id,
-            session_id: req.session_id,
+            session_id,
             persisted_at: Utc::now(),
             durable: true,
         })
@@ -182,10 +201,12 @@ impl PostCortexService for MemoryServiceImpl {
         let mut entry_ids = Vec::with_capacity(req.updates.len());
         for (i, item) in req.updates.iter().enumerate() {
             let description = build_description(item);
-            let metadata = build_metadata(item);
+            let context_update = build_context_update(item);
+            let metadata = serde_json::to_value(&context_update)
+                .expect("ContextUpdate serialization cannot fail");
             let entry_id_str = self
                 .system
-                .add_incremental_update(item.session_id, description, Some(metadata))
+                .add_incremental_update(item.session_id, description.clone(), Some(metadata))
                 .await
                 .map_err(|e| SystemError::Internal(format!("updates[{i}]: {e}")))?;
             let entry_id = Uuid::parse_str(&entry_id_str).map_err(|e| {
@@ -194,6 +215,13 @@ impl PostCortexService for MemoryServiceImpl {
                 ))
             })?;
             entry_ids.push(entry_id);
+            submit_derived_work(
+                &self.pipeline,
+                item.session_id,
+                entry_id,
+                &description,
+                context_update,
+            );
         }
 
         Ok(BulkUpdateContextResponse {
@@ -348,7 +376,7 @@ fn build_description(req: &UpdateContextRequest) -> String {
 /// Build the `ContextUpdate` JSON blob stored as the storage entry's metadata.
 /// Keeps `creates_entities` (names) and `typed_entities` (name + type) in sync
 /// — both are consumed downstream by the entity graph builder.
-fn build_metadata(req: &UpdateContextRequest) -> serde_json::Value {
+fn build_context_update(req: &UpdateContextRequest) -> ContextUpdate {
     let typed_entities: Vec<TypedEntity> = req
         .entities
         .iter()
@@ -361,7 +389,7 @@ fn build_metadata(req: &UpdateContextRequest) -> serde_json::Value {
     let creates_relationships: Vec<EntityRelationship> = req.relations.clone();
     let related_code = req.code_reference.clone();
 
-    let update = ContextUpdate {
+    ContextUpdate {
         id: Uuid::new_v4(),
         timestamp: Utc::now(),
         update_type: req.interaction_type.clone(),
@@ -373,9 +401,50 @@ fn build_metadata(req: &UpdateContextRequest) -> serde_json::Value {
         creates_relationships,
         references_entities: Vec::new(),
         typed_entities,
-    };
+    }
+}
 
-    serde_json::to_value(update).expect("ContextUpdate serialization cannot fail")
+/// Hand a freshly-persisted update off to the bounded background pipeline:
+/// embedding compute, entity-graph merge, and summary refresh all run on
+/// separate worker tasks so the write path returns as soon as the entry
+/// is durably stored. Backpressure on any queue is logged but swallowed
+/// — the legacy in-system `tokio::spawn`s in
+/// [`ConversationMemorySystem::add_incremental_update_internal`] still
+/// run as a safety net, so a full queue degrades to "do the work on a
+/// raw spawn anyway" rather than dropping it.
+fn submit_derived_work(
+    pipeline: &Pipeline,
+    session_id: Uuid,
+    entry_id: Uuid,
+    text: &str,
+    update: ContextUpdate,
+) {
+    if let Err(e) = pipeline.submit_embedding(EmbeddingWorkItem {
+        session_id,
+        entry_id,
+        text: text.to_string(),
+    }) {
+        log_pipeline_submit("embedding", session_id, entry_id, e);
+    }
+    if let Err(e) = pipeline.submit_graph(GraphWorkItem::ApplyUpdate {
+        session_id,
+        update,
+    }) {
+        log_pipeline_submit("graph", session_id, entry_id, e);
+    }
+    if let Err(e) = pipeline.submit_summary(SummaryWorkItem { session_id }) {
+        log_pipeline_submit("summary", session_id, entry_id, e);
+    }
+}
+
+fn log_pipeline_submit(queue: &str, session_id: Uuid, entry_id: Uuid, err: PipelineError) {
+    warn!(
+        queue,
+        %session_id,
+        %entry_id,
+        error = %err,
+        "pipeline submission failed (non-fatal — legacy in-system spawn covers the work)"
+    );
 }
 
 #[cfg(test)]
@@ -514,7 +583,8 @@ mod tests {
     #[test]
     fn metadata_keeps_creates_entities_in_sync_with_typed_entities() {
         let req = good_request();
-        let meta = build_metadata(&req);
+        let update = build_context_update(&req);
+        let meta = serde_json::to_value(&update).unwrap();
         let names = meta["creates_entities"].as_array().unwrap();
         let typed = meta["typed_entities"].as_array().unwrap();
         assert_eq!(names.len(), typed.len());
@@ -599,6 +669,63 @@ mod tests {
             .unwrap();
         assert_eq!(resp.entry_ids.len(), 2);
         assert!(resp.durable);
+        std::fs::remove_dir_all(&test_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_context_returns_fast_then_pipeline_drains_in_background() {
+        // The hot path persists durably; embedding + graph + summary land
+        // on background workers. Verify that, on a warm path
+        // (post-vectorizer-init), update_context returns quickly and the
+        // pipeline backlog drains shortly after.
+        //
+        // The first call still pays the model-download cost via the
+        // legacy in-system `spawn_background_vectorization` (kept as a
+        // safety net while direct callers migrate to the pipeline path).
+        // Phase 7+ removes that path entirely.
+        let (svc, test_dir) = make_service("nonblocking").await;
+        let session_id = svc.inner().create_session(None, None).await.unwrap();
+
+        // Warm-up call — absorbs first-time model load.
+        let mut warmup = good_request();
+        warmup.session_id = session_id;
+        warmup.content.title = "warmup".into();
+        let _ = svc.update_context(warmup).await.unwrap();
+
+        // Wait for any pending background work to settle.
+        for _ in 0..100 {
+            if svc.pipeline().backlog() == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        // Measured call — should be fast.
+        let mut req = good_request();
+        req.session_id = session_id;
+        let start = std::time::Instant::now();
+        let resp = svc.update_context(req).await.unwrap();
+        let write_latency = start.elapsed();
+
+        assert!(resp.durable);
+        assert!(
+            write_latency.as_millis() < 250,
+            "update_context took {write_latency:?} on warm path — should be <250ms"
+        );
+
+        // Workers drain the queues asynchronously.
+        for _ in 0..100 {
+            if svc.pipeline().backlog() == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            svc.pipeline().backlog(),
+            0,
+            "pipeline backlog should drain within 2s"
+        );
+
         std::fs::remove_dir_all(&test_dir).unwrap();
     }
 

@@ -11,8 +11,15 @@ use tracing::{debug, trace, warn};
 use uuid::Uuid;
 
 use super::PipelineError;
+use crate::memory_system::ConversationMemorySystem;
 
 /// One unit of embedding work.
+///
+/// `session_id` is the canonical identifier; the worker re-derives the
+/// "latest update to vectorise" from the session's hot context (matching
+/// the legacy `spawn_background_vectorization` path). `entry_id` + `text`
+/// are kept for forward compatibility with per-entry vectorisation
+/// (`ContentVectorizer::vectorize_one`-style API, not yet implemented).
 #[derive(Debug, Clone)]
 pub struct EmbeddingWorkItem {
     /// Session that owns the content.
@@ -32,8 +39,18 @@ pub struct EmbeddingQueue {
 impl EmbeddingQueue {
     /// Spawn the embedding worker on the current Tokio runtime and
     /// return the sending handle.
+    ///
+    /// `system` gives the worker access to the canonical
+    /// [`ConversationMemorySystem::vectorize_latest_update_now`] helper.
+    /// When the `embeddings` feature is disabled the worker still runs
+    /// but reports each item as a no-op so callers see deterministic
+    /// backlog drain regardless of build features.
     #[must_use]
-    pub fn start(capacity: usize, backlog: Arc<AtomicUsize>) -> Self {
+    pub fn start(
+        capacity: usize,
+        backlog: Arc<AtomicUsize>,
+        system: Arc<ConversationMemorySystem>,
+    ) -> Self {
         let (tx, mut rx) = mpsc::channel::<EmbeddingWorkItem>(capacity);
         let worker_backlog = Arc::clone(&backlog);
 
@@ -46,9 +63,36 @@ impl EmbeddingQueue {
                     bytes = item.text.len(),
                     "embedding pipeline: processing item"
                 );
-                // Phase 5 stub — Phase 7 wires this to call into
-                // post_cortex_memory::content_vectorizer with the
-                // appropriate session + storage handles.
+
+                #[cfg(feature = "embeddings")]
+                {
+                    match system.vectorize_latest_update_now(item.session_id).await {
+                        Ok(0) => {
+                            trace!(
+                                session_id = %item.session_id,
+                                "embedding pipeline: nothing to vectorise (auto-disabled or no fresh update)"
+                            );
+                        }
+                        Ok(count) => {
+                            debug!(
+                                session_id = %item.session_id,
+                                vectorised = count,
+                                "embedding pipeline: vectorisation complete"
+                            );
+                        }
+                        Err(e) => warn!(
+                            session_id = %item.session_id,
+                            error = %e,
+                            "embedding pipeline: vectorise failed (non-fatal)"
+                        ),
+                    }
+                }
+
+                #[cfg(not(feature = "embeddings"))]
+                {
+                    let _ = &system; // silence unused warning when feature is off
+                }
+
                 worker_backlog.fetch_sub(1, Ordering::Relaxed);
             }
             warn!("embedding pipeline worker exiting (channel closed)");

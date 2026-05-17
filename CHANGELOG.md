@@ -17,6 +17,82 @@ and persistence live in exactly one place — `MemoryServiceImpl` in
 typed `UpdateContextRequest` and delegate; they no longer carry their
 own parsing or graph-shaping logic.
 
+### SurrealDB storage — dimension-aware HNSW + raised limits
+
+The remote `SurrealDBStorage` schema previously hard-coded the HNSW
+vector index dimension to **384** (matching the legacy
+`MultilingualMiniLM` default). Switching the default embedding to
+`PotionMultilingual` (256-dim) hit a server-side `"Incorrect vector
+dimension (256). Expected a vector of 384 dimension."` rejection.
+
+#### Added
+
+- **`SurrealDBStorage::new_with_dimension(...)`** — pin the HNSW
+  index dim at construction. The system layer plumbs
+  `SystemConfig.vector_dimension` through so the index always
+  matches the active embedding model.
+
+#### Changed
+
+- **`SurrealDBStorage::new(...)`** keeps its old 5-arg signature for
+  backwards compat and defaults to 384.
+- **HNSW index migration** — `initialize_schema` now `REMOVE`s the
+  existing `idx_embedding_hnsw` index and re-`DEFINE`s it with the
+  requested dimension. Existing rows aren't purged but stop being
+  catalogued; re-vectorise affected sessions to rebuild the index.
+- **Vector-length precheck** moved from a fixed
+  `EMBEDDING_DIMENSION = 384` to a `MIN_VECTOR_LEN = 8` floor —
+  storage no longer enforces a specific dim, that contract lives in
+  the embedding engine + vector_db layer.
+- **`post-cortex-memory`** now enables both `bert` and `model2vec`
+  on `post-cortex-embeddings`. Selecting `PotionMultilingual` /
+  `PotionCode` no longer fails with "the `model2vec` feature is
+  disabled".
+
+### Non-blocking writes & bounded background pipeline
+
+The canonical write path now hands derived work (embedding compute,
+entity-graph merge, summary refresh) to the bounded
+[`Pipeline`](https://docs.rs/post-cortex-memory) queues in
+`post-cortex-memory`. `update_context` returns as soon as the entry is
+durably persisted; embeddings catch up on a separate worker pool —
+search quality lags by milliseconds but the agent loop never blocks
+on model inference or HNSW upsert.
+
+#### Added
+
+- **Pipeline workers are real** — previously stubs that only
+  decremented the backlog gauge. The embedding worker now calls
+  `ConversationMemorySystem::vectorize_latest_update_now`, the graph
+  worker calls `apply_entity_graph_update_now`, both run their work
+  inside the worker task so the hot path stays in single-digit ms.
+- **`vectorize_latest_update_now` / `apply_entity_graph_update_now`**
+  on `ConversationMemorySystem` — synchronous (no `tokio::spawn`)
+  variants of the existing background helpers, suitable for calling
+  from any task. Idempotent: failed CAS-swaps are silently dropped
+  and skip-sets prevent double-vectorisation.
+- **`ActiveSession::is_vectorization_pending(entry_id)`** and
+  **`pending_vectorization_count()`** — per-session HNSW-pending
+  visibility. Computed from existing state (hot/incremental contexts
+  minus `vectorized_update_ids`), no extra storage.
+- **`Pipeline::start` now takes `Arc<ConversationMemorySystem>`** so
+  workers can reach the canonical `*_now` helpers without
+  reimplementing the load → mutate → CAS → persist flow.
+- **`GraphWorkItem::ApplyUpdate { session_id, update }`** — the single
+  variant that the canonical write path emits (previously the enum
+  carried per-entity / per-relation stubs that no code path used).
+
+#### Changed
+
+- **`MemoryServiceImpl::update_context` / `bulk_update_context`** now
+  submit an `EmbeddingWorkItem`, `GraphWorkItem::ApplyUpdate`, and
+  `SummaryWorkItem` to the pipeline after each persist. Backpressure
+  is logged but never fails the write — the legacy in-system
+  `tokio::spawn`s in
+  `ConversationMemorySystem::add_incremental_update_internal` stay as
+  the safety net while direct callers migrate (0.4.0 will retire
+  them).
+
 ### Embedding engine — Model2Vec default
 
 The default embedding backend swaps from BERT (`MultilingualMiniLM`,

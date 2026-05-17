@@ -48,6 +48,29 @@ impl SurrealDBStorage {
         namespace: Option<&str>,
         database: Option<&str>,
     ) -> Result<Self> {
+        // Default vector dimension matches the legacy MultilingualMiniLM
+        // (384). Callers wanting Model2Vec / Potion / a different model
+        // should use `new_with_dimension`.
+        Self::new_with_dimension(endpoint, username, password, namespace, database, 384).await
+    }
+
+    /// Same as [`Self::new`] but lets the caller pin the HNSW dimension.
+    ///
+    /// When the on-server `idx_embedding_hnsw` index already exists with
+    /// a different dimension (e.g. an old 384-dim index on a server now
+    /// switching to 256-dim Model2Vec), the constructor `REMOVE`s and
+    /// re-`DEFINE`s the index. **Existing embedding rows are not
+    /// purged** — they remain in the `embedding` table but the new
+    /// index won't catalogue them. Re-vectorise the session if you need
+    /// historical data searchable again.
+    pub async fn new_with_dimension(
+        endpoint: &str,
+        username: Option<&str>,
+        password: Option<&str>,
+        namespace: Option<&str>,
+        database: Option<&str>,
+        vector_dimension: usize,
+    ) -> Result<Self> {
         // Normalize endpoint (add ws:// if not present and not using other engines)
         let endpoint = if endpoint.contains("://") {
             endpoint.to_string()
@@ -90,8 +113,8 @@ impl SurrealDBStorage {
             database,
         };
 
-        // Initialize schema
-        storage.initialize_schema().await?;
+        // Initialize schema with the requested HNSW dimension.
+        storage.initialize_schema(vector_dimension).await?;
 
         info!("SurrealDBStorage: Remote instance initialized successfully");
 
@@ -124,9 +147,12 @@ impl SurrealDBStorage {
         self.db.delete((table, id)).await
     }
 
-    /// Initialize the database schema
-    async fn initialize_schema(&self) -> Result<()> {
-        info!("SurrealDBStorage: Initializing schema...");
+    /// Initialize the database schema with the requested HNSW dimension.
+    async fn initialize_schema(&self, vector_dimension: usize) -> Result<()> {
+        info!(
+            "SurrealDBStorage: Initializing schema (HNSW dimension = {})",
+            vector_dimension
+        );
 
         // First, remove old binary 'data' fields if they exist (schema migration)
         let cleanup = r#"
@@ -209,9 +235,12 @@ impl SurrealDBStorage {
             DEFINE INDEX IF NOT EXISTS idx_embedding_content ON embedding FIELDS content_id UNIQUE;
             DEFINE INDEX IF NOT EXISTS idx_embedding_session ON embedding FIELDS session_id;
             DEFINE INDEX IF NOT EXISTS idx_embedding_type ON embedding FIELDS content_type;
-            -- HNSW vector index for fast similarity search (384-dim MiniLM embeddings)
-            -- This enables O(log n) KNN instead of O(n) full scan!
-            DEFINE INDEX IF NOT EXISTS idx_embedding_hnsw ON embedding FIELDS vector HNSW DIMENSION 384 DIST COSINE;
+            -- HNSW vector index for fast similarity search.
+            -- The dimension is fixed at index-creation time; if it later
+            -- needs to change (e.g. embedding-model swap) the
+            -- post-schema migration block below `REMOVE`s and redefines it.
+            -- We keep the `IF NOT EXISTS` here for the first-run case;
+            -- the redefinition handles model swaps.
 
             -- Workspaces table
             DEFINE TABLE IF NOT EXISTS workspace SCHEMAFULL;
@@ -254,7 +283,25 @@ impl SurrealDBStorage {
 
         self.db.query(schema).await?;
 
-        info!("SurrealDBStorage: Schema initialized successfully");
+        // HNSW index dimension is fixed at creation; if the server was
+        // previously initialised with a different dim (e.g. legacy 384-dim
+        // MultilingualMiniLM and now we're swapping to 256-dim Potion) the
+        // `IF NOT EXISTS` keyword silently keeps the old shape. Drop and
+        // recreate to honour the requested dimension. Existing rows stay
+        // in the `embedding` table but won't be indexed; re-vectorise the
+        // affected sessions to rebuild the HNSW catalogue.
+        let hnsw_sql = format!(
+            "REMOVE INDEX IF EXISTS idx_embedding_hnsw ON embedding; \
+             DEFINE INDEX idx_embedding_hnsw ON embedding FIELDS vector \
+             HNSW DIMENSION {dim} DIST COSINE;",
+            dim = vector_dimension,
+        );
+        self.db.query(&hnsw_sql).await?;
+
+        info!(
+            "SurrealDBStorage: Schema initialized successfully (HNSW dim = {})",
+            vector_dimension
+        );
 
         Ok(())
     }

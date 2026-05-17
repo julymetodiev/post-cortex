@@ -81,12 +81,13 @@ impl ConversationMemorySystem {
                 let endpoint = config.surrealdb_endpoint.as_ref()
                     .ok_or_else(|| "SurrealDB endpoint not configured".to_string())?;
 
-                let storage = post_cortex_storage::surrealdb_storage::SurrealDBStorage::new(
+                let storage = post_cortex_storage::surrealdb_storage::SurrealDBStorage::new_with_dimension(
                     endpoint,
                     config.surrealdb_username.as_deref(),
                     config.surrealdb_password.as_deref(),
                     config.surrealdb_namespace.as_deref(),
                     config.surrealdb_database.as_deref(),
+                    config.vector_dimension,
                 ).await
                 .map_err(|e| format!("Failed to initialize SurrealDB: {e}"))?;
 
@@ -204,12 +205,14 @@ impl ConversationMemorySystem {
                     "MultilingualMiniLM" => EmbeddingModelType::MultilingualMiniLM,
                     "TinyBERT" => EmbeddingModelType::TinyBERT,
                     "BGESmall" => EmbeddingModelType::BGESmall,
+                    "PotionMultilingual" => EmbeddingModelType::PotionMultilingual,
+                    "PotionCode" => EmbeddingModelType::PotionCode,
                     _ => {
                         warn!(
-                            "Unknown embedding model type: {}, defaulting to MultilingualMiniLM",
+                            "Unknown embedding model type: {}, defaulting to PotionMultilingual",
                             config.embeddings_model_type
                         );
-                        EmbeddingModelType::MultilingualMiniLM
+                        EmbeddingModelType::PotionMultilingual
                     }
                 };
 
@@ -542,6 +545,98 @@ impl ConversationMemorySystem {
                     .fetch_add(1, Ordering::Relaxed);
                 Err(format!("Failed to list sessions: {e}"))
             }
+        }
+    }
+
+    /// Apply an entity-graph update for a session **now** (no spawn).
+    ///
+    /// Encapsulates the load → mutate → CAS-swap → persist pattern that
+    /// `add_incremental_update_internal` previously inlined inside a
+    /// `tokio::spawn`. Exposed publicly so the non-blocking [`crate::pipeline`]
+    /// workers can drive entity-graph maintenance off the hot write path.
+    ///
+    /// Idempotent w.r.t. concurrent updates: a failed CAS-swap is treated
+    /// as "another writer won" and silently dropped (the next update
+    /// catches up). Errors propagate so the caller — typically a pipeline
+    /// worker — can log them and continue.
+    pub async fn apply_entity_graph_update_now(
+        &self,
+        session_id: Uuid,
+        update: post_cortex_core::core::context_update::ContextUpdate,
+    ) -> Result<(), String> {
+        let session_arc = match self.session_manager.sessions.get(&session_id) {
+            Some(arc) => arc,
+            None => {
+                debug!(
+                    "apply_entity_graph_update_now: session {} not cached, skipping",
+                    session_id
+                );
+                return Ok(());
+            }
+        };
+
+        let current = session_arc.load();
+        let mut new_session = (**current).clone();
+        new_session
+            .apply_entity_graph_update(&update)
+            .await
+            .map_err(|e| format!("apply_entity_graph_update failed: {e}"))?;
+
+        let new_arc = Arc::new(new_session);
+        let prev = session_arc.compare_and_swap(&current, Arc::clone(&new_arc));
+        if Arc::ptr_eq(&prev, &current) {
+            self.storage_actor
+                .persist_session_and_update_nowait((*new_arc).clone(), vec![]);
+        } else {
+            debug!(
+                "apply_entity_graph_update_now: CAS lost for session {} (concurrent update), skipping",
+                session_id
+            );
+        }
+        Ok(())
+    }
+
+    /// Vectorize the latest update for a session **now** (no spawn).
+    ///
+    /// Equivalent body of [`Self::spawn_background_vectorization`] without
+    /// the surrounding `tokio::spawn` — lets the
+    /// [`crate::pipeline::EmbeddingQueue`] worker run vectorization from
+    /// inside its own task while the write path stays in single-digit ms.
+    #[cfg(feature = "embeddings")]
+    pub async fn vectorize_latest_update_now(
+        &self,
+        session_id: Uuid,
+    ) -> Result<usize, String> {
+        if !self.config.enable_embeddings || !self.config.auto_vectorize_on_update {
+            return Ok(0);
+        }
+
+        let session_arc = match self.session_manager.sessions.get(&session_id) {
+            Some(arc) => arc,
+            None => {
+                debug!(
+                    "vectorize_latest_update_now: session {} not cached, skipping",
+                    session_id
+                );
+                return Ok(0);
+            }
+        };
+
+        let vectorizer = self
+            .ensure_vectorizer_initialized()
+            .await
+            .map_err(|e| format!("vectorizer init: {e}"))?;
+
+        let session = session_arc.load();
+        match vectorizer.vectorize_latest_update(&session).await {
+            Ok(count) if count > 0 => {
+                let _ = vectorizer.invalidate_session_cache(session_id).await;
+                self.storage_actor
+                    .persist_session_and_update_nowait((**session).clone(), vec![]);
+                Ok(count)
+            }
+            Ok(_) => Ok(0),
+            Err(e) => Err(format!("vectorize_latest_update: {e}")),
         }
     }
 

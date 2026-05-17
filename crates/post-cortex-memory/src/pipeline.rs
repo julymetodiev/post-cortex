@@ -43,6 +43,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use thiserror::Error;
 
+use crate::memory_system::ConversationMemorySystem;
+
 pub mod embedding;
 pub mod graph;
 pub mod summary;
@@ -115,12 +117,23 @@ impl Pipeline {
     /// Spawn worker tasks and return a handle. Uses the current Tokio
     /// runtime via `tokio::spawn` — must be called from inside an
     /// async context.
+    ///
+    /// `system` is shared with every worker so they can call into the
+    /// canonical `*_now` helpers on [`ConversationMemorySystem`] without
+    /// reimplementing the load → mutate → CAS → persist flow.
     #[must_use]
-    pub fn start(config: PipelineConfig) -> Self {
+    pub fn start(config: PipelineConfig, system: Arc<ConversationMemorySystem>) -> Self {
         let backlog = Arc::new(AtomicUsize::new(0));
-        let embedding =
-            EmbeddingQueue::start(config.embedding_capacity, Arc::clone(&backlog));
-        let graph = GraphQueue::start(config.graph_capacity, Arc::clone(&backlog));
+        let embedding = EmbeddingQueue::start(
+            config.embedding_capacity,
+            Arc::clone(&backlog),
+            Arc::clone(&system),
+        );
+        let graph = GraphQueue::start(
+            config.graph_capacity,
+            Arc::clone(&backlog),
+            Arc::clone(&system),
+        );
         let summary = SummaryQueue::start(config.summary_capacity, Arc::clone(&backlog));
         Self {
             embedding,
@@ -177,17 +190,62 @@ impl Pipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory_system::{ConversationMemorySystem, SystemConfig};
+    use post_cortex_core::core::context_update::{ContextUpdate, UpdateContent, UpdateType};
     use uuid::Uuid;
+
+    async fn ephemeral_system(label: &str) -> (Arc<ConversationMemorySystem>, String) {
+        let test_dir = format!(
+            "./test_data_pipeline_{}_{}",
+            label,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        std::fs::create_dir_all(&test_dir).unwrap();
+        let config = SystemConfig {
+            data_directory: test_dir.clone(),
+            ..Default::default()
+        };
+        let system = Arc::new(ConversationMemorySystem::new(config).await.unwrap());
+        (system, test_dir)
+    }
+
+    fn empty_context_update() -> ContextUpdate {
+        ContextUpdate {
+            id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            update_type: UpdateType::ConceptDefined,
+            content: UpdateContent {
+                title: "test".into(),
+                description: "test".into(),
+                details: vec![],
+                examples: vec![],
+                implications: vec![],
+            },
+            related_code: None,
+            parent_update: None,
+            user_marked_important: false,
+            creates_entities: vec![],
+            creates_relationships: vec![],
+            references_entities: vec![],
+            typed_entities: vec![],
+        }
+    }
 
     #[tokio::test]
     async fn pipeline_starts_and_reports_zero_backlog() {
-        let pipeline = Pipeline::start(PipelineConfig::default());
+        let (system, dir) = ephemeral_system("zero").await;
+        let pipeline = Pipeline::start(PipelineConfig::default(), system);
         assert_eq!(pipeline.backlog(), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]
     async fn pipeline_accepts_work_across_queues() {
-        let pipeline = Pipeline::start(PipelineConfig::default());
+        let (system, dir) = ephemeral_system("accept").await;
+        let pipeline = Pipeline::start(PipelineConfig::default(), system);
 
         pipeline
             .submit_embedding(EmbeddingWorkItem {
@@ -198,10 +256,9 @@ mod tests {
             .expect("embedding submit should succeed");
 
         pipeline
-            .submit_graph(GraphWorkItem::EntityUpsert {
+            .submit_graph(GraphWorkItem::ApplyUpdate {
                 session_id: Uuid::new_v4(),
-                entity_name: "ExampleEntity".into(),
-                entity_type: "Concept".into(),
+                update: empty_context_update(),
             })
             .expect("graph submit should succeed");
 
@@ -216,16 +273,21 @@ mod tests {
         tokio::task::yield_now().await;
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert_eq!(pipeline.backlog(), 0, "backlog should drain to 0");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]
     async fn pipeline_backpressure_when_full() {
+        let (system, _dir) = ephemeral_system("backpressure").await;
         // Use a tiny capacity and DO NOT drain — pin the queue full.
-        let pipeline = Pipeline::start(PipelineConfig {
-            embedding_capacity: 1,
-            graph_capacity: 1,
-            summary_capacity: 1,
-        });
+        let pipeline = Pipeline::start(
+            PipelineConfig {
+                embedding_capacity: 1,
+                graph_capacity: 1,
+                summary_capacity: 1,
+            },
+            system,
+        );
         // First submit succeeds. Worker may grab it before we submit the
         // second, in which case capacity opens up — retry until we
         // observe backpressure or hit a sane attempt cap.

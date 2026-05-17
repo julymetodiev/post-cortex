@@ -360,6 +360,47 @@ impl ActiveSession {
         self.metadata.id
     }
 
+    // ---- Vectorisation pending-state (TODO.md item #4) ------------------
+    //
+    // The write path is non-blocking: `update_context` returns once the
+    // entry is durably persisted, and the background pipeline computes its
+    // embedding shortly after. Between persist and vector-index insertion
+    // the entry exists in `hot_context` / `incremental_updates` but is not
+    // yet searchable via HNSW — i.e. it's *pending vectorisation*. These
+    // helpers expose that distinction without duplicating state: pending =
+    // (entry exists in context) AND (id not in `vectorized_update_ids`).
+
+    /// Returns `true` if `entry_id` is queued for vectorisation but the
+    /// embedding has not yet landed in the vector index.
+    pub fn is_vectorization_pending(&self, entry_id: Uuid) -> bool {
+        if self.vectorized_update_ids.contains(&entry_id) {
+            return false;
+        }
+        // `HotContext::iter` snapshots the deque (it's a DashMap under the
+        // hood, so we get a Vec copy). The incremental sweep is linear in
+        // the session's lifetime updates.
+        self.hot_context.iter().iter().any(|u| u.id == entry_id)
+            || self.incremental_updates.iter().any(|u| u.id == entry_id)
+    }
+
+    /// Returns the number of context entries currently waiting for the
+    /// embedding pipeline. Useful as a per-session counterpart to
+    /// `Pipeline::backlog()` (which is process-wide).
+    pub fn pending_vectorization_count(&self) -> usize {
+        let mut count = 0;
+        for u in self.hot_context.iter() {
+            if !self.vectorized_update_ids.contains(&u.id) {
+                count += 1;
+            }
+        }
+        for u in self.incremental_updates.iter() {
+            if !self.vectorized_update_ids.contains(&u.id) {
+                count += 1;
+            }
+        }
+        count
+    }
+
     /// Returns the session's display name, if set.
     pub fn name(&self) -> Option<String> {
         self.metadata.name.clone()

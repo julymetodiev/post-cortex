@@ -16,7 +16,7 @@ documentation = "https://docs.rs/post-cortex-memory"
 post-cortex-core.workspace = true
 post-cortex-proto.workspace = true
 post-cortex-storage.workspace = true
-post-cortex-embeddings = { workspace = true, features = ["bert"] }
+post-cortex-embeddings = { workspace = true, features = ["bert", "model2vec"] }
 
 # Observability — OTel exporter is gated behind the `otel` feature so
 # library users that don't want it pay zero cost. The `tracing` crate

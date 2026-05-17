@@ -140,7 +140,7 @@ impl ContentVectorizer {
                 Ok(_) => true,
                 Err(e) => {
                     warn!(
-                        "Failed to persist vector {}: {}. NOT marking as vectorized.",
+                        "Failed to persist vector {}: {:#}. NOT marking as vectorized.",
                         metadata.id, e
                     );
                     false

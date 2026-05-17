@@ -126,10 +126,12 @@ impl Default for SystemConfig {
             circuit_breaker_failure_threshold: 5,
             circuit_breaker_timeout_seconds: 300, // 5 minutes
             data_directory: "./post_cortex_data".to_string(),
-            // Embeddings defaults
-            enable_embeddings: true, // Enabled for semantic search functionality
-            embeddings_model_type: "MultilingualMiniLM".to_string(),
-            vector_dimension: 384, // MultilingualMiniLM uses 384-dimensional embeddings
+            // Embeddings defaults — matches EmbeddingModelType::default()
+            // (PotionMultilingual / model2vec). Breaking change in 0.3.0;
+            // pin "MultilingualMiniLM" + 384 if you need the BERT path.
+            enable_embeddings: true,
+            embeddings_model_type: "PotionMultilingual".to_string(),
+            vector_dimension: 256, // potion-multilingual-128M outputs 256-dim vectors
             max_vectors_per_session: 1000,
             semantic_search_threshold: 0.7,
             auto_vectorize_on_update: true,

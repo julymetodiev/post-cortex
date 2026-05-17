@@ -27,8 +27,18 @@ const MAX_VECTORIZER_INIT_RETRIES: u32 = 10;
 const MAX_PARALLEL_VECTORIZATION: usize = 4;
 
 impl ConversationMemorySystem {
-    /// Vectorize the latest update in the background. Fire-and-forget; failures are logged.
-    /// Returns immediately after spawning the task.
+    /// Vectorize the latest update in the background. Fire-and-forget;
+    /// failures are logged. Returns immediately **after** the vectorizer
+    /// has been initialised — on first call this still waits for the
+    /// model download (~50 MB for `potion-multilingual-128M`). The new
+    /// canonical write path goes through
+    /// [`crate::services::MemoryServiceImpl::update_context`], which
+    /// hands the work to the bounded background [`crate::pipeline::Pipeline`]
+    /// — the pipeline worker runs the same init inside its own task, so
+    /// callers of `update_context` never see the model-load cost on the
+    /// hot path. This legacy method stays as the safety net for direct
+    /// callers of `ConversationMemorySystem::add_incremental_update` until
+    /// they migrate (TODO.md item #4 follow-up, slated for 0.4.0).
     #[cfg(feature = "embeddings")]
     pub async fn spawn_background_vectorization(
         &self,
@@ -73,7 +83,7 @@ impl ConversationMemorySystem {
 
     /// Lazy-initialize content vectorizer on first use with retry mechanism
     #[cfg(feature = "embeddings")]
-    async fn ensure_vectorizer_initialized(&self) -> Result<Arc<ContentVectorizer>, String> {
+    pub(crate) async fn ensure_vectorizer_initialized(&self) -> Result<Arc<ContentVectorizer>, String> {
         // Check if already initialized — fast path, no counter increment
         if let Some(vectorizer) = self.content_vectorizer.get() {
             return Ok(Arc::clone(vectorizer));

@@ -25,17 +25,17 @@ use post_cortex_embeddings::{SearchMatch, VectorMetadata};
 use crate::traits::VectorStorage;
 
 use super::SurrealDBStorage;
-use super::EMBEDDING_DIMENSION;
+use super::MIN_VECTOR_LEN;
 use super::records::{EmbeddingRecord, KnnResult};
 
 #[async_trait]
 impl VectorStorage for SurrealDBStorage {
     async fn add_vector(&self, vector: Vec<f32>, metadata: VectorMetadata) -> Result<String> {
-        if vector.len() != EMBEDDING_DIMENSION {
+        if vector.len() < MIN_VECTOR_LEN {
             return Err(anyhow::anyhow!(
-                "Vector dimension mismatch: expected {}, got {}",
-                EMBEDDING_DIMENSION,
-                vector.len()
+                "Vector too short: got {} dims, need at least {}",
+                vector.len(),
+                MIN_VECTOR_LEN,
             ));
         }
 
@@ -78,10 +78,10 @@ impl VectorStorage for SurrealDBStorage {
     }
 
     async fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchMatch>> {
-        if query.len() != EMBEDDING_DIMENSION {
+        if query.len() < MIN_VECTOR_LEN {
             return Err(anyhow::anyhow!(
-                "Query vector dimension mismatch: expected {}, got {}",
-                EMBEDDING_DIMENSION,
+                "Query vector dimension mismatch: at least {}, got {}",
+                MIN_VECTOR_LEN,
                 query.len()
             ));
         }
@@ -131,10 +131,10 @@ impl VectorStorage for SurrealDBStorage {
         k: usize,
         session_id: &str,
     ) -> Result<Vec<SearchMatch>> {
-        if query.len() != EMBEDDING_DIMENSION {
+        if query.len() < MIN_VECTOR_LEN {
             return Err(anyhow::anyhow!(
-                "Query vector dimension mismatch: expected {}, got {}",
-                EMBEDDING_DIMENSION,
+                "Query vector dimension mismatch: at least {}, got {}",
+                MIN_VECTOR_LEN,
                 query.len()
             ));
         }
@@ -194,10 +194,10 @@ impl VectorStorage for SurrealDBStorage {
         k: usize,
         content_type: &str,
     ) -> Result<Vec<SearchMatch>> {
-        if query.len() != EMBEDDING_DIMENSION {
+        if query.len() < MIN_VECTOR_LEN {
             return Err(anyhow::anyhow!(
-                "Query vector dimension mismatch: expected {}, got {}",
-                EMBEDDING_DIMENSION,
+                "Query vector dimension mismatch: at least {}, got {}",
+                MIN_VECTOR_LEN,
                 query.len()
             ));
         }

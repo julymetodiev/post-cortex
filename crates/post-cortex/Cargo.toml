@@ -50,6 +50,7 @@ prost.workspace = true
 reqwest.workspace = true
 schemars.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 arc-swap.workspace = true
 
 [[bench]]

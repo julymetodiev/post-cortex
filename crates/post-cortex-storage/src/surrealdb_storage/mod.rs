@@ -38,8 +38,13 @@ mod vectors;
 #[cfg(test)]
 mod tests;
 
-/// Embedding dimension (must match the embedding model)
-pub(super) const EMBEDDING_DIMENSION: usize = 384;
+/// Minimum embedding dimension. Storage doesn't enforce a specific dim —
+/// the embedding engine + vector_db (HNSW) own that contract. We keep a
+/// sanity floor here to reject malformed zero-length payloads. Each
+/// `EmbeddingRecord` carries its `vector.len()` natively in SurrealDB, so
+/// callers can mix dims across model migrations as long as they keep the
+/// per-session index consistent.
+pub(super) const MIN_VECTOR_LEN: usize = 8;
 
 /// SurrealDB storage implementation supporting both local (RocksDB) and remote (WebSocket) backends
 #[derive(Clone)]
