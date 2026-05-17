@@ -19,7 +19,10 @@
 #![deny(unsafe_code)]
 
 pub mod embeddings;
+pub mod error;
 pub mod vector_db;
+
+pub use error::{Error, Result};
 
 pub use embeddings::{EmbeddingBackend, EmbeddingConfig, EmbeddingModelType, LocalEmbeddingEngine};
 pub use vector_db::{

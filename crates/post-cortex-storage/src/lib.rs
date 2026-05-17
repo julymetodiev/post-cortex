@@ -16,9 +16,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod error;
 pub mod export_import;
 pub mod rocksdb_storage;
 pub mod traits;
+
+pub use error::{Error as StorageError, Result as StorageResult};
 
 #[cfg(feature = "surrealdb-storage")]
 pub mod surrealdb_storage;

@@ -27,6 +27,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod error;
+pub use error::{Error, Result as McpResult};
+
 use post_cortex_core::core::context_update::{CodeReference, ContextUpdate, EntityType, UpdateType};
 use anyhow::Result;
 use arc_swap::ArcSwap;

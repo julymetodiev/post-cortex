@@ -35,5 +35,7 @@
 #![deny(unsafe_code)]
 
 pub mod daemon;
+pub mod error;
 
 pub use daemon::config::DaemonConfig;
+pub use error::{Error, Result};
