@@ -1,0 +1,46 @@
+# cargo-audit configuration. Mirrors the advisory ignore list in
+# `deny.toml`'s `[advisories]` section — keep both in sync. The
+# rustsec/audit-check@v2 GitHub Action reads this file by default.
+#
+# Each entry must include a comment explaining why the advisory is
+# tolerated (typically because the finding lives in a transitive of
+# `surrealdb` that has no upstream fix yet, or in a crate that the
+# `surrealdb-storage` feature drags in optionally).
+
+[advisories]
+ignore = [
+    # aws-lc-sys family — all pulled by `surrealdb` -> `surrealdb-tikv-client`
+    # / `surrealdb-protocol` / `reqwest`. No upstream patches available
+    # while SurrealDB 3.0.x pins these versions; re-evaluate when the next
+    # SurrealDB minor lands.
+    "RUSTSEC-2026-0045", # aws-lc-sys AES-CCM timing
+    "RUSTSEC-2026-0044", # aws-lc-sys X.509 name constraints bypass
+    "RUSTSEC-2026-0048", # aws-lc-sys CRL scope check
+    "RUSTSEC-2026-0047", # aws-lc-sys PKCS7_verify bypass A
+    "RUSTSEC-2026-0046", # aws-lc-sys PKCS7_verify bypass B
+
+    # quinn-proto DoS on endpoints — transitive via reqwest -> surrealdb
+    "RUSTSEC-2026-0037",
+
+    # rsa Marvin attack — no upstream fix; affects only SurrealDB's JWT
+    # auth layer which post-cortex does not expose externally. Documented
+    # as accepted risk in SECURITY.md.
+    "RUSTSEC-2023-0071",
+
+    # rustls-webpki advisories — transitives via tonic / reqwest /
+    # rustls 0.21 (still pinned by surrealdb-tikv-client).
+    "RUSTSEC-2026-0104", # CRL parse panic
+    "RUSTSEC-2026-0098", # URI name constraints
+    "RUSTSEC-2026-0099", # wildcard name constraints
+    "RUSTSEC-2026-0049", # webpki
+
+    # time 0.3.x — transitive via jiff / chrono adjacent paths
+    "RUSTSEC-2026-0009",
+
+    # Unmaintained crates — informational, not vulnerabilities.
+    "RUSTSEC-2023-0089", # atomic-polyfill (transitive, no replacement)
+    "RUSTSEC-2025-0141", # bincode 2.0.1 (direct dep — on watch list)
+    "RUSTSEC-2025-0119", # number_prefix (transitive via indicatif/hf-hub)
+    "RUSTSEC-2024-0436", # paste (transitive via candle / surrealdb)
+    "RUSTSEC-2025-0134", # rustls-pemfile (transitive via reqwest 0.13)
+]
