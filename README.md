@@ -18,6 +18,37 @@ Post-Cortex is an MCP server that gives AI assistants long-term memory. It store
 - **Fast** - Lock-free Rust architecture, O(log n) vector search, <10ms queries
 - **Flexible Storage** - RocksDB (embedded) or SurrealDB (distributed)
 
+## Workspace layout
+
+This repository is a Cargo workspace of 8 publishable crates. Pick the one that matches your need — depending on the facade `post-cortex` pulls everything, but most consumers only want a subset:
+
+| Crate | Pick when you need… | crates.io |
+|-------|---------------------|-----------|
+| [`post-cortex`](crates/post-cortex/) | The full stack in one dep | [![crates.io](https://img.shields.io/crates/v/post-cortex.svg)](https://crates.io/crates/post-cortex) |
+| [`post-cortex-core`](crates/post-cortex-core/) | Domain types + traits only (no I/O, no ML) | [![crates.io](https://img.shields.io/crates/v/post-cortex-core.svg)](https://crates.io/crates/post-cortex-core) |
+| [`post-cortex-proto`](crates/post-cortex-proto/) | gRPC wire types (client-side) | [![crates.io](https://img.shields.io/crates/v/post-cortex-proto.svg)](https://crates.io/crates/post-cortex-proto) |
+| [`post-cortex-embeddings`](crates/post-cortex-embeddings/) | BERT embedder + HNSW vector DB | [![crates.io](https://img.shields.io/crates/v/post-cortex-embeddings.svg)](https://crates.io/crates/post-cortex-embeddings) |
+| [`post-cortex-storage`](crates/post-cortex-storage/) | RocksDB + SurrealDB backends | [![crates.io](https://img.shields.io/crates/v/post-cortex-storage.svg)](https://crates.io/crates/post-cortex-storage) |
+| [`post-cortex-memory`](crates/post-cortex-memory/) | `ConversationMemorySystem` orchestrator | [![crates.io](https://img.shields.io/crates/v/post-cortex-memory.svg)](https://crates.io/crates/post-cortex-memory) |
+| [`post-cortex-mcp`](crates/post-cortex-mcp/) | MCP tool functions (embed in any MCP host) | [![crates.io](https://img.shields.io/crates/v/post-cortex-mcp.svg)](https://crates.io/crates/post-cortex-mcp) |
+| [`post-cortex-daemon`](crates/post-cortex-daemon/) | `pcx` CLI + rmcp/axum/tonic server | [![crates.io](https://img.shields.io/crates/v/post-cortex-daemon.svg)](https://crates.io/crates/post-cortex-daemon) |
+
+Dependency graph (acyclic):
+
+```text
+post-cortex-proto ──► post-cortex-core ──► post-cortex-embeddings
+                            │                      │
+                            ▼                      ▼
+                     post-cortex-storage ──► post-cortex-memory ──► post-cortex-mcp
+                                                    │                      │
+                                                    └──► post-cortex-daemon
+                                                              │
+                                                              ▼
+                                                       post-cortex (facade)
+```
+
+`post-cortex-core` carries no transport / I/O / ML dependencies — downstream Rust projects can take it for the type system alone without dragging in RocksDB, Candle, or the server stack.
+
 ## Installation
 
 ```bash
