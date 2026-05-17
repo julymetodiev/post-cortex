@@ -2,10 +2,12 @@
 //!
 //! Phase 6 of the single-entrypoint migration: every MCP-driven write
 //! flows through [`post_cortex_memory::services::MemoryServiceImpl`] —
-//! the canonical [`PostCortexService`] implementation. This module only
+//! the canonical [`PostCortexService`](post_cortex_core::services::PostCortexService)
+//! implementation. This module only
 //! translates the LLM-friendly wire format (HashMap content + typed
 //! `entities` / `relations` arrays) into the canonical
-//! [`UpdateContextRequest`]; validation, persistence, and metadata
+//! [`UpdateContextRequest`](post_cortex_core::services::UpdateContextRequest);
+//! validation, persistence, and metadata
 //! shaping all happen inside the service.
 
 use anyhow::{Result, anyhow};
@@ -42,11 +44,10 @@ fn build_content(
 
     let resolve_slot = |preferred: &[&str], fallback_keys: &[&str]| -> String {
         for k in preferred.iter().chain(fallback_keys.iter()) {
-            if let Some(v) = content.get(*k) {
-                if !v.trim().is_empty() {
+            if let Some(v) = content.get(*k)
+                && !v.trim().is_empty() {
                     return v.clone();
                 }
-            }
         }
         String::new()
     };

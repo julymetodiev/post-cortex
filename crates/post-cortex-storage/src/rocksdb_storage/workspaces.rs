@@ -76,11 +76,9 @@ impl RealRocksDBStorage {
                     StoredWorkspaceSession,
                     _,
                 >(&value, bincode::config::standard())
-                {
-                    if let Some(ws) = workspaces.get_mut(&ws_session.workspace_id) {
+                    && let Some(ws) = workspaces.get_mut(&ws_session.workspace_id) {
                         ws.sessions.push((ws_session.session_id, ws_session.role));
                     }
-                }
             }
 
             Ok(workspaces.into_values().collect())

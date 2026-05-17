@@ -62,7 +62,7 @@ impl MemoryPool {
             }
             None => {
                 let misses = self.pool_misses.fetch_add(1, Ordering::Relaxed) + 1;
-                if misses % 100 == 0 {
+                if misses.is_multiple_of(100) {
                     debug!(
                         "Memory pool exhausted: {} misses (pool_size={}, capacity={})",
                         misses, self.max_size, self.vector_capacity

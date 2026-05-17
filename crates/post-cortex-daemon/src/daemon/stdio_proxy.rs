@@ -125,15 +125,13 @@ pub async fn run_stdio_proxy(config: DaemonConfig) -> Result<(), String> {
                             match request.body(line).send().await {
                                 Ok(resp) => {
                                     // Extract session ID from response header (lock-free store)
-                                    if let Some(new_sid) = resp.headers().get("mcp-session-id") {
-                                        if let Ok(sid_str) = new_sid.to_str() {
-                                            if session_id.load().is_none() {
+                                    if let Some(new_sid) = resp.headers().get("mcp-session-id")
+                                        && let Ok(sid_str) = new_sid.to_str()
+                                            && session_id.load().is_none() {
                                                 info!("Got session ID: {}", sid_str);
                                                 session_id
                                                     .store(Arc::new(Some(sid_str.to_string())));
                                             }
-                                        }
-                                    }
 
                                     if resp.status().is_success() {
                                         // Read response body and parse SSE events

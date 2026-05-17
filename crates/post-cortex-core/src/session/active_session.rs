@@ -899,7 +899,7 @@ impl ActiveSession {
         let threshold = self.metadata.user_preferences.auto_summary_threshold;
         let len = self.incremental_updates.len();
         // Guard against threshold=0 (is_multiple_of(0) returns true for any number)
-        threshold > 0 && len > 0 && len % threshold == 0
+        threshold > 0 && len > 0 && len.is_multiple_of(threshold)
     }
 
     fn create_periodic_summary(&mut self) -> anyhow::Result<()> {

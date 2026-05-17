@@ -115,11 +115,10 @@ impl FreshnessStorage for RealRocksDBStorage {
                     break;
                 }
 
-                if let Ok(reference) = SourceReference::decode(&value[..]) {
-                    if reference.file_path == query_path {
+                if let Ok(reference) = SourceReference::decode(&value[..])
+                    && reference.file_path == query_path {
                         keys_to_delete.push(key.to_vec());
                     }
-                }
             }
 
             for key in keys_to_delete {
@@ -156,11 +155,10 @@ impl FreshnessStorage for RealRocksDBStorage {
                         break;
                     }
 
-                    if let Ok(reference) = SourceReference::decode(&value[..]) {
-                        if reference.file_path == query_path {
+                    if let Ok(reference) = SourceReference::decode(&value[..])
+                        && reference.file_path == query_path {
                             matches.push(reference);
                         }
-                    }
                 }
 
                 Ok(matches)
@@ -359,8 +357,8 @@ impl FreshnessStorage for RealRocksDBStorage {
                         break;
                     }
 
-                    if let Ok(reference) = SourceReference::decode(&value[..]) {
-                        if let Some(ref scope) = reference.scope {
+                    if let Ok(reference) = SourceReference::decode(&value[..])
+                        && let Some(ref scope) = reference.scope {
                             use post_cortex_proto::pb::source_scope::Scope;
                             if let Some(Scope::Function(ref func)) = scope.scope {
                                 let ref_key = format!("{}::{}", reference.file_path, func.name);
@@ -373,7 +371,6 @@ impl FreshnessStorage for RealRocksDBStorage {
                                 }
                             }
                         }
-                    }
                 }
 
                 for key in keys_to_delete {

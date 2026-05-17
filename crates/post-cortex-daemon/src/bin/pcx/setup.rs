@@ -265,8 +265,8 @@ pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result
                 } else {
                     // Parse PCX hooks and merge into existing
                     let pcx_settings = generate_settings_json(&session_id);
-                    if let Ok(pcx_json) = serde_json::from_str::<serde_json::Value>(&pcx_settings) {
-                        if let Some(hooks) = pcx_json.get("hooks") {
+                    if let Ok(pcx_json) = serde_json::from_str::<serde_json::Value>(&pcx_settings)
+                        && let Some(hooks) = pcx_json.get("hooks") {
                             existing_json
                                 .as_object_mut()
                                 .unwrap()
@@ -277,7 +277,6 @@ pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result
                                 .map_err(|e| format!("Write error: {}", e))?;
                             println!("  Updated: .claude/settings.json (added hooks)");
                         }
-                    }
                 }
             }
             Err(_) => {

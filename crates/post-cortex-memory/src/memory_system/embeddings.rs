@@ -32,7 +32,8 @@ impl ConversationMemorySystem {
     /// has been initialised — on first call this still waits for the
     /// model download (~50 MB for `potion-multilingual-128M`). The new
     /// canonical write path goes through
-    /// [`crate::services::MemoryServiceImpl::update_context`], which
+    /// [`MemoryServiceImpl`](crate::services::MemoryServiceImpl) (its
+    /// `update_context` impl), which
     /// hands the work to the bounded background [`crate::pipeline::Pipeline`]
     /// — the pipeline worker runs the same init inside its own task, so
     /// callers of `update_context` never see the model-load cost on the
@@ -849,18 +850,15 @@ fn enrich_results_with_graph(
     if enriched.len() >= 2 {
         let top1 = extract_entities(&enriched[0].text_content);
         let top2 = extract_entities(&enriched[1].text_content);
-        if let (Some(e1), Some(e2)) = (top1.first(), top2.first()) {
-            if e1 != e2 {
-                if let Some(path) = entity_graph.find_shortest_path(e1, e2) {
-                    if path.len() > 2 {
+        if let (Some(e1), Some(e2)) = (top1.first(), top2.first())
+            && e1 != e2
+                && let Some(path) = entity_graph.find_shortest_path(e1, e2)
+                    && path.len() > 2 {
                         graph_insights.push_str(&format!(
                             "\n[Structural Insight]: Found connection: {}\n",
                             path.join(" -> ")
                         ));
                     }
-                }
-            }
-        }
     }
 
     // Step 4: prepend insights to first result

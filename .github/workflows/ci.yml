@@ -69,22 +69,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: cargo build --workspace ${{ matrix.flags }}
       - run: cargo test --workspace --lib ${{ matrix.flags }}
-        # Lib tests only — integration tests under crates/post-cortex/tests/
-        # spin up RocksDB + bind ports + need orchestration; covered by the
-        # `integration` job below.
-
-  integration:
-    name: integration tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install system deps
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - run: cargo test -p post-cortex --tests --features embeddings,surrealdb-storage
-        # serial_test ensures the RocksDB/SurrealDB integration tests don't
-        # collide on the data directory.
+        # Lib tests only. Integration tests under crates/post-cortex/tests/
+        # require a real SurrealDB endpoint + outbound network for HF Hub
+        # model downloads + dedicated ports, none of which are available in
+        # the hosted CI runners. They live in the suite to be runnable
+        # locally / from a self-hosted runner — see
+        # `crates/post-cortex/tests/integration_e2e_surrealdb.rs` for the
+        # canonical example and its `POST_CORTEX_E2E_SURREAL_*` env vars.
 
   # -------------------------------------------------------------------------
   # Doctest sweep — every doctest in every crate must compile + run.

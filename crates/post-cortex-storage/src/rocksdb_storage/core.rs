@@ -178,11 +178,10 @@ impl RealRocksDBStorage {
         tokio::task::spawn_blocking(move || -> Result<usize> {
             // Use RocksDB's estimate-num-keys property for O(1) performance
             // This is an approximation but avoids full table scan
-            if let Some(count_str) = db.property_value(rocksdb::properties::ESTIMATE_NUM_KEYS)? {
-                if let Ok(count) = count_str.parse::<usize>() {
+            if let Some(count_str) = db.property_value(rocksdb::properties::ESTIMATE_NUM_KEYS)?
+                && let Ok(count) = count_str.parse::<usize>() {
                     return Ok(count);
                 }
-            }
 
             // Fallback to counting if property not available (shouldn't happen)
             let mut count = 0;

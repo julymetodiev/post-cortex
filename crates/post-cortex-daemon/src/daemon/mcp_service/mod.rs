@@ -304,15 +304,14 @@ impl ServerHandler for PostCortexService {
                 let mut schema = (*tool.input_schema).clone();
                 schema.remove("$schema");
                 // Also strip from $defs if present
-                if let Some(defs) = schema.get_mut("$defs") {
-                    if let Some(defs_obj) = defs.as_object_mut() {
+                if let Some(defs) = schema.get_mut("$defs")
+                    && let Some(defs_obj) = defs.as_object_mut() {
                         for (_, def) in defs_obj.iter_mut() {
                             if let Some(def_obj) = def.as_object_mut() {
                                 def_obj.remove("$schema");
                             }
                         }
                     }
-                }
                 tool.input_schema = std::sync::Arc::new(schema);
                 tool
             })

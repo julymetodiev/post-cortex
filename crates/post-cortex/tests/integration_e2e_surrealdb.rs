@@ -36,7 +36,6 @@ use post_cortex_core::core::context_update::{
 use post_cortex_core::services::{PostCortexService, UpdateContextRequest};
 use post_cortex_memory::services::MemoryServiceImpl;
 use post_cortex_storage::traits::StorageBackendType;
-use tracing_subscriber;
 
 fn entity(name: &str, kind: EntityType) -> EntityData {
     let now = chrono::Utc::now();

@@ -514,13 +514,11 @@ impl GraphRagEnricher {
         // Find paths to query entities
         for result_entity in result_entities.iter().take(2) {
             for query_entity in query_entities.iter().take(2) {
-                if result_entity != query_entity {
-                    if let Some(path) = graph.find_shortest_path(result_entity, query_entity) {
-                        if path.len() > 2 && path.len() <= 5 {
+                if result_entity != query_entity
+                    && let Some(path) = graph.find_shortest_path(result_entity, query_entity)
+                        && path.len() > 2 && path.len() <= 5 {
                             paths.push(path);
                         }
-                    }
-                }
             }
         }
 
@@ -571,17 +569,13 @@ impl GraphRagEnricher {
             for j in (i + 1)..result_entities.len().min(3) {
                 if let (Some(e1), Some(e2)) =
                     (result_entities[i].first(), result_entities[j].first())
-                {
-                    if e1 != e2 {
-                        if let Some(path) = graph.find_shortest_path(e1, e2) {
-                            if path.len() > 2 && path.len() <= 5 {
+                    && e1 != e2
+                        && let Some(path) = graph.find_shortest_path(e1, e2)
+                            && path.len() > 2 && path.len() <= 5 {
                                 // Phase 3: Use path summarization
                                 let summarized = self.summarize_path(&path, graph);
                                 insights.push(format!("Connection: {}", summarized));
                             }
-                        }
-                    }
-                }
             }
         }
 

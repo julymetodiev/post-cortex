@@ -487,11 +487,10 @@ impl RealRocksDBStorage {
             let session_id = exported_session.session.id();
 
             // Apply filter if specified
-            if let Some(ref filter) = options.session_filter {
-                if !filter.contains(&session_id) {
+            if let Some(ref filter) = options.session_filter
+                && !filter.contains(&session_id) {
                     continue;
                 }
-            }
 
             // Check if session exists
             let exists = self.session_exists(session_id).await?;
@@ -543,11 +542,10 @@ impl RealRocksDBStorage {
         // Import workspaces
         for workspace in data.workspaces {
             // Apply filter if specified
-            if let Some(ref filter) = options.workspace_filter {
-                if !filter.contains(&workspace.id) {
+            if let Some(ref filter) = options.workspace_filter
+                && !filter.contains(&workspace.id) {
                     continue;
                 }
-            }
 
             // Check if workspace exists
             let existing = self.list_workspaces().await?;
