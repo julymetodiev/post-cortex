@@ -115,6 +115,19 @@ let config = EmbeddingConfig {
   `CodeReference` no longer lose `code_snippet` / `commit_hash` /
   `branch` / `change_description` at the service boundary.
 
+#### Removed (docs)
+
+- **`docs/api-baseline-0.1.23/`** — placeholder for a `cargo public-api`
+  snapshot that Phase 13 was supposed to capture and never did. The
+  workspace surface diff is meaningful against 0.2.0 / 0.3.0, not the
+  pre-split 0.1.23 layout, so the empty directory was net noise.
+- **`docs/perf-baseline-0.1.23.md`** — perf baseline used as the
+  regression gate for Phases 1-14 (now complete). Future perf work
+  should establish a fresh baseline against the post-split workspace.
+- `docs/audit-baseline-0.1.23.md` is **kept** — `SECURITY.md` actively
+  links to it and `deny.toml` cites it as the source of the RUSTSEC
+  whitelist rationale.
+
 #### Removed
 
 - **`update_conversation_context_with_system`** and
