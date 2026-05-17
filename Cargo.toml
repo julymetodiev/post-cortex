@@ -16,7 +16,7 @@ members = [
 default-members = ["crates/post-cortex"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Julius ML"]
 license = "MIT"
@@ -124,16 +124,16 @@ serial_test = { version = "3.3", features = ["async"] }
 # Intra-workspace path deps. Versions match [workspace.package].version so a
 # `cargo publish` from any member resolves siblings on crates.io rather than
 # the local path.
-post-cortex-proto = { version = "0.2.0", path = "crates/post-cortex-proto" }
-post-cortex-core = { version = "0.2.0", path = "crates/post-cortex-core" }
+post-cortex-proto = { version = "0.3.0", path = "crates/post-cortex-proto" }
+post-cortex-core = { version = "0.3.0", path = "crates/post-cortex-core" }
 # default-features = false at the workspace level so storage (which only
 # needs the data types) can take it cleanly; consumers that want the BERT
 # stack add `features = ["bert"]` explicitly.
-post-cortex-embeddings = { version = "0.2.0", path = "crates/post-cortex-embeddings", default-features = false }
-post-cortex-storage = { version = "0.2.0", path = "crates/post-cortex-storage" }
-post-cortex-memory = { version = "0.2.0", path = "crates/post-cortex-memory" }
-post-cortex-mcp = { version = "0.2.0", path = "crates/post-cortex-mcp" }
-post-cortex-daemon = { version = "0.2.0", path = "crates/post-cortex-daemon" }
+post-cortex-embeddings = { version = "0.3.0", path = "crates/post-cortex-embeddings", default-features = false }
+post-cortex-storage = { version = "0.3.0", path = "crates/post-cortex-storage" }
+post-cortex-memory = { version = "0.3.0", path = "crates/post-cortex-memory" }
+post-cortex-mcp = { version = "0.3.0", path = "crates/post-cortex-mcp" }
+post-cortex-daemon = { version = "0.3.0", path = "crates/post-cortex-daemon" }
 
 [profile.release]
 # Surface real bugs hard instead of unwinding through tokio task boundaries.

@@ -5,7 +5,18 @@ All notable changes to Post-Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-05-17 — Model2Vec default + non-blocking write pipeline
+
+This release retires the BERT default embedding model in favour of
+Model2Vec / Potion, finishes the single-entrypoint write-path
+migration, and lands the bounded background pipeline so
+`update_context` returns once the entry is durably persisted.
+
+**Breaking summary:** embedding dimension 384 → 256, MCP schema now
+requires typed `entities` + `relations`, several internal public
+helpers (`update_conversation_context_with_system`,
+`interaction_to_context_update`, gRPC `validate_entities_and_relations`)
+are gone — see the detailed sections below.
 
 ### Single-entrypoint write path
 
