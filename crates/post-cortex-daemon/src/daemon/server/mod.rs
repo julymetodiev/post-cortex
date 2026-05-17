@@ -20,7 +20,6 @@
 //! Tool-call business logic lives in `tools::mcp::*`; this module is a thin
 //! transport layer that maps JSON payloads onto those calls.
 
-use post_cortex_memory::ConversationMemorySystem;
 use crate::daemon::sse::SSEBroadcaster;
 use axum::{
     Json, Router,
@@ -33,6 +32,7 @@ use axum::{
 };
 use dashmap::DashMap;
 use futures::stream::{self};
+use post_cortex_memory::ConversationMemorySystem;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;

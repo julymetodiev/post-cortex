@@ -22,11 +22,11 @@ use chrono::{DateTime, Utc};
 use tracing::{debug, info};
 use uuid::Uuid;
 
+use crate::rocksdb_storage::{SessionCheckpoint, StoredWorkspace};
+use crate::traits::{GraphStorage, Storage};
 use post_cortex_core::core::context_update::ContextUpdate;
 use post_cortex_core::graph::entity_graph::SimpleEntityGraph;
 use post_cortex_core::session::active_session::{ActiveSession, UserPreferences};
-use crate::rocksdb_storage::{SessionCheckpoint, StoredWorkspace};
-use crate::traits::{GraphStorage, Storage};
 use post_cortex_core::workspace::SessionRole;
 
 use super::SurrealDBStorage;
@@ -270,8 +270,7 @@ impl Storage for SurrealDBStorage {
         debug!("SurrealDBStorage: Deleting session with ID: {}", session_id);
 
         // Delete session
-        let _: Option<SessionRecord> =
-            self.db.delete(("session", session_id.to_string())).await?;
+        let _: Option<SessionRecord> = self.db.delete(("session", session_id.to_string())).await?;
 
         // Delete all context updates for this session
         self.db
@@ -570,10 +569,7 @@ impl Storage for SurrealDBStorage {
             })
             .collect();
 
-        debug!(
-            "SurrealDBStorage: Listed {} checkpoints",
-            checkpoints.len()
-        );
+        debug!("SurrealDBStorage: Listed {} checkpoints", checkpoints.len());
 
         Ok(checkpoints)
     }
@@ -784,4 +780,3 @@ impl Storage for SurrealDBStorage {
         Ok(serde_json::to_string_pretty(&stats.unwrap_or_default())?)
     }
 }
-

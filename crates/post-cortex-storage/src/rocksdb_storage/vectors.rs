@@ -18,8 +18,8 @@ use async_trait::async_trait;
 use rocksdb::WriteBatch;
 use tracing::debug;
 
-use post_cortex_embeddings::{SearchMatch, VectorMetadata};
 use crate::traits::VectorStorage;
+use post_cortex_embeddings::{SearchMatch, VectorMetadata};
 
 use super::RealRocksDBStorage;
 use super::types::{EMBEDDING_DIMENSION, StoredEmbedding};

@@ -70,7 +70,12 @@ impl PcxGrpcService {
         let futures = req.sources.into_iter().map(|source_ref| {
             let entry_id = source_ref.entry_id.clone();
             let actor = self.memory.storage_actor.clone();
-            async move { (entry_id, actor.register_source(session_id, source_ref).await) }
+            async move {
+                (
+                    entry_id,
+                    actor.register_source(session_id, source_ref).await,
+                )
+            }
         });
         let results = join_all(futures).await;
 
@@ -189,12 +194,10 @@ impl PcxGrpcService {
                 .invalidate_and_rebuild_entity_graph(session_id, &req.file_path)
                 .await
             {
-                Ok((entries_invalidated, entities_after)) => {
-                    Ok(Response::new(InvalidateAck {
-                        entries_invalidated,
-                        entities_rebuilt: entities_after as u32,
-                    }))
-                }
+                Ok((entries_invalidated, entities_after)) => Ok(Response::new(InvalidateAck {
+                    entries_invalidated,
+                    entities_rebuilt: entities_after as u32,
+                })),
                 Err(e) => {
                     error!(
                         "gRPC Invalidate+rebuild failed for file {}: {}",
@@ -264,7 +267,11 @@ impl PcxGrpcService {
         let changed = req
             .changed_symbol
             .ok_or_else(|| Status::invalid_argument("Missing changed_symbol"))?;
-        let max_depth = if req.max_depth == 0 { 10 } else { req.max_depth };
+        let max_depth = if req.max_depth == 0 {
+            10
+        } else {
+            req.max_depth
+        };
 
         debug!(
             "gRPC CascadeInvalidate: {}::{} depth={}",
@@ -290,10 +297,7 @@ impl PcxGrpcService {
         request: Request<GetStaleEntriesBySourceRequest>,
     ) -> Result<Response<GetStaleEntriesBySourceResponse>, Status> {
         let req = request.into_inner();
-        debug!(
-            "gRPC GetStaleEntriesBySource: file_path={}",
-            req.file_path
-        );
+        debug!("gRPC GetStaleEntriesBySource: file_path={}", req.file_path);
 
         match self
             .memory

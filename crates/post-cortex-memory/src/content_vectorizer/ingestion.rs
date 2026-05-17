@@ -18,8 +18,8 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use post_cortex_core::core::context_update::ContextUpdate;
-use post_cortex_embeddings::VectorMetadata;
 use post_cortex_core::session::active_session::ActiveSession;
+use post_cortex_embeddings::VectorMetadata;
 
 use super::types::ContentType;
 use super::vectorizer::ContentVectorizer;
@@ -176,16 +176,20 @@ impl ContentVectorizer {
             actual_vectorized.len()
         );
 
-        let (texts_to_embed, metadata_list) = if non_vectorized_count >= PARALLEL_PROCESSING_THRESHOLD {
-            debug!(
-                "Using parallel processing for {} updates (threshold: {})",
-                non_vectorized_count, PARALLEL_PROCESSING_THRESHOLD
-            );
-            self.collect_updates_parallel(session)
-        } else {
-            debug!("Using sequential processing for {} updates", non_vectorized_count);
-            self.collect_updates_sequential(session)
-        };
+        let (texts_to_embed, metadata_list) =
+            if non_vectorized_count >= PARALLEL_PROCESSING_THRESHOLD {
+                debug!(
+                    "Using parallel processing for {} updates (threshold: {})",
+                    non_vectorized_count, PARALLEL_PROCESSING_THRESHOLD
+                );
+                self.collect_updates_parallel(session)
+            } else {
+                debug!(
+                    "Using sequential processing for {} updates",
+                    non_vectorized_count
+                );
+                self.collect_updates_sequential(session)
+            };
 
         if texts_to_embed.is_empty() {
             info!(
@@ -211,7 +215,10 @@ impl ContentVectorizer {
             }
         }
 
-        debug!("Added {} context update vectors, marked as vectorized", added_count);
+        debug!(
+            "Added {} context update vectors, marked as vectorized",
+            added_count
+        );
         Ok(added_count)
     }
 

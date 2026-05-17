@@ -774,4 +774,3 @@ mod tests {
         assert!(cached_results.is_none());
     }
 }
-

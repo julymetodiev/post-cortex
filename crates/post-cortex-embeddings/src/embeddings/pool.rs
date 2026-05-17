@@ -98,7 +98,11 @@ impl MemoryPool {
         let hits = self.pool_hits.load(Ordering::Relaxed) as f64;
         let misses = self.pool_misses.load(Ordering::Relaxed) as f64;
         let total = hits + misses;
-        if total > 0.0 { (hits / total) * 100.0 } else { 100.0 }
+        if total > 0.0 {
+            (hits / total) * 100.0
+        } else {
+            100.0
+        }
     }
 }
 

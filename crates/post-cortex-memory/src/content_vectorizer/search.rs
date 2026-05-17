@@ -20,8 +20,8 @@ use std::sync::atomic::Ordering;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use post_cortex_embeddings::SearchMatch;
 use post_cortex_core::session::active_session::ActiveSession;
+use post_cortex_embeddings::SearchMatch;
 
 use super::types::{ContentType, SearchOptions, SemanticSearchResult};
 use super::vectorizer::ContentVectorizer;
@@ -72,20 +72,18 @@ impl ContentVectorizer {
         };
 
         let search_results = match (session_filter, date_range) {
-            (Some(session_id), Some((start, end))) => self.vector_db.search_with_filter(
-                &query_embedding,
-                limit,
-                |metadata| {
-                    metadata.source == session_id.to_string()
-                        && metadata.timestamp >= start
-                        && metadata.timestamp <= end
-                },
-            )?,
-            (Some(session_id), None) => self.vector_db.search_in_source(
-                &query_embedding,
-                limit,
-                &session_id.to_string(),
-            )?,
+            (Some(session_id), Some((start, end))) => {
+                self.vector_db
+                    .search_with_filter(&query_embedding, limit, |metadata| {
+                        metadata.source == session_id.to_string()
+                            && metadata.timestamp >= start
+                            && metadata.timestamp <= end
+                    })?
+            }
+            (Some(session_id), None) => {
+                self.vector_db
+                    .search_in_source(&query_embedding, limit, &session_id.to_string())?
+            }
             (None, Some((start, end))) if self.config.enable_cross_session_search => self
                 .vector_db
                 .search_with_filter(&query_embedding, limit, |metadata| {
@@ -152,7 +150,10 @@ impl ContentVectorizer {
         let query_embedding = if let Some(ref cache) = self.query_cache {
             let query_embedding = self.embedding_engine.encode_text(query).await?;
             if let Some(cached_results) = cache.search(query, &query_embedding, params_hash) {
-                debug!("Cache hit for multisession semantic search query: '{}'", query);
+                debug!(
+                    "Cache hit for multisession semantic search query: '{}'",
+                    query
+                );
                 return Ok(cached_results);
             }
             query_embedding

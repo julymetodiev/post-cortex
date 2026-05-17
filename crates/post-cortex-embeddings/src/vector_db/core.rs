@@ -22,7 +22,9 @@ use super::common::SearchResult;
 use super::config::{SearchMode, SearchQualityPreset, VectorDbConfig};
 use super::hnsw_index::HnswIndex;
 use super::product_quantization::ProductQuantizationCodebook;
-use super::types::{SearchMatch, StoredVector, VectorDbStats, VectorDbStatsSnapshot, VectorMetadata};
+use super::types::{
+    SearchMatch, StoredVector, VectorDbStats, VectorDbStatsSnapshot, VectorMetadata,
+};
 
 // Type aliases to reduce complexity
 type QuantizationParams = Arc<arc_swap::ArcSwap<Option<(Vec<f32>, Vec<f32>)>>>;
@@ -854,8 +856,7 @@ impl VectorDB {
 
 impl Default for VectorDB {
     fn default() -> Self {
-        Self::new(VectorDbConfig::default())
-            .expect("Failed to create default vector database")
+        Self::new(VectorDbConfig::default()).expect("Failed to create default vector database")
     }
 }
 

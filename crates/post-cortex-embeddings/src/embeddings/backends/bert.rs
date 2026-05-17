@@ -76,9 +76,8 @@ impl BertBackend {
         // the user-local model cache, and is never modified after load —
         // standard candle convention.
         #[allow(unsafe_code)]
-        let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)?
-        };
+        let vb =
+            unsafe { VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)? };
         let model = BertModel::load(vb, &bert_config)?;
 
         info!(

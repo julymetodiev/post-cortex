@@ -22,11 +22,13 @@ use surrealdb::types::SurrealValue;
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use post_cortex_core::core::context_update::{ContextUpdate, EntityData, EntityRelationship, RelationType};
+use crate::traits::GraphStorage;
+use post_cortex_core::core::context_update::{
+    ContextUpdate, EntityData, EntityRelationship, RelationType,
+};
 use post_cortex_core::core::structured_context::StructuredContext;
 use post_cortex_core::graph::entity_graph::EntityNetwork;
 use post_cortex_core::session::active_session::{ChangeRecord, CodeReference};
-use crate::traits::GraphStorage;
 
 use super::SurrealDBStorage;
 use super::records::EntityRecord;

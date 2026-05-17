@@ -76,12 +76,12 @@ impl Default for GraphRagConfig {
             timeout_ms: 100,
             cache_ttl_secs: 300,
             relation_priority: vec![
-                RelationType::CausedBy,     // Most useful for debugging
-                RelationType::DependsOn,    // Architectural dependency
-                RelationType::Implements,   // Implementation relationship
-                RelationType::LeadsTo,      // Flow relationship
-                RelationType::Solves,       // Problem-solution relationship
-                RelationType::RelatedTo,    // General (lowest priority)
+                RelationType::CausedBy,   // Most useful for debugging
+                RelationType::DependsOn,  // Architectural dependency
+                RelationType::Implements, // Implementation relationship
+                RelationType::LeadsTo,    // Flow relationship
+                RelationType::Solves,     // Problem-solution relationship
+                RelationType::RelatedTo,  // General (lowest priority)
             ],
         }
     }
@@ -171,8 +171,7 @@ impl GraphRagEnricher {
 
         for word in words {
             // Clean punctuation
-            let clean = word
-                .trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
+            let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
 
             if clean.len() < 2 {
                 continue;
@@ -533,9 +532,15 @@ impl GraphRagEnricher {
         let filtered_related = self.filter_relevant_relations(&related, query_entities, graph);
         let final_related: Vec<RelationInfo> = if filtered_related.is_empty() {
             // Fallback to unfiltered if filtering removes everything
-            related.into_iter().take(self.config.max_relations_per_entity).collect()
+            related
+                .into_iter()
+                .take(self.config.max_relations_per_entity)
+                .collect()
         } else {
-            filtered_related.into_iter().take(self.config.max_relations_per_entity).collect()
+            filtered_related
+                .into_iter()
+                .take(self.config.max_relations_per_entity)
+                .collect()
         };
 
         // Format context string with summarized paths
@@ -564,10 +569,9 @@ impl GraphRagEnricher {
         // Check for paths between entities from different results
         for i in 0..result_entities.len().min(3) {
             for j in (i + 1)..result_entities.len().min(3) {
-                if let (Some(e1), Some(e2)) = (
-                    result_entities[i].first(),
-                    result_entities[j].first(),
-                ) {
+                if let (Some(e1), Some(e2)) =
+                    (result_entities[i].first(), result_entities[j].first())
+                {
                     if e1 != e2 {
                         if let Some(path) = graph.find_shortest_path(e1, e2) {
                             if path.len() > 2 && path.len() <= 5 {
@@ -650,11 +654,7 @@ impl GraphRagEnricher {
             }
 
             for (rel_type, entities) in by_type {
-                output.push_str(&format!(
-                    "• {:?}: {}\n",
-                    rel_type,
-                    entities.join(", ")
-                ));
+                output.push_str(&format!("• {:?}: {}\n", rel_type, entities.join(", ")));
             }
         }
 
@@ -670,16 +670,16 @@ impl GraphRagEnricher {
     /// Clear expired cache entries
     pub fn cleanup_cache(&self) {
         let ttl = Duration::from_secs(self.config.cache_ttl_secs);
-        self.relation_cache.retain(|_, cached| {
-            cached.cached_at.elapsed() < ttl
-        });
+        self.relation_cache
+            .retain(|_, cached| cached.cached_at.elapsed() < ttl);
     }
 
     /// Get cache statistics
     pub fn cache_stats(&self) -> (usize, usize) {
         let total = self.relation_cache.len();
         let ttl = Duration::from_secs(self.config.cache_ttl_secs);
-        let valid = self.relation_cache
+        let valid = self
+            .relation_cache
             .iter()
             .filter(|e| e.cached_at.elapsed() < ttl)
             .count();
@@ -725,12 +725,7 @@ mod tests {
             "Authentication",
         );
 
-        graph.add_or_update_entity(
-            "user".to_string(),
-            EntityType::Concept,
-            now,
-            "User entity",
-        );
+        graph.add_or_update_entity("user".to_string(), EntityType::Concept, now, "User entity");
 
         // Add relationships
         use crate::core::context_update::EntityRelationship;
@@ -811,12 +806,7 @@ mod tests {
 
         // Create a cycle: A -> B -> C -> A
         for name in ["a", "b", "c"] {
-            graph.add_or_update_entity(
-                name.to_string(),
-                EntityType::Concept,
-                now,
-                "Test entity",
-            );
+            graph.add_or_update_entity(name.to_string(), EntityType::Concept, now, "Test entity");
         }
 
         use crate::core::context_update::EntityRelationship;
@@ -967,18 +957,37 @@ mod tests {
         let score = enricher.relation_relevance_score(&relation, &query_entities, &query_neighbors);
 
         // Direct match (100) + priority bonus (20 for DependsOn at index 1) + depth 1 (20) = 140
-        assert!(score >= 100, "Direct match should give high score, got {}", score);
+        assert!(
+            score >= 100,
+            "Direct match should give high score, got {}",
+            score
+        );
     }
 
     #[test]
     fn test_format_relation_type() {
         let enricher = GraphRagEnricher::with_defaults();
 
-        assert_eq!(enricher.format_relation_type(&RelationType::CausedBy), "CAUSED_BY");
-        assert_eq!(enricher.format_relation_type(&RelationType::DependsOn), "DEPENDS_ON");
-        assert_eq!(enricher.format_relation_type(&RelationType::Implements), "IMPLEMENTS");
-        assert_eq!(enricher.format_relation_type(&RelationType::LeadsTo), "LEADS_TO");
-        assert_eq!(enricher.format_relation_type(&RelationType::RelatedTo), "RELATED_TO");
+        assert_eq!(
+            enricher.format_relation_type(&RelationType::CausedBy),
+            "CAUSED_BY"
+        );
+        assert_eq!(
+            enricher.format_relation_type(&RelationType::DependsOn),
+            "DEPENDS_ON"
+        );
+        assert_eq!(
+            enricher.format_relation_type(&RelationType::Implements),
+            "IMPLEMENTS"
+        );
+        assert_eq!(
+            enricher.format_relation_type(&RelationType::LeadsTo),
+            "LEADS_TO"
+        );
+        assert_eq!(
+            enricher.format_relation_type(&RelationType::RelatedTo),
+            "RELATED_TO"
+        );
     }
 
     #[test]
@@ -987,10 +996,7 @@ mod tests {
         let graph = create_test_graph();
 
         // Two result sets with entities that have a path between them
-        let result_entities = vec![
-            vec!["payment".to_string()],
-            vec!["timeout".to_string()],
-        ];
+        let result_entities = vec![vec!["payment".to_string()], vec!["timeout".to_string()]];
 
         let insights = enricher.find_cross_result_insights(&graph, &result_entities);
 
@@ -998,7 +1004,10 @@ mod tests {
         // Path: payment -> database -> timeout
         if !insights.is_empty() {
             let insight = &insights[0];
-            assert!(insight.contains("Connection:"), "Should contain 'Connection:'");
+            assert!(
+                insight.contains("Connection:"),
+                "Should contain 'Connection:'"
+            );
             // Should have summarized path with relationship types
             assert!(
                 insight.contains("payment") && insight.contains("timeout"),

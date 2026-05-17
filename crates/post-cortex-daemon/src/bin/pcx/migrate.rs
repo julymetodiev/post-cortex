@@ -72,7 +72,8 @@ pub async fn handle_migrate(
         let err_str = e.to_string();
         if err_str.contains("LOCK") || err_str.contains("Resource temporarily unavailable") {
             "Source database is locked by another process (likely the daemon).\n\
-                     Please stop the daemon first: pkill -f 'pcx start'".to_string()
+                     Please stop the daemon first: pkill -f 'pcx start'"
+                .to_string()
         } else {
             format!("Failed to open source storage: {}", e)
         }

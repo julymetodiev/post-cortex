@@ -22,15 +22,15 @@ use super::vectorizer::ContentVectorizer;
 
 impl ContentVectorizer {
     /// Get query cache statistics, if caching is enabled.
-    pub fn get_query_cache_stats(
-        &self,
-    ) -> Option<crate::query_cache::QueryCacheStatsSnapshot> {
+    pub fn get_query_cache_stats(&self) -> Option<crate::query_cache::QueryCacheStatsSnapshot> {
         self.query_cache.as_ref().map(|cache| cache.get_stats())
     }
 
     /// Get query cache efficiency metrics, if caching is enabled.
     pub fn get_cache_efficiency_metrics(&self) -> Option<HashMap<String, f32>> {
-        self.query_cache.as_ref().map(|cache| cache.get_efficiency_metrics())
+        self.query_cache
+            .as_ref()
+            .map(|cache| cache.get_efficiency_metrics())
     }
 
     /// Get recency-bias performance metrics (lock-free).
@@ -53,7 +53,10 @@ impl ContentVectorizer {
             "recency_bias.total_duration_ns".to_string(),
             total_duration_ns as f32,
         );
-        metrics.insert("recency_bias.total_results".to_string(), total_results as f32);
+        metrics.insert(
+            "recency_bias.total_results".to_string(),
+            total_results as f32,
+        );
         metrics.insert(
             "recency_bias.calculation_count".to_string(),
             calculation_count as f32,

@@ -134,9 +134,7 @@ pub(super) async fn handle_update_context(
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use post_cortex_core::core::context_update::CodeReference;
-    use post_cortex_mcp::{
-        update_conversation_context, EntityItem, RelationItem,
-    };
+    use post_cortex_mcp::{EntityItem, RelationItem, update_conversation_context};
 
     let interaction_type = arguments["interaction_type"]
         .as_str()

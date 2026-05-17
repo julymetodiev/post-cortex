@@ -10,8 +10,8 @@ use uuid::Uuid;
 
 use crate::performance::PerformanceMonitor;
 use post_cortex_core::session::active_session::ActiveSession;
-use post_cortex_storage::rocksdb_storage::RealRocksDBStorage;
 use post_cortex_core::workspace::WorkspaceManager;
+use post_cortex_storage::rocksdb_storage::RealRocksDBStorage;
 
 use super::circuit_breaker::CircuitBreaker;
 use super::config::SystemConfig;
@@ -78,25 +78,30 @@ impl ConversationMemorySystem {
             use post_cortex_storage::traits::StorageBackendType;
 
             if config.storage_backend == StorageBackendType::SurrealDB {
-                let endpoint = config.surrealdb_endpoint.as_ref()
+                let endpoint = config
+                    .surrealdb_endpoint
+                    .as_ref()
                     .ok_or_else(|| "SurrealDB endpoint not configured".to_string())?;
 
-                let storage = post_cortex_storage::surrealdb_storage::SurrealDBStorage::new_with_dimension(
-                    endpoint,
-                    config.surrealdb_username.as_deref(),
-                    config.surrealdb_password.as_deref(),
-                    config.surrealdb_namespace.as_deref(),
-                    config.surrealdb_database.as_deref(),
-                    config.vector_dimension,
-                ).await
-                .map_err(|e| format!("Failed to initialize SurrealDB: {e}"))?;
+                let storage =
+                    post_cortex_storage::surrealdb_storage::SurrealDBStorage::new_with_dimension(
+                        endpoint,
+                        config.surrealdb_username.as_deref(),
+                        config.surrealdb_password.as_deref(),
+                        config.surrealdb_namespace.as_deref(),
+                        config.surrealdb_database.as_deref(),
+                        config.vector_dimension,
+                    )
+                    .await
+                    .map_err(|e| format!("Failed to initialize SurrealDB: {e}"))?;
 
                 let storage_arc = Arc::new(storage);
                 return Self::new_with_trait_storage(
                     storage_arc.clone() as Arc<dyn post_cortex_storage::traits::GraphStorage>,
                     storage_arc as Arc<dyn post_cortex_storage::traits::VectorStorage>,
                     config,
-                ).await;
+                )
+                .await;
             }
         }
 
@@ -126,7 +131,8 @@ impl ConversationMemorySystem {
             storage_arc.clone() as Arc<dyn post_cortex_storage::traits::GraphStorage>,
             storage_arc as Arc<dyn post_cortex_storage::traits::VectorStorage>,
             config,
-        ).await
+        )
+        .await
     }
 
     /// Create system with trait object storage (supports both RocksDB and SurrealDB)
@@ -425,11 +431,7 @@ impl ConversationMemorySystem {
     /// edges from the in-memory graph (so cached writes don't resurrect it)
     /// and cascades the same delete to storage (entity row + all 8 edge
     /// tables). Returns whether the entity existed.
-    pub async fn delete_entity(
-        &self,
-        session_id: Uuid,
-        entity_name: &str,
-    ) -> Result<bool, String> {
+    pub async fn delete_entity(&self, session_id: Uuid, entity_name: &str) -> Result<bool, String> {
         let session_arc = self.get_session(session_id).await?;
 
         let current = session_arc.load();
@@ -454,11 +456,7 @@ impl ConversationMemorySystem {
     /// produced when a client posts content the dispatcher can't map to a title.
     /// Persists the updated session via the storage actor. Returns true if the
     /// entry existed.
-    pub async fn delete_update(
-        &self,
-        session_id: Uuid,
-        entry_id: Uuid,
-    ) -> Result<bool, String> {
+    pub async fn delete_update(&self, session_id: Uuid, entry_id: Uuid) -> Result<bool, String> {
         const MAX_CAS_ATTEMPTS: u32 = 20;
         let session_arc = self.get_session(session_id).await?;
 
@@ -603,10 +601,7 @@ impl ConversationMemorySystem {
     /// [`crate::pipeline::EmbeddingQueue`] worker run vectorization from
     /// inside its own task while the write path stays in single-digit ms.
     #[cfg(feature = "embeddings")]
-    pub async fn vectorize_latest_update_now(
-        &self,
-        session_id: Uuid,
-    ) -> Result<usize, String> {
+    pub async fn vectorize_latest_update_now(&self, session_id: Uuid) -> Result<usize, String> {
         if !self.config.enable_embeddings || !self.config.auto_vectorize_on_update {
             return Ok(0);
         }
@@ -751,19 +746,29 @@ impl ConversationMemorySystem {
                         // Check if swap was successful (pointer equality)
                         if Arc::ptr_eq(&prev_arc, &current_arc) {
                             if attempts > 1 {
-                                debug!("CAS succeeded after {} attempts for session {}", attempts, session_id);
+                                debug!(
+                                    "CAS succeeded after {} attempts for session {}",
+                                    attempts, session_id
+                                );
                             }
                             break Ok((uid, update));
                         }
 
                         // CAS failed, retry with exponential backoff
-                        tracing::debug!("CAS failed for session {}, retrying (attempt {})", session_id, attempts);
+                        tracing::debug!(
+                            "CAS failed for session {}, retrying (attempt {})",
+                            session_id,
+                            attempts
+                        );
                         if attempts > 3 {
-                            tokio::time::sleep(std::time::Duration::from_micros(100 * (1 << (attempts - 3).min(5)))).await;
+                            tokio::time::sleep(std::time::Duration::from_micros(
+                                100 * (1 << (attempts - 3).min(5)),
+                            ))
+                            .await;
                         } else {
                             tokio::task::yield_now().await;
                         }
-                    },
+                    }
                     Err(e) => {
                         // Logic error, not contention
                         break Err(e);
@@ -812,10 +817,7 @@ impl ConversationMemorySystem {
                     (**current_session).clone(),
                     vec![context_update.clone()],
                 );
-                debug!(
-                    "Session {} persistence enqueued (non-blocking)",
-                    session_id
-                );
+                debug!("Session {} persistence enqueued (non-blocking)", session_id);
 
                 // Background entity graph update (non-blocking, non-critical)
                 let session_arc_bg = Arc::clone(&session_arc);
@@ -838,10 +840,8 @@ impl ConversationMemorySystem {
                     let prev = session_arc_bg.compare_and_swap(&current, Arc::clone(&new_arc));
                     if Arc::ptr_eq(&prev, &current) {
                         // CAS succeeded — persist session with updated entity graph
-                        storage_actor_bg.persist_session_and_update_nowait(
-                            (*new_arc).clone(),
-                            vec![],
-                        );
+                        storage_actor_bg
+                            .persist_session_and_update_nowait((*new_arc).clone(), vec![]);
                     } else {
                         debug!("Background entity graph CAS failed (concurrent update), skipping");
                     }

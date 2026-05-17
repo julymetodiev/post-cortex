@@ -1,8 +1,8 @@
 //! Workspace CRUD and session-to-workspace membership.
 
-use post_cortex_memory::ConversationMemorySystem;
-use crate::{get_memory_system, MCPToolResult};
+use crate::{MCPToolResult, get_memory_system};
 use anyhow::Result;
+use post_cortex_memory::ConversationMemorySystem;
 use tracing::{error, info, instrument};
 use uuid::Uuid;
 
@@ -42,12 +42,7 @@ pub async fn create_workspace(name: String, description: String) -> Result<MCPTo
 
     if let Err(e) = system
         .storage_actor
-        .save_workspace_metadata(
-            workspace_id,
-            &name,
-            &description,
-            &Vec::new(),
-        )
+        .save_workspace_metadata(workspace_id, &name, &description, &Vec::new())
         .await
     {
         error!("Failed to persist workspace: {}", e);
@@ -146,11 +141,7 @@ pub async fn delete_workspace(workspace_id: Uuid) -> Result<MCPToolResult> {
 
     match system.workspace_manager.delete_workspace(&workspace_id) {
         Some(workspace) => {
-            if let Err(e) = system
-                .storage_actor
-                .delete_workspace(workspace_id)
-                .await
-            {
+            if let Err(e) = system.storage_actor.delete_workspace(workspace_id).await {
                 error!("Failed to delete workspace from storage: {}", e);
                 return Ok(MCPToolResult::error(format!(
                     "Failed to delete workspace from storage: {}",

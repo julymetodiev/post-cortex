@@ -32,8 +32,7 @@ use crate::session::active_session::ActiveSession;
 use chrono::Utc;
 
 /// Options for filtering and limiting summary output
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct SummaryOptions {
     /// Maximum number of decisions to include
     pub decisions_limit: Option<usize>,
@@ -48,7 +47,6 @@ pub struct SummaryOptions {
     /// Whether to produce a compact (minimal) summary
     pub compact: bool,
 }
-
 
 impl SummaryOptions {
     /// Create compact mode options (returns minimal data)
@@ -300,7 +298,6 @@ impl SummaryGenerator {
         decisions
     }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -4,12 +4,12 @@
 //! Tool 7: assemble_context — graph-aware retrieval blending semantic search,
 //! entity-graph traversal and impact analysis.
 
-use post_cortex_memory::ConversationMemorySystem;
-use post_cortex_memory::context_assembly;
 use crate::daemon::coerce::{CoercionError, coerce_and_validate};
 use crate::daemon::validate::validate_session_id;
 use post_cortex_core::graph::entity_graph::SimpleEntityGraph;
 use post_cortex_mcp::MCPToolResult;
+use post_cortex_memory::ConversationMemorySystem;
+use post_cortex_memory::context_assembly;
 use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, ErrorData as McpError},
@@ -56,8 +56,7 @@ pub(super) async fn handle(
         .map(|b| b as usize)
         .unwrap_or(4000);
 
-    let (updates, graph) = if let Some(ws_raw) =
-        req.workspace_id.as_ref().filter(|s| !s.is_empty())
+    let (updates, graph) = if let Some(ws_raw) = req.workspace_id.as_ref().filter(|s| !s.is_empty())
     {
         let ws_uuid = Uuid::parse_str(ws_raw).map_err(|_| {
             CoercionError::new(
@@ -112,8 +111,7 @@ pub(super) async fn handle(
         (updates, (*session.entity_graph).clone())
     };
 
-    let assembled =
-        context_assembly::assemble_context(&req.query, &graph, &updates, token_budget);
+    let assembled = context_assembly::assemble_context(&req.query, &graph, &updates, token_budget);
     let formatted_text = context_assembly::format_for_llm(&assembled);
 
     let payload = serde_json::json!({

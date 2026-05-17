@@ -46,9 +46,7 @@ pub use crate::daemon::validate::VALID_INTERACTION_TYPES;
 /// assert_eq!(req.session_id, "123");
 /// assert_eq!(req.count, "42");
 /// ```
-pub fn coerce_and_validate<T: for<'de> Deserialize<'de>>(
-    value: Value,
-) -> Result<T, CoercionError> {
+pub fn coerce_and_validate<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T, CoercionError> {
     // Fast path: try direct deserialization first
     if let Ok(result) = serde_json::from_value::<T>(value.clone()) {
         return Ok(result);
@@ -56,13 +54,8 @@ pub fn coerce_and_validate<T: for<'de> Deserialize<'de>>(
 
     // Slow path: apply coercions and try again
     let coerced = apply_coercions(value)?;
-    serde_json::from_value(coerced).map_err(|e| {
-        CoercionError::new(
-            "Failed to deserialize parameter(s)",
-            e,
-            None,
-        )
-    })
+    serde_json::from_value(coerced)
+        .map_err(|e| CoercionError::new("Failed to deserialize parameter(s)", e, None))
 }
 
 /// Apply type coercion rules to a JSON value.
@@ -100,27 +93,23 @@ fn coerce_value(val: &Value) -> Result<Value, CoercionError> {
         // Object → JSON String
         // Handles cases where nested objects need to be stringified
         // e.g., {"metadata": {"key": "value"}} → {"metadata": "{\"key\":\"value\"}"}
-        Value::Object(obj) => {
-            serde_json::to_string(obj)
-                .map(Value::String)
-                .map_err(|e| CoercionError::new(
-                    "Failed to serialize object to JSON string",
-                    e,
-                    Some(val.clone()),
-                ))
-        }
+        Value::Object(obj) => serde_json::to_string(obj).map(Value::String).map_err(|e| {
+            CoercionError::new(
+                "Failed to serialize object to JSON string",
+                e,
+                Some(val.clone()),
+            )
+        }),
 
         // Array → JSON String
         // Similar to object coercion, stringifies arrays
-        Value::Array(arr) => {
-            serde_json::to_string(arr)
-                .map(Value::String)
-                .map_err(|e| CoercionError::new(
-                    "Failed to serialize array to JSON string",
-                    e,
-                    Some(val.clone()),
-                ))
-        }
+        Value::Array(arr) => serde_json::to_string(arr).map(Value::String).map_err(|e| {
+            CoercionError::new(
+                "Failed to serialize array to JSON string",
+                e,
+                Some(val.clone()),
+            )
+        }),
 
         // String, Null, etc. pass through unchanged
         _ => Ok(val.clone()),
@@ -159,15 +148,24 @@ pub fn generate_recovery_suggestions(
     }
 
     // Pattern: interaction_type validation
-    if error_message.contains("interaction_type") || error_message.contains("Unknown interaction type") {
-        suggestions.push(format!("Valid interaction_type values are: {}", VALID_INTERACTION_TYPES.join(", ")));
+    if error_message.contains("interaction_type")
+        || error_message.contains("Unknown interaction type")
+    {
+        suggestions.push(format!(
+            "Valid interaction_type values are: {}",
+            VALID_INTERACTION_TYPES.join(", ")
+        ));
         suggestions.push("Use lowercase with underscores, not CamelCase or spaces".to_string());
-        suggestions.push("Examples: ✅ 'decision_made' ❌ 'DecisionMade' ❌ 'made decision'".to_string());
+        suggestions
+            .push("Examples: ✅ 'decision_made' ❌ 'DecisionMade' ❌ 'made decision'".to_string());
     }
 
     // Pattern: content field errors
     if error_message.contains("content") && error_message.contains("required") {
-        suggestions.push("For single update mode, provide both 'interaction_type' and 'content' parameters".to_string());
+        suggestions.push(
+            "For single update mode, provide both 'interaction_type' and 'content' parameters"
+                .to_string(),
+        );
         suggestions.push("For bulk updates, use 'updates' array instead".to_string());
         suggestions.push("Content must be an object with key-value pairs".to_string());
     }
@@ -191,27 +189,42 @@ pub fn generate_recovery_suggestions(
 
     // Pattern: Missing required parameters
     if error_message.contains("required") || error_message.contains("missing") {
-        suggestions.push("Check that all required parameters are included in your request".to_string());
-        suggestions.push("Review the tool schema to see which parameters are required vs optional".to_string());
+        suggestions
+            .push("Check that all required parameters are included in your request".to_string());
+        suggestions.push(
+            "Review the tool schema to see which parameters are required vs optional".to_string(),
+        );
     }
 
     // Pattern: Session not found
-    if error_message.contains("Session not found") || error_message.contains("session does not exist") {
-        suggestions.push("Create a new session using the 'session' tool with action='create'".to_string());
+    if error_message.contains("Session not found")
+        || error_message.contains("session does not exist")
+    {
+        suggestions
+            .push("Create a new session using the 'session' tool with action='create'".to_string());
         suggestions.push("Or use semantic_search to find existing sessions".to_string());
     }
 
     // Pattern: Array/structure errors
-    if error_message.contains("updates") && (error_message.contains("array") || error_message.contains("expected length")) {
-        suggestions.push("When using bulk mode, 'updates' must be an array of update objects".to_string());
-        suggestions.push("Each update in the array must have 'interaction_type' and 'content' fields".to_string());
+    if error_message.contains("updates")
+        && (error_message.contains("array") || error_message.contains("expected length"))
+    {
+        suggestions
+            .push("When using bulk mode, 'updates' must be an array of update objects".to_string());
+        suggestions.push(
+            "Each update in the array must have 'interaction_type' and 'content' fields"
+                .to_string(),
+        );
     }
 
     // General fallback suggestions
     if suggestions.is_empty() {
-        suggestions.push("Review the error message and check your parameter types and values".to_string());
-        suggestions.push("Use dry_run=true to validate your request without making changes".to_string());
-        suggestions.push("Check the tool documentation for the correct parameter format".to_string());
+        suggestions
+            .push("Review the error message and check your parameter types and values".to_string());
+        suggestions
+            .push("Use dry_run=true to validate your request without making changes".to_string());
+        suggestions
+            .push("Check the tool documentation for the correct parameter format".to_string());
     }
 
     suggestions
@@ -359,7 +372,10 @@ mod tests {
     fn test_coerce_object_to_json_string() {
         let value = json!({"metadata": {"key": "value"}});
         let result: HashMap<String, String> = coerce_and_validate(value).unwrap();
-        assert_eq!(result.get("metadata"), Some(&"{\"key\":\"value\"}".to_string()));
+        assert_eq!(
+            result.get("metadata"),
+            Some(&"{\"key\":\"value\"}".to_string())
+        );
     }
 
     #[test]
@@ -439,7 +455,11 @@ mod tests {
         );
 
         assert!(suggestions.iter().any(|s| s.contains("decision_made")));
-        assert!(suggestions.iter().any(|s| s.contains("lowercase with underscores")));
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.contains("lowercase with underscores"))
+        );
     }
 
     #[test]
@@ -450,16 +470,17 @@ mod tests {
             Some(&json!(123)),
         );
 
-        assert!(suggestions.iter().any(|s| s.contains("Convert the number 123")));
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.contains("Convert the number 123"))
+        );
     }
 
     #[test]
     fn test_recovery_suggestions_content_required() {
-        let suggestions = generate_recovery_suggestions(
-            "content is required",
-            Some("content"),
-            None,
-        );
+        let suggestions =
+            generate_recovery_suggestions("content is required", Some("content"), None);
 
         assert!(suggestions.iter().any(|s| s.contains("interaction_type")));
         assert!(suggestions.iter().any(|s| s.contains("bulk updates")));
@@ -467,11 +488,7 @@ mod tests {
 
     #[test]
     fn test_recovery_suggestions_session_not_found() {
-        let suggestions = generate_recovery_suggestions(
-            "Session not found",
-            None,
-            None,
-        );
+        let suggestions = generate_recovery_suggestions("Session not found", None, None);
 
         assert!(suggestions.iter().any(|s| s.contains("'session' tool")));
         assert!(suggestions.iter().any(|s| s.contains("semantic_search")));
@@ -497,11 +514,7 @@ mod tests {
 
     #[test]
     fn test_recovery_suggestions_general_fallback() {
-        let suggestions = generate_recovery_suggestions(
-            "Some unknown error",
-            None,
-            None,
-        );
+        let suggestions = generate_recovery_suggestions("Some unknown error", None, None);
 
         assert!(suggestions.iter().any(|s| s.contains("dry_run")));
         assert!(suggestions.iter().any(|s| s.contains("parameter types")));

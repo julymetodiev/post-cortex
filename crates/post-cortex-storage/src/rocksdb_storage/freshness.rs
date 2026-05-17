@@ -20,8 +20,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use prost::Message;
 
-use post_cortex_proto::pb::SourceReference;
 use crate::traits::FreshnessStorage;
+use post_cortex_proto::pb::SourceReference;
 
 use super::RealRocksDBStorage;
 
@@ -58,8 +58,9 @@ impl FreshnessStorage for RealRocksDBStorage {
             let key = format!("source_ref:{}", entry_id);
             match db.get(key.as_bytes())? {
                 Some(data) => {
-                    let reference = SourceReference::decode(&data[..])
-                            .map_err(|e| anyhow::anyhow!("Failed to deserialize source reference: {}", e))?;
+                    let reference = SourceReference::decode(&data[..]).map_err(|e| {
+                        anyhow::anyhow!("Failed to deserialize source reference: {}", e)
+                    })?;
 
                     let is_fresh = reference.content_hash == current_hash;
 
@@ -139,30 +140,32 @@ impl FreshnessStorage for RealRocksDBStorage {
         let db = self.db.clone();
         let query_path = file_path.to_string();
 
-        tokio::task::spawn_blocking(move || -> Result<Vec<post_cortex_proto::pb::SourceReference>> {
-            let mut matches = Vec::new();
-            let iter = db.iterator(rocksdb::IteratorMode::From(
-                b"source_ref:",
-                rocksdb::Direction::Forward,
-            ));
+        tokio::task::spawn_blocking(
+            move || -> Result<Vec<post_cortex_proto::pb::SourceReference>> {
+                let mut matches = Vec::new();
+                let iter = db.iterator(rocksdb::IteratorMode::From(
+                    b"source_ref:",
+                    rocksdb::Direction::Forward,
+                ));
 
-            for item in iter {
-                let (key, value) = item?;
-                let key_str = String::from_utf8_lossy(&key);
+                for item in iter {
+                    let (key, value) = item?;
+                    let key_str = String::from_utf8_lossy(&key);
 
-                if !key_str.starts_with("source_ref:") {
-                    break;
-                }
+                    if !key_str.starts_with("source_ref:") {
+                        break;
+                    }
 
-                if let Ok(reference) = SourceReference::decode(&value[..]) {
-                    if reference.file_path == query_path {
-                        matches.push(reference);
+                    if let Ok(reference) = SourceReference::decode(&value[..]) {
+                        if reference.file_path == query_path {
+                            matches.push(reference);
+                        }
                     }
                 }
-            }
 
-            Ok(matches)
-        })
+                Ok(matches)
+            },
+        )
         .await
         .map_err(|e: tokio::task::JoinError| anyhow::anyhow!("Task join error: {}", e))?
     }
@@ -192,8 +195,9 @@ impl FreshnessStorage for RealRocksDBStorage {
             let key = format!("source_ref:{}", entry_id);
             match db.get(key.as_bytes())? {
                 Some(data) => {
-                    let reference = SourceReference::decode(&data[..])
-                        .map_err(|e| anyhow::anyhow!("Failed to deserialize source reference: {}", e))?;
+                    let reference = SourceReference::decode(&data[..]).map_err(|e| {
+                        anyhow::anyhow!("Failed to deserialize source reference: {}", e)
+                    })?;
 
                     // Semantic freshness: prefer ast_hash comparison when both sides have it
                     let is_fresh = if let (Some(client_ast), Some(scope)) =
@@ -287,100 +291,102 @@ impl FreshnessStorage for RealRocksDBStorage {
     ) -> Result<post_cortex_proto::pb::CascadeInvalidateReport> {
         let db = self.db.clone();
 
-        tokio::task::spawn_blocking(move || -> Result<post_cortex_proto::pb::CascadeInvalidateReport> {
-            use std::collections::{HashSet, VecDeque};
+        tokio::task::spawn_blocking(
+            move || -> Result<post_cortex_proto::pb::CascadeInvalidateReport> {
+                use std::collections::{HashSet, VecDeque};
 
-            let changed_key = format!("{}::{}", changed.file_path, changed.symbol_name);
+                let changed_key = format!("{}::{}", changed.file_path, changed.symbol_name);
 
-            // BFS: find all symbols that depend on the changed symbol (reverse edges)
-            let mut visited = HashSet::new();
-            let mut queue = VecDeque::new();
-            queue.push_back((changed_key.clone(), 0u32));
-            visited.insert(changed_key.clone());
+                // BFS: find all symbols that depend on the changed symbol (reverse edges)
+                let mut visited = HashSet::new();
+                let mut queue = VecDeque::new();
+                queue.push_back((changed_key.clone(), 0u32));
+                visited.insert(changed_key.clone());
 
-            let mut dependent_symbols = Vec::new();
+                let mut dependent_symbols = Vec::new();
 
-            while let Some((sym_key, depth)) = queue.pop_front() {
-                if depth > 0 {
-                    dependent_symbols.push(sym_key.clone());
-                }
-                if depth >= max_depth {
-                    continue;
-                }
-
-                // Find reverse deps: who depends on sym_key?
-                // Search both full key (file::symbol) and name-only (::symbol)
-                let sym_name = sym_key.split("::").last().unwrap_or(&sym_key);
-                let prefixes = [
-                    format!("symbol_rdep:{}|", sym_key),
-                    format!("symbol_rdep:::{}|", sym_name),
-                ];
-
-                for prefix in &prefixes {
-                    let iter = db.iterator(rocksdb::IteratorMode::From(
-                        prefix.as_bytes(),
-                        rocksdb::Direction::Forward,
-                    ));
-
-                    for item in iter {
-                        let (key, _) = item?;
-                        let key_str = String::from_utf8_lossy(&key);
-                        if !key_str.starts_with(prefix.as_str()) {
-                            break;
-                        }
-                        let dep_key = key_str[prefix.len()..].to_string();
-                        if visited.insert(dep_key.clone()) {
-                            queue.push_back((dep_key, depth + 1));
-                        }
+                while let Some((sym_key, depth)) = queue.pop_front() {
+                    if depth > 0 {
+                        dependent_symbols.push(sym_key.clone());
                     }
-                }
-            }
+                    if depth >= max_depth {
+                        continue;
+                    }
 
-            // Invalidate source_ref entries for the changed symbol's file
-            let mut direct_count = 0u32;
-            let mut cascade_count = 0u32;
+                    // Find reverse deps: who depends on sym_key?
+                    // Search both full key (file::symbol) and name-only (::symbol)
+                    let sym_name = sym_key.split("::").last().unwrap_or(&sym_key);
+                    let prefixes = [
+                        format!("symbol_rdep:{}|", sym_key),
+                        format!("symbol_rdep:::{}|", sym_name),
+                    ];
 
-            // Direct: invalidate entries for the changed symbol's file
-            let source_iter = db.iterator(rocksdb::IteratorMode::From(
-                b"source_ref:",
-                rocksdb::Direction::Forward,
-            ));
-            let mut keys_to_delete = Vec::new();
+                    for prefix in &prefixes {
+                        let iter = db.iterator(rocksdb::IteratorMode::From(
+                            prefix.as_bytes(),
+                            rocksdb::Direction::Forward,
+                        ));
 
-            for item in source_iter {
-                let (key, value) = item?;
-                let key_str = String::from_utf8_lossy(&key);
-                if !key_str.starts_with("source_ref:") {
-                    break;
-                }
-
-                if let Ok(reference) = SourceReference::decode(&value[..]) {
-                    if let Some(ref scope) = reference.scope {
-                        use post_cortex_proto::pb::source_scope::Scope;
-                        if let Some(Scope::Function(ref func)) = scope.scope {
-                            let ref_key = format!("{}::{}", reference.file_path, func.name);
-                            if ref_key == changed_key {
-                                keys_to_delete.push(key.to_vec());
-                                direct_count += 1;
-                            } else if dependent_symbols.contains(&ref_key) {
-                                keys_to_delete.push(key.to_vec());
-                                cascade_count += 1;
+                        for item in iter {
+                            let (key, _) = item?;
+                            let key_str = String::from_utf8_lossy(&key);
+                            if !key_str.starts_with(prefix.as_str()) {
+                                break;
+                            }
+                            let dep_key = key_str[prefix.len()..].to_string();
+                            if visited.insert(dep_key.clone()) {
+                                queue.push_back((dep_key, depth + 1));
                             }
                         }
                     }
                 }
-            }
 
-            for key in keys_to_delete {
-                db.delete(&key)?;
-            }
+                // Invalidate source_ref entries for the changed symbol's file
+                let mut direct_count = 0u32;
+                let mut cascade_count = 0u32;
 
-            Ok(post_cortex_proto::pb::CascadeInvalidateReport {
-                direct_invalidations: direct_count,
-                cascade_invalidations: cascade_count,
-                invalidated_symbols: dependent_symbols,
-            })
-        })
+                // Direct: invalidate entries for the changed symbol's file
+                let source_iter = db.iterator(rocksdb::IteratorMode::From(
+                    b"source_ref:",
+                    rocksdb::Direction::Forward,
+                ));
+                let mut keys_to_delete = Vec::new();
+
+                for item in source_iter {
+                    let (key, value) = item?;
+                    let key_str = String::from_utf8_lossy(&key);
+                    if !key_str.starts_with("source_ref:") {
+                        break;
+                    }
+
+                    if let Ok(reference) = SourceReference::decode(&value[..]) {
+                        if let Some(ref scope) = reference.scope {
+                            use post_cortex_proto::pb::source_scope::Scope;
+                            if let Some(Scope::Function(ref func)) = scope.scope {
+                                let ref_key = format!("{}::{}", reference.file_path, func.name);
+                                if ref_key == changed_key {
+                                    keys_to_delete.push(key.to_vec());
+                                    direct_count += 1;
+                                } else if dependent_symbols.contains(&ref_key) {
+                                    keys_to_delete.push(key.to_vec());
+                                    cascade_count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                for key in keys_to_delete {
+                    db.delete(&key)?;
+                }
+
+                Ok(post_cortex_proto::pb::CascadeInvalidateReport {
+                    direct_invalidations: direct_count,
+                    cascade_invalidations: cascade_count,
+                    invalidated_symbols: dependent_symbols,
+                })
+            },
+        )
         .await
         .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
     }

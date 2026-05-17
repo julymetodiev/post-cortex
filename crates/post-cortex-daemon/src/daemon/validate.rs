@@ -318,7 +318,10 @@ pub fn validate_recency_bias(recency_bias: Option<f32>) -> Result<Option<f32>, C
         if !(MIN_RECENCY_BIAS..=MAX_RECENCY_BIAS).contains(&value) {
             return Err(CoercionError::new(
                 "recency_bias out of range",
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "Value must be between 0.0 and 10.0"),
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Value must be between 0.0 and 10.0",
+                ),
                 Some(serde_json::Value::String(value.to_string())),
             )
             .with_parameter_path("recency_bias".to_string())

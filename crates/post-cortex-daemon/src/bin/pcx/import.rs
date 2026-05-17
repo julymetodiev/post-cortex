@@ -6,11 +6,11 @@
 use std::path::Path;
 
 use post_cortex_daemon::daemon::DaemonConfig;
+#[cfg(feature = "surrealdb-storage")]
+use post_cortex_storage::SurrealDBStorage;
 use post_cortex_storage::{
     ImportOptions, RealRocksDBStorage, list_export_sessions, preview_export_file, read_export_file,
 };
-#[cfg(feature = "surrealdb-storage")]
-use post_cortex_storage::SurrealDBStorage;
 use uuid::Uuid;
 
 pub async fn handle_import(
@@ -178,7 +178,8 @@ pub async fn handle_import(
                      Option 2: Stop via launchctl (macOS)\n\
                      $ launchctl unload ~/Library/LaunchAgents/com.juliusml.post-cortex.plist\n\
                      \n\
-                     Then retry the import command.".to_string()
+                     Then retry the import command."
+                .to_string()
         } else {
             format!("Failed to open storage: {}", e)
         }

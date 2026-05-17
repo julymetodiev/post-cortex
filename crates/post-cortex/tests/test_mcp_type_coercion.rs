@@ -24,7 +24,7 @@ struct ContextUpdateItem {
 }
 
 // Import coercion functions
-use post_cortex::daemon::coerce::{coerce_and_validate, CoercionError};
+use post_cortex::daemon::coerce::{CoercionError, coerce_and_validate};
 
 #[test]
 fn test_coerce_session_id_number_to_string() -> Result<()> {
@@ -172,9 +172,17 @@ fn test_coercion_error_structured_format() -> Result<()> {
     let error_data: serde_json::Value = serde_json::from_str(error_msg)?;
 
     assert_eq!(error_data["parameter"], "session_id");
-    assert_eq!(error_data["expectedType"], "UUID string (36 chars with hyphens)");
+    assert_eq!(
+        error_data["expectedType"],
+        "UUID string (36 chars with hyphens)"
+    );
     assert_eq!(error_data["receivedValue"], 12345);
-    assert!(error_data["hint"].as_str().unwrap().contains("Create a session"));
+    assert!(
+        error_data["hint"]
+            .as_str()
+            .unwrap()
+            .contains("Create a session")
+    );
 
     println!("✓ CoercionError produces well-structured MCP errors");
     println!("Error structure:");
@@ -227,12 +235,16 @@ fn test_object_to_json_string_coercion() -> Result<()> {
         Ok(req) => {
             if let Some(content) = req.content {
                 let metadata = content.get("metadata").unwrap();
-                assert!(metadata.contains("{") || metadata.contains("file"),
-                    "Object should be stringified as JSON");
+                assert!(
+                    metadata.contains("{") || metadata.contains("file"),
+                    "Object should be stringified as JSON"
+                );
 
                 let tags = content.get("tags").unwrap();
-                assert!(tags.contains("[") || tags.contains("bugfix"),
-                    "Array should be stringified as JSON");
+                assert!(
+                    tags.contains("[") || tags.contains("bugfix"),
+                    "Array should be stringified as JSON"
+                );
 
                 println!("✓ Object/array → JSON string coercion works");
                 println!("  metadata: {}", metadata);
@@ -312,7 +324,12 @@ fn test_error_messages_are_actionable() -> Result<()> {
 
     let mcp_error2 = error2.to_mcp_error();
     let data2: serde_json::Value = serde_json::from_str(&mcp_error2.message)?;
-    assert!(data2["expectedType"].as_str().unwrap().contains("qa, decision_made"));
+    assert!(
+        data2["expectedType"]
+            .as_str()
+            .unwrap()
+            .contains("qa, decision_made")
+    );
 
     println!("✓ Error messages provide actionable hints for fixing mistakes");
 

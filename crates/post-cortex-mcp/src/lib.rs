@@ -33,9 +33,9 @@
 pub mod error;
 pub use error::{Error, Result as McpResult};
 
-use post_cortex_core::core::context_update::{CodeReference, ContextUpdate, EntityType};
 use anyhow::Result;
 use arc_swap::ArcSwap;
+use post_cortex_core::core::context_update::{CodeReference, ContextUpdate, EntityType};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -45,45 +45,42 @@ use tracing::info;
 use post_cortex_memory::services::MemoryServiceImpl;
 use post_cortex_memory::{ConversationMemorySystem, SystemConfig};
 
-/// Helpers for recording context updates (single and bulk).
-pub mod update_context;
-/// Structured and keyword-based queries over session context.
-pub mod query;
-/// Session lifecycle: create, load, checkpoint, list, search, metadata.
-pub mod session;
-/// Semantic and embedding-powered search across sessions.
-pub mod search;
 /// Analysis, summaries, insights, and session statistics.
 pub mod analysis;
-/// Workspace CRUD and session-to-workspace membership.
-pub mod workspace;
+/// Structured and keyword-based queries over session context.
+pub mod query;
 /// JSON Schema descriptors for every MCP tool.
 pub mod schemas;
+/// Semantic and embedding-powered search across sessions.
+pub mod search;
+/// Session lifecycle: create, load, checkpoint, list, search, metadata.
+pub mod session;
+/// Helpers for recording context updates (single and bulk).
+pub mod update_context;
+/// Workspace CRUD and session-to-workspace membership.
+pub mod workspace;
 
-pub use update_context::{bulk_update_conversation_context, update_conversation_context};
+pub use analysis::{
+    get_entity_importance_analysis, get_entity_network_view, get_key_decisions, get_key_insights,
+    get_session_statistics, get_structured_summary, get_tool_catalog,
+};
 pub use query::{query_conversation_context, query_conversation_context_with_system};
+pub use schemas::get_all_tool_schemas;
+pub use search::{
+    enable_embeddings, find_related_content, get_vectorization_stats, semantic_search,
+    semantic_search_global, semantic_search_session, vectorize_session,
+};
 pub use session::{
-    create_session_checkpoint, create_session_checkpoint_with_system,
-    load_session_checkpoint, load_session_checkpoint_with_system,
-    mark_important, list_sessions_with_storage, list_sessions,
-    load_session_with_system, load_session, search_sessions,
+    create_session_checkpoint, create_session_checkpoint_with_system, list_sessions,
+    list_sessions_with_storage, load_session, load_session_checkpoint,
+    load_session_checkpoint_with_system, load_session_with_system, mark_important, search_sessions,
     update_session_metadata,
 };
-pub use search::{
-    semantic_search, semantic_search_global, semantic_search_session,
-    find_related_content, vectorize_session, get_vectorization_stats,
-    enable_embeddings,
-};
-pub use analysis::{
-    get_structured_summary, get_key_decisions, get_key_insights,
-    get_entity_importance_analysis, get_entity_network_view,
-    get_session_statistics, get_tool_catalog,
-};
+pub use update_context::{bulk_update_conversation_context, update_conversation_context};
 pub use workspace::{
-    create_workspace, get_workspace, list_workspaces,
-    delete_workspace, add_session_to_workspace, remove_session_from_workspace,
+    add_session_to_workspace, create_workspace, delete_workspace, get_workspace, list_workspaces,
+    remove_session_from_workspace,
 };
-pub use schemas::get_all_tool_schemas;
 
 /// Convert a plain string into an `anyhow::Error`.
 fn string_to_anyhow(s: String) -> anyhow::Error {

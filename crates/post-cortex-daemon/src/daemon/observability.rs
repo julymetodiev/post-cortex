@@ -27,9 +27,9 @@
 
 use std::env;
 use tracing::Level;
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
 
 /// Initialise the global tracing subscriber.
 ///
@@ -64,9 +64,7 @@ pub fn init() -> Result<(), TracingInitError> {
     {
         match otel::try_install_global()? {
             Some(()) => tracing::info!("observability: OTLP exporter active"),
-            None => tracing::info!(
-                "observability: fmt-only (OTEL_EXPORTER_OTLP_ENDPOINT not set)"
-            ),
+            None => tracing::info!("observability: fmt-only (OTEL_EXPORTER_OTLP_ENDPOINT not set)"),
         }
     }
 

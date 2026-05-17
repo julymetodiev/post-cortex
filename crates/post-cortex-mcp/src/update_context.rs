@@ -8,7 +8,7 @@
 //! [`UpdateContextRequest`]; validation, persistence, and metadata
 //! shaping all happen inside the service.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use post_cortex_core::core::context_update::{
     CodeReference, EntityData, EntityRelationship, EntityType, RelationType, UpdateContent,
     UpdateType,
@@ -22,9 +22,7 @@ use std::collections::HashMap;
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
-use crate::{
-    get_service, ContextUpdateItem, EntityItem, MCPToolResult, RelationItem,
-};
+use crate::{ContextUpdateItem, EntityItem, MCPToolResult, RelationItem, get_service};
 
 /// Parse the LLM-provided `interaction_type + content` HashMap into a
 /// typed [`UpdateContent`] using the same key-resolution conventions the
@@ -58,7 +56,13 @@ fn build_content(
             let title = resolve_slot(&["question"], &["title"]);
             let description = resolve_slot(&["answer"], &["description"]);
             let details = extract_extras(&["question", "answer", "title", "description"]);
-            (UpdateType::QuestionAnswered, title, description, details, vec![])
+            (
+                UpdateType::QuestionAnswered,
+                title,
+                description,
+                details,
+                vec![],
+            )
         }
         "code_change" => {
             let title = resolve_slot(&["file_path", "file"], &["title", "description"]);
@@ -100,7 +104,13 @@ fn build_content(
             let title = resolve_slot(&["decision"], &["title"]);
             let description = resolve_slot(&["rationale"], &["description"]);
             let details = extract_extras(&["decision", "rationale", "title", "description"]);
-            (UpdateType::DecisionMade, title, description, details, vec![])
+            (
+                UpdateType::DecisionMade,
+                title,
+                description,
+                details,
+                vec![],
+            )
         }
         "requirement_added" => {
             let title = resolve_slot(&["requirement"], &["title"]);
@@ -118,7 +128,13 @@ fn build_content(
             let title = resolve_slot(&["concept"], &["title"]);
             let description = resolve_slot(&["definition"], &["description"]);
             let details = extract_extras(&["concept", "definition", "title", "description"]);
-            (UpdateType::ConceptDefined, title, description, details, vec![])
+            (
+                UpdateType::ConceptDefined,
+                title,
+                description,
+                details,
+                vec![],
+            )
         }
         other => return Err(anyhow!("Unknown interaction type: {}", other)),
     };

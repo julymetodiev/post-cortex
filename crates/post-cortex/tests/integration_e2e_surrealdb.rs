@@ -98,10 +98,10 @@ async fn e2e_update_context_against_remote_surrealdb_and_real_embeddings() {
     //   POST_CORTEX_E2E_SURREAL_PASS=…
     let endpoint = std::env::var("POST_CORTEX_E2E_SURREAL_URL")
         .unwrap_or_else(|_| "ws://truenas.local:8000".to_string());
-    let namespace = std::env::var("POST_CORTEX_E2E_SURREAL_NS")
-        .unwrap_or_else(|_| "post_cortex".to_string());
-    let database = std::env::var("POST_CORTEX_E2E_SURREAL_DB")
-        .unwrap_or_else(|_| "main".to_string());
+    let namespace =
+        std::env::var("POST_CORTEX_E2E_SURREAL_NS").unwrap_or_else(|_| "post_cortex".to_string());
+    let database =
+        std::env::var("POST_CORTEX_E2E_SURREAL_DB").unwrap_or_else(|_| "main".to_string());
     let username = std::env::var("POST_CORTEX_E2E_SURREAL_USER").ok();
     let password = std::env::var("POST_CORTEX_E2E_SURREAL_PASS").ok();
 
@@ -172,10 +172,9 @@ async fn e2e_update_context_against_remote_surrealdb_and_real_embeddings() {
         interaction_type: UpdateType::DecisionMade,
         content: UpdateContent {
             title: "Switch primary embedding to Potion".into(),
-            description:
-                "Решихме да минем на minishlab/potion-multilingual-128M като \
+            description: "Решихме да минем на minishlab/potion-multilingual-128M като \
                  default — по-малък, по-бърз, multilingual."
-                    .into(),
+                .into(),
             details: vec![],
             examples: vec![],
             implications: vec!["Existing HNSW indices must be rebuilt (dim 384 → 256)".into()],

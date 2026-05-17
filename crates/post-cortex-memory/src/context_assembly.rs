@@ -11,9 +11,9 @@
 // Used by Axon to build LLM context that is structurally relevant,
 // not just keyword-similar.
 
+use chrono::Utc;
 use post_cortex_core::core::context_update::{EntityRelationship, RelationType};
 use post_cortex_core::graph::entity_graph::SimpleEntityGraph;
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, info};
@@ -146,9 +146,12 @@ pub fn find_query_entities(query: &str, graph: &SimpleEntityGraph) -> Vec<String
             continue;
         }
 
-        let matched = entity_tokens.iter()
+        let matched = entity_tokens
+            .iter()
             .filter(|et| {
-                if et.len() < 3 { return false; }
+                if et.len() < 3 {
+                    return false;
+                }
                 query_tokens.iter().any(|qt| {
                     // Exact match or prefix match (stem-like):
                     // "stream" matches "streaming", "chat" matches "chat"
@@ -183,9 +186,7 @@ pub fn find_query_entities(query: &str, graph: &SimpleEntityGraph) -> Vec<String
     }
 
     // Sort: exact matches first, then by score descending
-    found.sort_by(|a, b| {
-        b.2.cmp(&a.2).then_with(|| b.1.cmp(&a.1))
-    });
+    found.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| b.1.cmp(&a.1)));
     found.into_iter().map(|(name, _, _)| name).collect()
 }
 
@@ -308,10 +309,7 @@ fn get_relationship_description(from: &str, to: &str, graph: &SimpleEntityGraph)
 
 /// Perform impact analysis: find all entities that depend on any of the query entities.
 /// Traverses DependsOn, RequiredBy, and Implements edges in reverse.
-pub fn analyze_impact(
-    query_entities: &[String],
-    graph: &SimpleEntityGraph,
-) -> Vec<ImpactEntry> {
+pub fn analyze_impact(query_entities: &[String], graph: &SimpleEntityGraph) -> Vec<ImpactEntry> {
     let dependency_types = [
         RelationType::DependsOn,
         RelationType::RequiredBy,
@@ -340,9 +338,7 @@ pub fn analyze_impact(
 
         // For RequiredBy: if A is required by B, and A is a query entity → B is impacted
         // The edge is: from=A, to=B, type=RequiredBy
-        if rel.relation_type == RelationType::RequiredBy
-            && query_set.contains(&rel.from_entity)
-        {
+        if rel.relation_type == RelationType::RequiredBy && query_set.contains(&rel.from_entity) {
             if rel.from_entity == rel.to_entity {
                 continue;
             }
@@ -410,7 +406,10 @@ pub fn assemble_context(
     updates: &[post_cortex_core::core::context_update::ContextUpdate],
     token_budget: usize,
 ) -> AssembledContext {
-    info!("Assembling context for query: '{}' (budget: {} tokens)", query, token_budget);
+    info!(
+        "Assembling context for query: '{}' (budget: {} tokens)",
+        query, token_budget
+    );
 
     // Step 1: Find entities mentioned in the query
     let query_entities = find_query_entities(query, graph);
@@ -438,10 +437,7 @@ pub fn assemble_context(
     let mut scored_items: Vec<ContextItem> = Vec::new();
 
     for update in updates {
-        let text = format!(
-            "{}: {}",
-            update.content.title, update.content.description
-        );
+        let text = format!("{}: {}", update.content.title, update.content.description);
         let tokens = estimate_tokens(&text);
 
         // Base score: recency (newer updates score higher)
@@ -475,10 +471,11 @@ pub fn assemble_context(
 
         // Determine source
         let source = if !matched_entities.is_empty() {
-            if query_entities
-                .iter()
-                .any(|qe| matched_entities.iter().any(|me| me.eq_ignore_ascii_case(qe)))
-            {
+            if query_entities.iter().any(|qe| {
+                matched_entities
+                    .iter()
+                    .any(|me| me.eq_ignore_ascii_case(qe))
+            }) {
                 ContextSource::SemanticMatch
             } else {
                 ContextSource::GraphTraversal {
@@ -500,7 +497,11 @@ pub fn assemble_context(
     }
 
     // Step 5: Greedy knapsack — sort by score, pack within budget
-    scored_items.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored_items.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut selected: Vec<ContextItem> = Vec::new();
     let mut used_tokens = 0;
@@ -566,7 +567,12 @@ pub fn format_for_llm(ctx: &AssembledContext) -> String {
         let impact_lines: Vec<String> = ctx
             .impact
             .iter()
-            .map(|i| format!("  {} depends on {} ({:?})", i.entity, i.depends_on, i.relation_type))
+            .map(|i| {
+                format!(
+                    "  {} depends on {} ({:?})",
+                    i.entity, i.depends_on, i.relation_type
+                )
+            })
             .collect();
         parts.push(format!(
             "Impact analysis — these entities depend on what you're working with:\n{}",
@@ -576,12 +582,11 @@ pub fn format_for_llm(ctx: &AssembledContext) -> String {
 
     // Context items
     if !ctx.items.is_empty() {
-        let content_lines: Vec<String> = ctx
-            .items
-            .iter()
-            .map(|item| item.text.clone())
-            .collect();
-        parts.push(format!("Relevant context:\n{}", content_lines.join("\n---\n")));
+        let content_lines: Vec<String> = ctx.items.iter().map(|item| item.text.clone()).collect();
+        parts.push(format!(
+            "Relevant context:\n{}",
+            content_lines.join("\n---\n")
+        ));
     }
 
     parts.join("\n\n")
@@ -691,7 +696,8 @@ mod tests {
                 update_type: UpdateType::ConceptDefined,
                 content: UpdateContent {
                     title: "gRPC Setup".to_string(),
-                    description: "Added gRPC service using tonic for Axon communication".to_string(),
+                    description: "Added gRPC service using tonic for Axon communication"
+                        .to_string(),
                     details: vec![],
                     examples: vec![],
                     implications: vec![],
@@ -737,7 +743,11 @@ mod tests {
         assert!(result.items[0].text.contains("gRPC"));
 
         // Entity context should include gRPC and neighbors
-        let entity_names: Vec<&str> = result.entity_context.iter().map(|ec| ec.name.as_str()).collect();
+        let entity_names: Vec<&str> = result
+            .entity_context
+            .iter()
+            .map(|ec| ec.name.as_str())
+            .collect();
         assert!(entity_names.contains(&"gRPC"));
 
         // Impact: Axon depends on gRPC
@@ -749,8 +759,7 @@ mod tests {
         // entries were materialised into the context window.
         for item in &result.items {
             assert!(!item.entry_id.is_empty(), "entry_id should be populated");
-            let id = uuid::Uuid::parse_str(&item.entry_id)
-                .expect("entry_id should parse as UUID");
+            let id = uuid::Uuid::parse_str(&item.entry_id).expect("entry_id should parse as UUID");
             assert!(
                 id == grpc_id || id == css_id,
                 "entry_id must match one of the input updates"

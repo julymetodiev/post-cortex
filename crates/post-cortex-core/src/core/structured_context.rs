@@ -49,7 +49,6 @@ pub struct StructuredContext {
 
     /// Flow of the conversation tracking major steps and outcomes.
     pub conversation_flow: Vec<FlowItem>,
-
     // Note: action_items and references fields were removed as dead code.
     // They were never populated anywhere in the codebase.
     // Serde will ignore these fields when deserializing old data.
@@ -146,8 +145,7 @@ impl Default for QuestionItem {
 }
 
 /// Status of a question in the conversation.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[derive(Default)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum QuestionStatus {
     /// Question is open and awaiting answer.
     #[default]
@@ -159,7 +157,6 @@ pub enum QuestionStatus {
     /// Question has been deferred for later.
     Deferred,
 }
-
 
 /// A concept identified during the conversation.
 ///

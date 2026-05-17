@@ -29,8 +29,8 @@ use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use uuid::Uuid;
 
 /// Hot context with lock-free concurrent access
@@ -381,7 +381,6 @@ impl SessionMetadata {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,12 +478,7 @@ mod tests {
             auto_summary_threshold: 100,
             important_keywords: vec![],
         };
-        let meta = SessionMetadata::new(
-            Uuid::new_v4(),
-            Some("test".to_string()),
-            None,
-            prefs,
-        );
+        let meta = SessionMetadata::new(Uuid::new_v4(), Some("test".to_string()), None, prefs);
         assert_eq!(meta.name, Some("test".to_string()));
     }
 }

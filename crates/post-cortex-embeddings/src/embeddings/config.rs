@@ -60,8 +60,7 @@ impl Default for EmbeddingConfig {
 /// on disk, ms-per-text inference, multilingual (Latin / Cyrillic / CJK / …).
 /// The BERT variants are kept for users who need transformer-grade semantic
 /// quality and are willing to pay the GPU/CPU cost.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 pub enum EmbeddingModelType {
     /// Hash-based pseudo-embeddings — kept for backwards compatibility and
     /// as a last-resort fallback. **Does not** produce semantically
@@ -86,7 +85,6 @@ pub enum EmbeddingModelType {
     /// source code (English-leaning). Requires the `model2vec` feature.
     PotionCode,
 }
-
 
 impl EmbeddingModelType {
     /// Get embedding dimension for this model type.

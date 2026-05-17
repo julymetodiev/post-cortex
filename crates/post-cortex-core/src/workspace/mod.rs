@@ -27,8 +27,8 @@ use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 use uuid::Uuid;
 
@@ -46,8 +46,7 @@ pub enum SessionRole {
 }
 
 /// Metadata for a workspace
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WorkspaceMetadata {
     /// Type of project (e.g., "microservices", "monorepo")
     pub project_type: Option<String>,
@@ -58,7 +57,6 @@ pub struct WorkspaceMetadata {
     /// Additional user-defined metadata
     pub custom_data: std::collections::HashMap<String, String>,
 }
-
 
 /// A workspace groups related sessions (e.g., microservices in same ecosystem)
 ///
@@ -84,7 +82,7 @@ pub struct Workspace {
 }
 
 impl Workspace {
-/// Creates a new workspace with the given ID, name, and description
+    /// Creates a new workspace with the given ID, name, and description
     pub fn new(id: Uuid, name: String, description: String) -> Self {
         Self {
             id,
@@ -160,7 +158,8 @@ impl WorkspaceManager {
         let id = Uuid::new_v4();
         let workspace = Workspace::new(id, name.clone(), description);
 
-        self.workspaces.insert(id, Arc::new(ArcSwap::from_pointee(workspace)));
+        self.workspaces
+            .insert(id, Arc::new(ArcSwap::from_pointee(workspace)));
         self.name_index.insert(name, id);
         self.total_workspaces.fetch_add(1, Ordering::Relaxed);
 
@@ -289,13 +288,23 @@ mod tests {
         let session1 = Uuid::new_v4();
         let session2 = Uuid::new_v4();
 
-        manager.add_session_to_workspace(&ws_id, session1, SessionRole::Primary).unwrap();
-        manager.add_session_to_workspace(&ws_id, session2, SessionRole::Related).unwrap();
+        manager
+            .add_session_to_workspace(&ws_id, session1, SessionRole::Primary)
+            .unwrap();
+        manager
+            .add_session_to_workspace(&ws_id, session2, SessionRole::Related)
+            .unwrap();
 
         let workspace = manager.get_workspace(&ws_id).unwrap();
         assert_eq!(workspace.session_ids.len(), 2);
-        assert_eq!(workspace.get_session_role(&session1), Some(SessionRole::Primary));
-        assert_eq!(workspace.get_session_role(&session2), Some(SessionRole::Related));
+        assert_eq!(
+            workspace.get_session_role(&session1),
+            Some(SessionRole::Primary)
+        );
+        assert_eq!(
+            workspace.get_session_role(&session2),
+            Some(SessionRole::Related)
+        );
     }
 
     #[test]
@@ -316,10 +325,8 @@ mod tests {
             .map(|i| {
                 let mgr = manager.clone();
                 tokio::spawn(async move {
-                    let ws_id = mgr.create_workspace(
-                        format!("Workspace {}", i),
-                        format!("Test {}", i),
-                    );
+                    let ws_id =
+                        mgr.create_workspace(format!("Workspace {}", i), format!("Test {}", i));
 
                     // Add 5 sessions to each workspace
                     for _ in 0..5 {

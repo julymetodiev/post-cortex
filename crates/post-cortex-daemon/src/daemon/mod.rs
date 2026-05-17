@@ -23,8 +23,8 @@
 //! Provides lock-free HTTP/SSE transport for MCP JSON-RPC, enabling multiple
 //! Claude Code instances to share a single RocksDB instance.
 
-pub mod config;
 pub mod coerce;
+pub mod config;
 pub mod format_helpers;
 pub mod grpc_service;
 pub mod mcp_service;
@@ -38,7 +38,9 @@ pub mod validate;
 pub use config::DaemonConfig;
 pub use grpc_service::start_grpc_server;
 pub use mcp_service::PostCortexService;
-pub use observability::{TracingInitError, init as init_observability, shutdown as shutdown_observability};
+pub use observability::{
+    TracingInitError, init as init_observability, shutdown as shutdown_observability,
+};
 pub use rmcp_server::start_rmcp_daemon;
 pub use server::DaemonServer;
 pub use sse::SSEBroadcaster;

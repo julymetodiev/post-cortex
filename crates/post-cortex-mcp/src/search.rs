@@ -1,8 +1,8 @@
 //! Semantic and embedding-powered search across sessions.
 
-use post_cortex_core::core::timeout_utils::with_storage_timeout;
-use crate::{get_memory_system, MCPToolResult};
+use crate::{MCPToolResult, get_memory_system};
 use anyhow::Result;
+use post_cortex_core::core::timeout_utils::with_storage_timeout;
 use tracing::{error, info};
 use uuid::Uuid;
 

@@ -47,7 +47,9 @@ pub(super) fn parse_session_role(s: &str) -> SessionRole {
     }
 }
 
-pub(super) fn workspace_to_info(workspace: &post_cortex_core::workspace::Workspace) -> WorkspaceInfo {
+pub(super) fn workspace_to_info(
+    workspace: &post_cortex_core::workspace::Workspace,
+) -> WorkspaceInfo {
     let created_at_unix = workspace
         .created_at
         .duration_since(std::time::UNIX_EPOCH)

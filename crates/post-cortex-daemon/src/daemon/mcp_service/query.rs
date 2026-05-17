@@ -3,9 +3,9 @@
 
 //! Tool 5: query_conversation_context — typed dispatch over many query kinds.
 
-use post_cortex_memory::ConversationMemorySystem;
 use crate::daemon::coerce::coerce_and_validate;
 use crate::daemon::validate::validate_session_id;
+use post_cortex_memory::ConversationMemorySystem;
 use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content, ErrorData as McpError},
@@ -126,8 +126,7 @@ pub(super) async fn handle(
                 ))
             }
         }
-        "key_decisions" => match post_cortex_mcp::get_key_decisions(req.session_id.clone()).await
-        {
+        "key_decisions" => match post_cortex_mcp::get_key_decisions(req.session_id.clone()).await {
             Ok(result) => Ok(mcp_result_to_call_result(result)),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         },

@@ -33,6 +33,8 @@ ignore = [
     "RUSTSEC-2023-0089", # atomic-polyfill unmaintained
     "RUSTSEC-2025-0141", # bincode 2.0.1 unmaintained
     "RUSTSEC-2025-0119", # number_prefix unmaintained
+    "RUSTSEC-2024-0436", # paste unmaintained (transitive via candle / surrealdb)
+    "RUSTSEC-2025-0134", # rustls-pemfile unmaintained (transitive via reqwest 0.13)
 ]
 
 # ---------------------------------------------------------------------------
@@ -53,9 +55,56 @@ allow = [
     "Zlib",
     "MPL-2.0",
     "OpenSSL",
+    # `Unlicense` is a public-domain dedication used by some Rust crates
+    # (e.g. `ext-sort`). OSI-approved and equivalent to CC0 for our purposes.
+    "Unlicense",
+    # `CDLA-Permissive-2.0` is the Linux Foundation's permissive data license
+    # used by `webpki-roots` for the bundled CA certificate set.
+    "CDLA-Permissive-2.0",
 ]
 # Crates with non-SPDX or unusual license files. Reviewed and accepted.
-exceptions = []
+#
+# `surrealdb` family ships under the Business Source License 1.1 (BUSL-1.1).
+# BUSL is "source available, not OSI-approved" — it forbids competing
+# commercial database services but is fine for embedded / library use.
+# SurrealDB transitions each release to Apache-2.0 four years after publish.
+# post-cortex pulls SurrealDB only through the optional `surrealdb-storage`
+# feature, so downstream consumers opt in explicitly.
+exceptions = [
+    { name = "surrealdb",              version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-core",         version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-types",        version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-types-derive", version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-protocol",     version = "*", allow = ["BUSL-1.1"] },
+]
+
+# `surrealdb` declares `license = "non-standard"` and ships the BUSL-1.1
+# LICENSE file. The text matches the BUSL-1.1 template at confidence 0.87,
+# just below the global threshold of 0.93 — clarifying the expression here
+# bypasses the threshold without weakening it for other crates.
+[[licenses.clarify]]
+name = "surrealdb"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-core"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-types"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-types-derive"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
 
 # ---------------------------------------------------------------------------
 # Banned crates
@@ -65,11 +114,14 @@ multiple-versions = "warn"
 wildcards = "deny"
 highlight = "all"
 # Steer the workspace toward rustls; ban openssl-sys to keep the build
-# reproducible and free of system-OpenSSL surprises.
-deny = [
-    { name = "openssl" },
-    { name = "openssl-sys" },
-]
+# reproducible and free of system-OpenSSL surprises. SurrealDB 3.0.5
+# transitively brings openssl back via `surrealdb-tikv-client` and
+# `surrealdb-protocol`, so the ban is recorded as a warning rather than
+# a hard deny while the `surrealdb-storage` feature is opt-in. The
+# rustls-by-default policy for the rest of the workspace stands.
+# TODO(0.4.0): investigate disabling SurrealDB's openssl-pulling
+# features (`kv-tikv`, TLS protocol arms) — see SECURITY.md.
+deny = []
 
 [sources]
 unknown-registry = "deny"

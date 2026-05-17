@@ -1,15 +1,12 @@
 //! Structured and keyword-based queries over session context.
 
+use crate::{ContextQuery, ContextResponse, MCPToolResult, get_memory_system, parse_datetime};
+use anyhow::Result;
 use post_cortex_core::core::context_update::EntityType;
-use post_cortex_memory::ConversationMemorySystem;
+use post_cortex_core::core::context_update::UpdateType;
 use post_cortex_core::core::timeout_utils::with_mcp_timeout;
 use post_cortex_core::session::active_session::ActiveSession;
-use crate::{
-    get_memory_system, parse_datetime, ContextQuery, ContextResponse,
-    MCPToolResult,
-};
-use post_cortex_core::core::context_update::UpdateType;
-use anyhow::Result;
+use post_cortex_memory::ConversationMemorySystem;
 use std::collections::HashMap;
 use tracing::{debug, error};
 use uuid::Uuid;
@@ -135,7 +132,10 @@ pub async fn query_conversation_context_with_system(
                     .get("token_budget")
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(4000);
-                ContextQuery::AssembleContext { query, token_budget }
+                ContextQuery::AssembleContext {
+                    query,
+                    token_budget,
+                }
             }
             _ => {
                 return Ok(MCPToolResult::error(format!(
@@ -273,7 +273,10 @@ pub async fn query_conversation_context(
                 .get("token_budget")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(4000);
-            ContextQuery::AssembleContext { query, token_budget }
+            ContextQuery::AssembleContext {
+                query,
+                token_budget,
+            }
         }
         _ => {
             return Ok(MCPToolResult::error(format!(
@@ -301,14 +304,15 @@ pub(crate) async fn query_context(
 
     match query {
         ContextQuery::GetRecentChanges { since } => {
-            let recent_updates: Vec<post_cortex_core::core::context_update::ContextUpdate> = session
-                .hot_context
-                .iter()
-                .iter()
-                .chain(session.warm_context.iter().map(|c| &c.update))
-                .filter(|u| u.timestamp >= since)
-                .cloned()
-                .collect();
+            let recent_updates: Vec<post_cortex_core::core::context_update::ContextUpdate> =
+                session
+                    .hot_context
+                    .iter()
+                    .iter()
+                    .chain(session.warm_context.iter().map(|c| &c.update))
+                    .filter(|u| u.timestamp >= since)
+                    .cloned()
+                    .collect();
             Ok(ContextResponse::RecentChanges(recent_updates))
         }
         ContextQuery::FindCodeReferences { file_path } => {
@@ -406,23 +410,24 @@ pub(crate) async fn query_context(
             ))
         }
         ContextQuery::SearchUpdates { query } => {
-            let update_results: Vec<post_cortex_core::core::context_update::ContextUpdate> = session
-                .hot_context
-                .iter()
-                .iter()
-                .chain(session.warm_context.iter().map(|c| &c.update))
-                .filter(|u| {
-                    u.content
-                        .title
-                        .to_lowercase()
-                        .contains(&query.to_lowercase())
-                        || u.content
-                            .description
+            let update_results: Vec<post_cortex_core::core::context_update::ContextUpdate> =
+                session
+                    .hot_context
+                    .iter()
+                    .iter()
+                    .chain(session.warm_context.iter().map(|c| &c.update))
+                    .filter(|u| {
+                        u.content
+                            .title
                             .to_lowercase()
                             .contains(&query.to_lowercase())
-                })
-                .cloned()
-                .collect();
+                            || u.content
+                                .description
+                                .to_lowercase()
+                                .contains(&query.to_lowercase())
+                    })
+                    .cloned()
+                    .collect();
             Ok(ContextResponse::SearchResults(update_results))
         }
         ContextQuery::GetDecisions { since: _ } => {
@@ -446,10 +451,16 @@ pub(crate) async fn query_context(
                 .collect();
             Ok(ContextResponse::ChangeHistory(changes))
         }
-        ContextQuery::AssembleContext { query, token_budget } => {
+        ContextQuery::AssembleContext {
+            query,
+            token_budget,
+        } => {
             use post_cortex_memory::context_assembly;
 
-            let updates: Vec<_> = session.hot_context.iter().iter()
+            let updates: Vec<_> = session
+                .hot_context
+                .iter()
+                .iter()
                 .chain(session.warm_context.iter().map(|c| &c.update))
                 .cloned()
                 .collect();

@@ -20,9 +20,9 @@ use std::collections::{BTreeMap, HashMap};
 use tracing::debug;
 use uuid::Uuid;
 
+use crate::traits::GraphStorage;
 use post_cortex_core::core::context_update::{EntityData, EntityRelationship, RelationType};
 use post_cortex_core::graph::entity_graph::EntityNetwork;
-use crate::traits::GraphStorage;
 
 use super::RealRocksDBStorage;
 use super::types::{StoredEntity, StoredRelationship};
@@ -202,10 +202,8 @@ impl RealRocksDBStorage {
             }
 
             for rel in &relationships {
-                let rel_type: RelationType = rel
-                    .relation_type
-                    .parse()
-                    .unwrap_or(RelationType::RelatedTo);
+                let rel_type: RelationType =
+                    rel.relation_type.parse().unwrap_or(RelationType::RelatedTo);
                 let key = Self::relationship_key(
                     rel.session_id,
                     &rel.from_entity,

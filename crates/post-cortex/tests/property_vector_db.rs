@@ -461,7 +461,9 @@ mod pq_tests {
                 "test-source".to_string(),
                 "qa".to_string(),
             );
-            db_no_pq.add_vector(vector.clone(), metadata.clone()).unwrap();
+            db_no_pq
+                .add_vector(vector.clone(), metadata.clone())
+                .unwrap();
             db_pq.add_vector(vector, metadata).unwrap();
         }
 
@@ -471,7 +473,10 @@ mod pq_tests {
 
         // PQ codes are 8 bytes (8 subvectors × 1 byte) vs 1536 bytes (384 floats × 4 bytes)
         // Actual savings depend on whether we keep original vectors
-        println!("Memory without PQ: {} bytes", stats_no_pq.memory_usage_bytes);
+        println!(
+            "Memory without PQ: {} bytes",
+            stats_no_pq.memory_usage_bytes
+        );
         println!("Memory with PQ: {} bytes", stats_pq.memory_usage_bytes);
 
         // Both should have 100 vectors
@@ -669,7 +674,8 @@ mod concurrent_tests {
 
         // Verify final count
         let stats = db.get_stats();
-        let expected = num_threads * operations_per_thread - num_threads * (operations_per_thread / 2);
+        let expected =
+            num_threads * operations_per_thread - num_threads * (operations_per_thread / 2);
         assert_eq!(stats.total_vectors, expected);
     }
 }
@@ -730,7 +736,10 @@ mod vector_db_fix_tests {
         // Verify search still works (entry point is valid)
         let query = vec![0.5f32; dim];
         let results = db.search(&query, 10).unwrap();
-        assert!(!results.is_empty(), "Search should return results if entry point is valid");
+        assert!(
+            !results.is_empty(),
+            "Search should return results if entry point is valid"
+        );
 
         // Verify results are properly ordered
         for i in 0..results.len().saturating_sub(1) {
@@ -962,7 +971,10 @@ mod vector_db_fix_tests {
         // Verify database is still functional
         let query = vec![0.5f32; dim];
         let results = db.search(&query, 10).unwrap();
-        assert!(!results.is_empty(), "Search should work after concurrent build_index");
+        assert!(
+            !results.is_empty(),
+            "Search should work after concurrent build_index"
+        );
     }
 }
 
@@ -1006,7 +1018,9 @@ mod search_mode_tests {
             .collect::<Vec<f32>>();
 
         // Exact search (linear scan)
-        let exact_results = db.search_with_mode(&query, 10, SearchMode::Exact, None).unwrap();
+        let exact_results = db
+            .search_with_mode(&query, 10, SearchMode::Exact, None)
+            .unwrap();
 
         // Approximate search (HNSW)
         let approx_results = db
@@ -1028,7 +1042,10 @@ mod search_mode_tests {
 
         println!("Exact top similarity: {}", exact_results[0].similarity);
         println!("Approx top similarity: {}", approx_results[0].similarity);
-        println!("Balanced top similarity: {}", balanced_results[0].similarity);
+        println!(
+            "Balanced top similarity: {}",
+            balanced_results[0].similarity
+        );
     }
 
     #[test]
@@ -1111,9 +1128,15 @@ mod search_mode_tests {
         let query = vec![0.5f32; dim];
 
         // Run exact search multiple times - should always give same results
-        let results1 = db.search_with_mode(&query, 5, SearchMode::Exact, None).unwrap();
-        let results2 = db.search_with_mode(&query, 5, SearchMode::Exact, None).unwrap();
-        let results3 = db.search_with_mode(&query, 5, SearchMode::Exact, None).unwrap();
+        let results1 = db
+            .search_with_mode(&query, 5, SearchMode::Exact, None)
+            .unwrap();
+        let results2 = db
+            .search_with_mode(&query, 5, SearchMode::Exact, None)
+            .unwrap();
+        let results3 = db
+            .search_with_mode(&query, 5, SearchMode::Exact, None)
+            .unwrap();
 
         assert_eq!(results1.len(), results2.len());
         assert_eq!(results2.len(), results3.len());
@@ -1155,7 +1178,9 @@ mod search_mode_tests {
 
         // Benchmark different modes
         let start = std::time::Instant::now();
-        let exact_results = db.search_with_mode(&query, 10, SearchMode::Exact, None).unwrap();
+        let exact_results = db
+            .search_with_mode(&query, 10, SearchMode::Exact, None)
+            .unwrap();
         let exact_time = start.elapsed();
 
         let start = std::time::Instant::now();

@@ -272,7 +272,7 @@ async fn test_potion_multilingual_live_load_and_encode() {
     let texts = vec![
         "Hello, world!".to_string(),
         "Здравей, свят!".to_string(), // Cyrillic — multilingual sanity check
-        "こんにちは世界".to_string(),     // CJK
+        "こんにちは世界".to_string(), // CJK
     ];
     let embeddings = backend
         .process_batch(texts.clone())

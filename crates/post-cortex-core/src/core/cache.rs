@@ -250,10 +250,7 @@ where
             let hit_rate = hits as f64 / total_requests as f64;
             self.hit_rate.store(hit_rate, Ordering::Relaxed);
 
-            debug!(
-                "{} Cache: HIT (access_count: {})",
-                self.name, access_count
-            );
+            debug!("{} Cache: HIT (access_count: {})", self.name, access_count);
             Some(value)
         } else {
             // Cache miss
@@ -767,8 +764,7 @@ pub struct CacheManagerSummary {
 }
 
 // Global cache manager
-static GLOBAL_CACHE_MANAGER: std::sync::OnceLock<CacheManager> =
-    std::sync::OnceLock::new();
+static GLOBAL_CACHE_MANAGER: std::sync::OnceLock<CacheManager> = std::sync::OnceLock::new();
 
 /// Initializes the global cache manager (idempotent)
 pub fn init_global_cache_manager() {

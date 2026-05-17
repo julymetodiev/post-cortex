@@ -26,15 +26,15 @@
 //! - Compression (none, gzip, zstd)
 //! - Versioned format for forward compatibility
 
-use post_cortex_core::core::context_update::ContextUpdate;
-use post_cortex_core::session::active_session::ActiveSession;
 use crate::rocksdb_storage::{RealRocksDBStorage, SessionCheckpoint, StoredWorkspace};
-use post_cortex_core::workspace::SessionRole;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use flate2::Compression as GzCompression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use flate2::Compression as GzCompression;
+use post_cortex_core::core::context_update::ContextUpdate;
+use post_cortex_core::session::active_session::ActiveSession;
+use post_cortex_core::workspace::SessionRole;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
@@ -348,7 +348,10 @@ impl RealRocksDBStorage {
         // Export all workspaces
         let workspaces = self.list_workspaces().await?;
         info!("Exporting {} workspaces", workspaces.len());
-        export.workspaces = workspaces.into_iter().map(ExportedWorkspace::from).collect();
+        export.workspaces = workspaces
+            .into_iter()
+            .map(ExportedWorkspace::from)
+            .collect();
 
         // Export checkpoints if requested
         if options.include_checkpoints {
@@ -373,7 +376,10 @@ impl RealRocksDBStorage {
         session_ids: Vec<Uuid>,
         options: &ExportOptions,
     ) -> Result<ExportData> {
-        info!("Starting selective export of {} sessions", session_ids.len());
+        info!(
+            "Starting selective export of {} sessions",
+            session_ids.len()
+        );
 
         let mut export = ExportData::new(
             ExportType::SelectiveSessions {
@@ -420,7 +426,9 @@ impl RealRocksDBStorage {
             .ok_or_else(|| anyhow::anyhow!("Workspace {} not found", workspace_id))?;
 
         // Export the workspace
-        export.workspaces.push(ExportedWorkspace::from(workspace.clone()));
+        export
+            .workspaces
+            .push(ExportedWorkspace::from(workspace.clone()));
 
         // Export all sessions in the workspace
         for (session_id, _role) in &workspace.sessions {
@@ -646,7 +654,10 @@ pub fn write_export_file(
         options.compression
     };
 
-    info!("Writing export to {:?} with {:?} compression", path, compression);
+    info!(
+        "Writing export to {:?} with {:?} compression",
+        path, compression
+    );
 
     let json_data = if options.pretty && compression == CompressionType::None {
         serde_json::to_vec_pretty(data)?
@@ -694,7 +705,10 @@ pub fn write_export_file(
 /// Read export data from a file with automatic decompression
 pub fn read_export_file(path: &Path) -> Result<ExportData> {
     let compression = CompressionType::from_path(path);
-    info!("Reading export from {:?} with {:?} compression", path, compression);
+    info!(
+        "Reading export from {:?} with {:?} compression",
+        path, compression
+    );
 
     let file = File::open(path).context("Failed to open export file")?;
     let reader = BufReader::new(file);
@@ -720,7 +734,8 @@ pub fn read_export_file(path: &Path) -> Result<ExportData> {
         }
     };
 
-    let export: ExportData = serde_json::from_slice(&json_data).context("Failed to parse export JSON")?;
+    let export: ExportData =
+        serde_json::from_slice(&json_data).context("Failed to parse export JSON")?;
 
     info!(
         "Export read: format_version={}, {} sessions, {} workspaces",
@@ -767,10 +782,7 @@ fn is_version_compatible(version: &str) -> bool {
         .split('.')
         .filter_map(|s| s.parse().ok())
         .collect();
-    let import_parts: Vec<u32> = version
-        .split('.')
-        .filter_map(|s| s.parse().ok())
-        .collect();
+    let import_parts: Vec<u32> = version.split('.').filter_map(|s| s.parse().ok()).collect();
 
     if current_parts.len() < 2 || import_parts.len() < 2 {
         return false;
@@ -858,11 +870,17 @@ mod tests {
             Some("Test Session".to_string()),
             Some("Test description".to_string()),
         );
-        storage.save_session(&session).await.expect("Failed to save session");
+        storage
+            .save_session(&session)
+            .await
+            .expect("Failed to save session");
 
         // Export
         let options = ExportOptions::default();
-        let export = storage.export_full(&options).await.expect("Failed to export");
+        let export = storage
+            .export_full(&options)
+            .await
+            .expect("Failed to export");
 
         assert_eq!(export.sessions.len(), 1);
         assert_eq!(export.sessions[0].session.id(), session.id());

@@ -382,9 +382,7 @@ impl SurrealDBStorage {
     }
 
     /// Export all embeddings from the database
-    async fn export_all_embeddings(
-        &self,
-    ) -> Result<Vec<crate::export_import::ExportedEmbedding>> {
+    async fn export_all_embeddings(&self) -> Result<Vec<crate::export_import::ExportedEmbedding>> {
         use crate::export_import::ExportedEmbedding;
 
         let mut all_embeddings = Vec::new();

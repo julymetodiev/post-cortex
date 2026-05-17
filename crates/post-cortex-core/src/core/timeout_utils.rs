@@ -141,7 +141,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::time::{sleep, Duration};
+    use tokio::time::{Duration, sleep};
 
     #[tokio::test]
     async fn test_successful_operation() {

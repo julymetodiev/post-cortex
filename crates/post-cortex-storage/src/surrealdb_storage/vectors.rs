@@ -21,11 +21,11 @@ use serde::Deserialize;
 use surrealdb::types::SurrealValue;
 use tracing::debug;
 
-use post_cortex_embeddings::{SearchMatch, VectorMetadata};
 use crate::traits::VectorStorage;
+use post_cortex_embeddings::{SearchMatch, VectorMetadata};
 
-use super::SurrealDBStorage;
 use super::MIN_VECTOR_LEN;
+use super::SurrealDBStorage;
 use super::records::{EmbeddingRecord, KnnResult};
 
 #[async_trait]
@@ -282,7 +282,10 @@ impl VectorStorage for SurrealDBStorage {
     }
 
     async fn total_count(&self) -> usize {
-        let result = self.db.query("SELECT count() FROM embedding GROUP ALL").await;
+        let result = self
+            .db
+            .query("SELECT count() FROM embedding GROUP ALL")
+            .await;
 
         if let Ok(mut response) = result {
             #[derive(Deserialize, SurrealValue)]

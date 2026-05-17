@@ -17,10 +17,10 @@ use std::collections::HashMap;
 use tempfile::tempdir;
 use uuid::Uuid;
 
-use post_cortex_core::core::context_update::{EntityData, EntityRelationship, RelationType};
-use post_cortex_embeddings::VectorMetadata;
-use post_cortex_core::session::active_session::ActiveSession;
 use crate::traits::{GraphStorage, VectorStorage};
+use post_cortex_core::core::context_update::{EntityData, EntityRelationship, RelationType};
+use post_cortex_core::session::active_session::ActiveSession;
+use post_cortex_embeddings::VectorMetadata;
 
 #[tokio::test]
 async fn test_rocksdb_session_operations() {

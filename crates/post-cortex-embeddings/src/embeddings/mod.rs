@@ -22,8 +22,8 @@
 
 pub mod backend;
 pub mod backends;
-pub mod config;
 mod concurrency;
+pub mod config;
 pub mod engine;
 mod pool;
 

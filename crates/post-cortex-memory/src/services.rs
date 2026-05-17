@@ -133,8 +133,8 @@ impl PostCortexService for MemoryServiceImpl {
 
         let description = build_description(&req);
         let context_update = build_context_update(&req);
-        let metadata = serde_json::to_value(&context_update)
-            .expect("ContextUpdate serialization cannot fail");
+        let metadata =
+            serde_json::to_value(&context_update).expect("ContextUpdate serialization cannot fail");
         let session_id = req.session_id;
 
         let entry_id_str = self
@@ -426,10 +426,7 @@ fn submit_derived_work(
     }) {
         log_pipeline_submit("embedding", session_id, entry_id, e);
     }
-    if let Err(e) = pipeline.submit_graph(GraphWorkItem::ApplyUpdate {
-        session_id,
-        update,
-    }) {
+    if let Err(e) = pipeline.submit_graph(GraphWorkItem::ApplyUpdate { session_id, update }) {
         log_pipeline_submit("graph", session_id, entry_id, e);
     }
     if let Err(e) = pipeline.submit_summary(SummaryWorkItem { session_id }) {

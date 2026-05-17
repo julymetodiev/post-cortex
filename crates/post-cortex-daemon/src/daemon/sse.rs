@@ -24,9 +24,9 @@
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use uuid::Uuid;
 
 /// SSE event that can be broadcasted to clients

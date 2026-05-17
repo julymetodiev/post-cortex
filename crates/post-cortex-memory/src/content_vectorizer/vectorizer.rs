@@ -17,8 +17,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use tracing::{debug, info, warn};
 
-use post_cortex_embeddings::LocalEmbeddingEngine;
 use crate::query_cache::QueryCache;
+use post_cortex_embeddings::LocalEmbeddingEngine;
 use post_cortex_embeddings::{VectorDB, VectorMetadata};
 
 use super::types::ContentVectorizerConfig;
@@ -135,7 +135,10 @@ impl ContentVectorizer {
         embedding: Vec<f32>,
         metadata: VectorMetadata,
     ) -> bool {
-        match self.vector_db.add_vector(embedding.clone(), metadata.clone()) {
+        match self
+            .vector_db
+            .add_vector(embedding.clone(), metadata.clone())
+        {
             Ok(_) => match self.persist_vector(embedding, metadata.clone()).await {
                 Ok(_) => true,
                 Err(e) => {
@@ -171,7 +174,10 @@ impl ContentVectorizer {
 
         let vectors = storage.get_session_vectors(session_id).await?;
         if vectors.is_empty() {
-            debug!("No vectors returned from storage for session {}", session_id);
+            debug!(
+                "No vectors returned from storage for session {}",
+                session_id
+            );
             return Ok(0);
         }
 
@@ -205,7 +211,10 @@ impl ContentVectorizer {
             return Ok(0);
         }
 
-        info!("Loading {} embeddings from storage into memory", vectors.len());
+        info!(
+            "Loading {} embeddings from storage into memory",
+            vectors.len()
+        );
         let loaded = self.load_vectors_into_db(vectors);
         info!("Successfully loaded {} embeddings into memory", loaded);
         Ok(loaded)

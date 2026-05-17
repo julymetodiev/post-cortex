@@ -111,12 +111,12 @@ impl EmbeddingQueue {
                 self.backlog.fetch_add(1, Ordering::Relaxed);
                 Ok(())
             }
-            Err(mpsc::error::TrySendError::Full(_)) => Err(PipelineError::Backpressure {
-                queue: "embedding",
-            }),
-            Err(mpsc::error::TrySendError::Closed(_)) => Err(PipelineError::WorkerShutdown {
-                queue: "embedding",
-            }),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                Err(PipelineError::Backpressure { queue: "embedding" })
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                Err(PipelineError::WorkerShutdown { queue: "embedding" })
+            }
         }
     }
 }

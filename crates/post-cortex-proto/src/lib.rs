@@ -40,6 +40,4 @@ pub mod pb {
 // `post_cortex_proto::pb::FreshnessEntry`. Matches the names that used to
 // live under `crate::daemon::grpc_service::pb` in the legacy single-crate
 // layout — this is the migration that unblocks the Phase 3 core split.
-pub use pb::{
-    CascadeInvalidateReport, FreshnessEntry, FreshnessStatus, SourceReference, SymbolId,
-};
+pub use pb::{CascadeInvalidateReport, FreshnessEntry, FreshnessStatus, SourceReference, SymbolId};

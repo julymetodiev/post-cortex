@@ -121,14 +121,8 @@ pub struct SemanticQueryEngine {
 
 impl SemanticQueryEngine {
     /// Create a new semantic query engine
-    pub fn new(
-        vectorizer: ContentVectorizer,
-        config: SemanticQueryConfig,
-    ) -> Self {
-        Self {
-            vectorizer,
-            config,
-        }
+    pub fn new(vectorizer: ContentVectorizer, config: SemanticQueryConfig) -> Self {
+        Self { vectorizer, config }
     }
 
     /// Perform semantic search across all sessions
@@ -281,7 +275,12 @@ impl SemanticQueryEngine {
         // Get semantic search results
         let search_results = self
             .vectorizer
-            .semantic_search(topic, self.config.max_related_experiences * 2, None, crate::content_vectorizer::SearchOptions::default())
+            .semantic_search(
+                topic,
+                self.config.max_related_experiences * 2,
+                None,
+                crate::content_vectorizer::SearchOptions::default(),
+            )
             .await?;
 
         let mut related_experiences = Vec::new();
@@ -385,7 +384,8 @@ impl SemanticQueryEngine {
             self.semantic_search_session(session_id, topic, Some(50), None, None)
                 .await?
         } else {
-            self.semantic_search_global(topic, Some(50), None, None).await?
+            self.semantic_search_global(topic, Some(50), None, None)
+                .await?
         };
 
         // Group results by content type and analyze patterns
@@ -456,14 +456,22 @@ impl SemanticQueryEngine {
         for query in &semantic_queries {
             let results = self
                 .vectorizer
-                .semantic_search(query, 5, Some(reference_session_id), crate::content_vectorizer::SearchOptions::default())
+                .semantic_search(
+                    query,
+                    5,
+                    Some(reference_session_id),
+                    crate::content_vectorizer::SearchOptions::default(),
+                )
                 .await
                 .unwrap_or_default();
             all_reference_content.extend(results);
         }
 
         if all_reference_content.is_empty() {
-            debug!("No content found in reference session {}", reference_session_id);
+            debug!(
+                "No content found in reference session {}",
+                reference_session_id
+            );
             return Ok(Vec::new());
         }
 
@@ -478,7 +486,9 @@ impl SemanticQueryEngine {
         let mut session_similarities: HashMap<Uuid, Vec<f32>> = HashMap::new();
 
         for theme in &reference_themes {
-            let similar_results = self.semantic_search_global(theme, Some(50), None, None).await?;
+            let similar_results = self
+                .semantic_search_global(theme, Some(50), None, None)
+                .await?;
 
             for result in similar_results {
                 if result.session_id != reference_session_id {

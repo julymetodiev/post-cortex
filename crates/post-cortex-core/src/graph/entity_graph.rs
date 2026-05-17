@@ -43,12 +43,18 @@ pub struct EdgeData {
 impl EdgeData {
     /// Create new EdgeData with context
     pub fn new(relation_type: RelationType, context: String) -> Self {
-        Self { relation_type, context }
+        Self {
+            relation_type,
+            context,
+        }
     }
 
     /// Create EdgeData from just RelationType (for v1.0.0 compatibility)
     pub fn from_relation_type(relation_type: RelationType) -> Self {
-        Self { relation_type, context: String::new() }
+        Self {
+            relation_type,
+            context: String::new(),
+        }
     }
 }
 
@@ -81,12 +87,14 @@ impl<'de> serde::Deserialize<'de> for EdgeData {
                     match key.as_str() {
                         "relation_type" => relation_type = Some(map.next_value()?),
                         "context" => context = Some(map.next_value()?),
-                        _ => { let _: serde::de::IgnoredAny = map.next_value()?; }
+                        _ => {
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
                     }
                 }
 
-                let relation_type = relation_type
-                    .ok_or_else(|| de::Error::missing_field("relation_type"))?;
+                let relation_type =
+                    relation_type.ok_or_else(|| de::Error::missing_field("relation_type"))?;
 
                 Ok(EdgeData {
                     relation_type,
@@ -99,11 +107,21 @@ impl<'de> serde::Deserialize<'de> for EdgeData {
             where
                 E: de::Error,
             {
-                let relation_type: RelationType = value.parse()
-                    .map_err(|_| de::Error::unknown_variant(value, &[
-                        "RequiredBy", "LeadsTo", "RelatedTo", "ConflictsWith",
-                        "DependsOn", "Implements", "CausedBy", "Solves"
-                    ]))?;
+                let relation_type: RelationType = value.parse().map_err(|_| {
+                    de::Error::unknown_variant(
+                        value,
+                        &[
+                            "RequiredBy",
+                            "LeadsTo",
+                            "RelatedTo",
+                            "ConflictsWith",
+                            "DependsOn",
+                            "Implements",
+                            "CausedBy",
+                            "Solves",
+                        ],
+                    )
+                })?;
                 Ok(EdgeData::from_relation_type(relation_type))
             }
         }
@@ -149,10 +167,7 @@ mod petgraph_serde {
     use super::*;
     use serde::{Deserializer, Serializer};
 
-    pub fn serialize<S>(
-        graph: &DiGraph<String, EdgeData>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(graph: &DiGraph<String, EdgeData>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
@@ -262,7 +277,7 @@ impl Default for SimpleEntityGraph {
 }
 
 impl SimpleEntityGraph {
-/// Creates a new empty entity graph
+    /// Creates a new empty entity graph
     pub fn new() -> Self {
         Self {
             entities: BTreeMap::new(),
@@ -498,7 +513,11 @@ impl SimpleEntityGraph {
         } else {
             // Fallback: case-insensitive lookup (O(n) but rare)
             let entity_lower = entity_name.to_lowercase();
-            match self.entity_to_node.iter().find(|(k, _)| k.to_lowercase() == entity_lower) {
+            match self
+                .entity_to_node
+                .iter()
+                .find(|(k, _)| k.to_lowercase() == entity_lower)
+            {
                 Some((_, &node)) => node,
                 None => return Vec::new(),
             }
@@ -541,7 +560,11 @@ impl SimpleEntityGraph {
         } else {
             // Fallback: case-insensitive lookup (O(n) but rare)
             let entity_lower = entity_name.to_lowercase();
-            match self.entity_to_node.iter().find(|(k, _)| k.to_lowercase() == entity_lower) {
+            match self
+                .entity_to_node
+                .iter()
+                .find(|(k, _)| k.to_lowercase() == entity_lower)
+            {
                 Some((_, &node)) => node,
                 None => return Vec::new(),
             }
@@ -819,7 +842,11 @@ impl SimpleEntityGraph {
                     && network.entities.contains_key(to_name)
                 {
                     let edge_data = edge.weight();
-                    let rel_key = (from_name.clone(), to_name.clone(), edge_data.relation_type.clone());
+                    let rel_key = (
+                        from_name.clone(),
+                        to_name.clone(),
+                        edge_data.relation_type.clone(),
+                    );
                     if seen_relationships.insert(rel_key) {
                         network.relationships.push(EntityRelationship {
                             from_entity: from_name.clone(),
@@ -856,7 +883,11 @@ impl SimpleEntityGraph {
                     && network.entities.contains_key(to_name)
                 {
                     let edge_data = edge.weight();
-                    let rel_key = (from_name.clone(), to_name.clone(), edge_data.relation_type.clone());
+                    let rel_key = (
+                        from_name.clone(),
+                        to_name.clone(),
+                        edge_data.relation_type.clone(),
+                    );
                     if seen_relationships.insert(rel_key) {
                         network.relationships.push(EntityRelationship {
                             from_entity: from_name.clone(),
@@ -932,7 +963,8 @@ impl SimpleEntityGraph {
         let find_node = |name: &str| -> Option<&NodeIndex> {
             self.entity_to_node.get(name).or_else(|| {
                 let lower = name.to_lowercase();
-                self.entity_to_node.iter()
+                self.entity_to_node
+                    .iter()
                     .find(|(k, _)| k.to_lowercase() == lower)
                     .map(|(_, v)| v)
             })
@@ -1602,9 +1634,11 @@ mod tests {
         assert!(RelationType::CausedBy < RelationType::Solves);
 
         // Test that sorting works
-        let mut types = [RelationType::Solves,
+        let mut types = [
+            RelationType::Solves,
             RelationType::RequiredBy,
-            RelationType::LeadsTo];
+            RelationType::LeadsTo,
+        ];
         types.sort();
         assert_eq!(types[0], RelationType::RequiredBy);
         assert_eq!(types[1], RelationType::LeadsTo);

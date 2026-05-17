@@ -36,12 +36,10 @@ async fn test_workspace_create_and_persist() {
             .create_workspace("Test Workspace".to_string(), "Real test".to_string());
 
         // Persist workspace
-        system.save_workspace_metadata(
-            workspace_id,
-            "Test Workspace",
-            "Real test",
-            &[],
-        ).await.unwrap();
+        system
+            .save_workspace_metadata(workspace_id, "Test Workspace", "Real test", &[])
+            .await
+            .unwrap();
 
         // Verify in memory
         let workspace = system.workspace_manager.get_workspace(&workspace_id);
@@ -79,10 +77,9 @@ async fn test_concurrent_workspace_and_session_operations() {
             let sys = system.clone();
             tokio::spawn(async move {
                 // Create workspace
-                let ws_id = sys.workspace_manager.create_workspace(
-                    format!("Workspace {}", i),
-                    format!("Test workspace {}", i),
-                );
+                let ws_id = sys
+                    .workspace_manager
+                    .create_workspace(format!("Workspace {}", i), format!("Test workspace {}", i));
 
                 // Create 3 sessions
                 let session1 = sys
@@ -185,9 +182,10 @@ async fn test_workspace_session_relationships() {
     let (system, _temp_dir) = create_test_system().await;
 
     // Create workspace
-    let ws_id = system
-        .workspace_manager
-        .create_workspace("Microservices".to_string(), "E-commerce platform".to_string());
+    let ws_id = system.workspace_manager.create_workspace(
+        "Microservices".to_string(),
+        "E-commerce platform".to_string(),
+    );
 
     // Create sessions
     let auth_session = system
@@ -263,9 +261,10 @@ async fn test_stress_concurrent_operations_no_deadlock() {
     let (system, _temp_dir) = create_test_system().await;
 
     // Create one workspace
-    let ws_id = system
-        .workspace_manager
-        .create_workspace("Stress Test".to_string(), "High concurrency test".to_string());
+    let ws_id = system.workspace_manager.create_workspace(
+        "Stress Test".to_string(),
+        "High concurrency test".to_string(),
+    );
 
     // Spawn 100 concurrent tasks that add/remove sessions
     let tasks: Vec<_> = (0..100)

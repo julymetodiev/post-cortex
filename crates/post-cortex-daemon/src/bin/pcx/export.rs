@@ -7,11 +7,9 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use post_cortex_daemon::daemon::DaemonConfig;
-use post_cortex_storage::{
-    CompressionType, ExportOptions, RealRocksDBStorage, write_export_file,
-};
 #[cfg(feature = "surrealdb-storage")]
 use post_cortex_storage::SurrealDBStorage;
+use post_cortex_storage::{CompressionType, ExportOptions, RealRocksDBStorage, write_export_file};
 use uuid::Uuid;
 
 async fn export_from_rocksdb(
@@ -36,7 +34,8 @@ async fn export_from_rocksdb(
                      Option 2: Stop via launchctl (macOS)\n\
                      $ launchctl unload ~/Library/LaunchAgents/com.juliusml.post-cortex.plist\n\
                      \n\
-                     Then retry the export command.".to_string()
+                     Then retry the export command."
+                .to_string()
         } else {
             format!("Failed to open storage: {}", e)
         }

@@ -16,8 +16,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use post_cortex_embeddings::EmbeddingConfig;
 use crate::query_cache::QueryCacheConfig;
+use post_cortex_embeddings::EmbeddingConfig;
 use post_cortex_embeddings::VectorDbConfig;
 
 /// Content types for vectorization

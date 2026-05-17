@@ -3,10 +3,10 @@
 
 //! Tool 9: admin — health / vectorize_session / vectorize_stats / create_checkpoint.
 
-use post_cortex_memory::ConversationMemorySystem;
 use crate::daemon::coerce::coerce_and_validate;
 use crate::daemon::validate::validate_session_id;
 use post_cortex_mcp::MCPToolResult;
+use post_cortex_memory::ConversationMemorySystem;
 use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, ErrorData as McpError},
@@ -22,7 +22,9 @@ pub(super) async fn handle(
 ) -> Result<CallToolResult, McpError> {
     let req: AdminRequest = coerce_and_validate(params.0).map_err(|e| {
         e.with_parameter_path("action".to_string())
-            .with_expected_type("one of: health, vectorize_session, vectorize_stats, create_checkpoint")
+            .with_expected_type(
+                "one of: health, vectorize_session, vectorize_stats, create_checkpoint",
+            )
             .to_mcp_error()
     })?;
 
@@ -86,8 +88,7 @@ pub(super) async fn handle(
             {
                 match memory_system.get_vectorization_stats() {
                     Ok(stats) => {
-                        let value =
-                            serde_json::to_value(&stats).unwrap_or(serde_json::json!({}));
+                        let value = serde_json::to_value(&stats).unwrap_or(serde_json::json!({}));
                         Ok(mcp_result_to_call_result(MCPToolResult::success(
                             "Vectorization stats".to_string(),
                             Some(value),

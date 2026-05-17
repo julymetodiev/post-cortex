@@ -3,10 +3,10 @@
 
 //! Tool 8: manage_entity — delete entity / delete_update.
 
-use post_cortex_memory::ConversationMemorySystem;
 use crate::daemon::coerce::{CoercionError, coerce_and_validate};
 use crate::daemon::validate::validate_session_id;
 use post_cortex_mcp::MCPToolResult;
+use post_cortex_memory::ConversationMemorySystem;
 use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, ErrorData as McpError},
@@ -117,7 +117,10 @@ pub(super) async fn handle(
             }
         }
         _ => Err(McpError::invalid_params(
-            format!("Invalid action '{}'. Use: delete | delete_update", req.action),
+            format!(
+                "Invalid action '{}'. Use: delete | delete_update",
+                req.action
+            ),
             None,
         )),
     }

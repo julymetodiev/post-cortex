@@ -18,9 +18,9 @@
 //! rmcp macro can see every `#[tool]` method at once. Tool method bodies are
 //! delegated to per-tool submodules to keep this file readable.
 
-use post_cortex_memory::ConversationMemorySystem;
 use crate::daemon::coerce::CoercionError;
 use post_cortex_mcp::MCPToolResult;
+use post_cortex_memory::ConversationMemorySystem;
 use rmcp::{
     RoleServer, ServerHandler,
     handler::server::router::tool::ToolRouter,

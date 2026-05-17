@@ -63,8 +63,7 @@ impl ConversationMemorySystem {
             match vectorizer.vectorize_latest_update(&session).await {
                 Ok(count) if count > 0 => {
                     let _ = vectorizer.invalidate_session_cache(session_id).await;
-                    storage_actor
-                        .persist_session_and_update_nowait((**session).clone(), vec![]);
+                    storage_actor.persist_session_and_update_nowait((**session).clone(), vec![]);
                     debug!(
                         "Background vectorization: {} update(s) for session {}",
                         count, session_id
@@ -83,7 +82,9 @@ impl ConversationMemorySystem {
 
     /// Lazy-initialize content vectorizer on first use with retry mechanism
     #[cfg(feature = "embeddings")]
-    pub(crate) async fn ensure_vectorizer_initialized(&self) -> Result<Arc<ContentVectorizer>, String> {
+    pub(crate) async fn ensure_vectorizer_initialized(
+        &self,
+    ) -> Result<Arc<ContentVectorizer>, String> {
         // Check if already initialized — fast path, no counter increment
         if let Some(vectorizer) = self.content_vectorizer.get() {
             return Ok(Arc::clone(vectorizer));
@@ -215,9 +216,7 @@ impl ConversationMemorySystem {
             .get_or_try_init(|| async {
                 info!("Lazy-initializing semantic query engine...");
 
-                use crate::semantic_query_engine::{
-                    SemanticQueryConfig, SemanticQueryEngine,
-                };
+                use crate::semantic_query_engine::{SemanticQueryConfig, SemanticQueryEngine};
 
                 let config = SemanticQueryConfig {
                     cross_session_enabled: self
@@ -313,10 +312,8 @@ impl ConversationMemorySystem {
                         }
 
                         // Fire-and-forget persist to save the updated vectorized_update_ids
-                        self.storage_actor.persist_session_and_update_nowait(
-                            (**session).clone(),
-                            vec![],
-                        );
+                        self.storage_actor
+                            .persist_session_and_update_nowait((**session).clone(), vec![]);
                         debug!("Session {} vectorization persist enqueued", session_id);
                     }
 
@@ -717,12 +714,13 @@ impl ConversationMemorySystem {
                     let new_arc = Arc::new(new_session);
                     let prev = session_arc.compare_and_swap(&current, Arc::clone(&new_arc));
                     if Arc::ptr_eq(&prev, &current) {
-                        self.storage_actor.persist_session_and_update_nowait(
-                            (*new_arc).clone(),
-                            vec![],
-                        );
+                        self.storage_actor
+                            .persist_session_and_update_nowait((*new_arc).clone(), vec![]);
                     } else {
-                        warn!("CAS failed during invalidate+rebuild for session {}", session_id);
+                        warn!(
+                            "CAS failed during invalidate+rebuild for session {}",
+                            session_id
+                        );
                     }
                     Ok((entries_invalidated, entities_after))
                 }
@@ -867,8 +865,7 @@ fn enrich_results_with_graph(
 
     // Step 4: prepend insights to first result
     if !graph_insights.is_empty() && !enriched.is_empty() {
-        enriched[0].text_content =
-            format!("{}{}\n---\n", graph_insights, enriched[0].text_content);
+        enriched[0].text_content = format!("{}{}\n---\n", graph_insights, enriched[0].text_content);
     }
 
     enriched

@@ -30,6 +30,18 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # tonic-build / prost-build shell out to `protoc` at build time to
+      # regenerate the gRPC stubs, so every release runner needs the
+      # protobuf compiler before `cargo build` runs. macOS images carry
+      # Homebrew preinstalled; Linux images use apt.
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      - name: Install protoc (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Build pcx binary
         # pcx is shipped by post-cortex-daemon as of the 8-crate workspace
         # refactor; `-p` selects the right member crate to build.

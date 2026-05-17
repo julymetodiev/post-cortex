@@ -48,16 +48,14 @@ pub enum Commands {
     Init,
 
     /// Set up Post-Cortex for a project (interactive)
-    #[command(
-        long_about = "Interactive project setup wizard.\n\n\
+    #[command(long_about = "Interactive project setup wizard.\n\n\
         Creates a session, workspace, and generates .claude/ configuration files\n\
         (CLAUDE.md, settings.json, hooks) with the correct IDs.\n\n\
         EXAMPLES:\n\n\
         Interactive setup:\n\
         $ pcx setup\n\n\
         Non-interactive with defaults:\n\
-        $ pcx setup --name my-project --non-interactive"
-    )]
+        $ pcx setup --name my-project --non-interactive")]
     Setup {
         /// Project name (default: current directory name)
         #[arg(long)]

@@ -3,9 +3,9 @@
 
 //! Tool 2: update_conversation_context — single or bulk updates with dry-run.
 
-use post_cortex_memory::ConversationMemorySystem;
 use crate::daemon::coerce::{CoercionError, coerce_and_validate};
 use crate::daemon::validate::{validate_interaction_type, validate_session_id};
+use post_cortex_memory::ConversationMemorySystem;
 use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content, ErrorData as McpError},

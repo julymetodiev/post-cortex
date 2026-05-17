@@ -3,11 +3,11 @@
 
 //! Tool 6: manage_workspace — create/list/get/delete/add_session/remove_session.
 
-use post_cortex_memory::ConversationMemorySystem;
 use crate::daemon::coerce::{CoercionError, coerce_and_validate};
 use crate::daemon::validate::{
     validate_session_id, validate_session_role, validate_workspace_action, validate_workspace_id,
 };
+use post_cortex_memory::ConversationMemorySystem;
 use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content, ErrorData as McpError},
@@ -53,10 +53,7 @@ pub(super) async fn handle(
             let description = req.description.as_ref().ok_or_else(|| {
                 CoercionError::new(
                     "Missing required parameter",
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "description required",
-                    ),
+                    std::io::Error::new(std::io::ErrorKind::InvalidInput, "description required"),
                     None,
                 )
                 .with_parameter_path("description".to_string())

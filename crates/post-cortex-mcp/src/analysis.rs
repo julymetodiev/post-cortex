@@ -1,8 +1,8 @@
 //! Analysis, summaries, insights, and session statistics.
 
-use post_cortex_core::summary::SummaryGenerator;
-use crate::{get_memory_system, MCPToolResult};
+use crate::{MCPToolResult, get_memory_system};
 use anyhow::Result;
+use post_cortex_core::summary::SummaryGenerator;
 use uuid::Uuid;
 
 /// Generate a structured summary of the session with optional filtering.
@@ -166,7 +166,15 @@ pub async fn get_entity_importance_analysis(
     });
 
     Ok(MCPToolResult::success(
-        format!("Analyzed {} entities (showing {})", total_entities, if truncated { entity_limit } else { after_filter }),
+        format!(
+            "Analyzed {} entities (showing {})",
+            total_entities,
+            if truncated {
+                entity_limit
+            } else {
+                after_filter
+            }
+        ),
         Some(result),
     ))
 }

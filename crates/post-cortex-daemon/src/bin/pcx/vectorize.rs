@@ -5,10 +5,10 @@
 
 #[cfg(feature = "embeddings")]
 use post_cortex_daemon::daemon::DaemonConfig;
-#[cfg(all(feature = "embeddings", feature = "surrealdb-storage"))]
-use post_cortex_storage::StorageBackendType;
 #[cfg(feature = "embeddings")]
 use post_cortex_memory::{ConversationMemorySystem, SystemConfig};
+#[cfg(all(feature = "embeddings", feature = "surrealdb-storage"))]
+use post_cortex_storage::StorageBackendType;
 #[cfg(feature = "embeddings")]
 use tracing::error;
 

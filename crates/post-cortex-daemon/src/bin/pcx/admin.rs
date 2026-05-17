@@ -5,9 +5,9 @@
 //! that need to talk to storage directly when no daemon is running.
 
 use post_cortex_daemon::daemon::DaemonConfig;
+use post_cortex_memory::{ConversationMemorySystem, SystemConfig};
 #[cfg(feature = "surrealdb-storage")]
 use post_cortex_storage::StorageBackendType;
-use post_cortex_memory::{ConversationMemorySystem, SystemConfig};
 
 pub async fn init_admin_system() -> Result<ConversationMemorySystem, String> {
     let daemon_config = DaemonConfig::load();

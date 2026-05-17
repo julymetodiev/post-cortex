@@ -22,9 +22,7 @@
 //! Tests for temporal decay (recency bias) in semantic search
 
 use anyhow::Result;
-use post_cortex_memory::{
-    ConversationMemorySystem, SystemConfig,
-};
+use post_cortex_memory::{ConversationMemorySystem, SystemConfig};
 use serial_test::serial;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -61,7 +59,9 @@ async fn test_recency_bias_zero_has_no_effect() -> Result<()> {
 
     let fixture = TestFixture::with_content(&content).await?;
 
-    let results = fixture.search_with_bias("authentication system", 0.0).await?;
+    let results = fixture
+        .search_with_bias("authentication system", 0.0)
+        .await?;
 
     println!("\nTest: recency_bias=0.0 (should not affect ranking)");
     println!("Found {} results", results.len());
@@ -76,10 +76,7 @@ async fn test_recency_bias_zero_has_no_effect() -> Result<()> {
     // (only based on similarity + importance, not time)
     if results.len() >= 2 {
         let score_diff = (results[0].combined_score - results[1].combined_score).abs();
-        println!(
-            "Score difference between top 2 results: {:.4}",
-            score_diff
-        );
+        println!("Score difference between top 2 results: {:.4}", score_diff);
         // Scores should be relatively close (within 0.4) since time is not factored in
         assert!(
             score_diff < 0.4,
@@ -120,18 +117,31 @@ async fn test_recency_bias_prioritizes_recent_content() -> Result<()> {
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // Search with different recency_bias values
-    let engine: Arc<post_cortex_memory::semantic_query_engine::SemanticQueryEngine> =
-        system.ensure_semantic_engine_initialized().await
+    let engine: Arc<post_cortex_memory::semantic_query_engine::SemanticQueryEngine> = system
+        .ensure_semantic_engine_initialized()
+        .await
         .map_err(|e| anyhow::anyhow!(e))?;
 
     // Use more specific query that should match the content
     let results_no_bias = engine
-        .semantic_search_session(session_id, "JWT tokens authentication", None, None, Some(0.0))
+        .semantic_search_session(
+            session_id,
+            "JWT tokens authentication",
+            None,
+            None,
+            Some(0.0),
+        )
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
 
     let results_with_bias = engine
-        .semantic_search_session(session_id, "JWT tokens authentication", None, None, Some(1.0))
+        .semantic_search_session(
+            session_id,
+            "JWT tokens authentication",
+            None,
+            None,
+            Some(1.0),
+        )
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
 
@@ -153,7 +163,10 @@ async fn test_recency_bias_prioritizes_recent_content() -> Result<()> {
     }
 
     // With same content, both should find it
-    assert!(!results_no_bias.is_empty(), "Should find content without bias");
+    assert!(
+        !results_no_bias.is_empty(),
+        "Should find content without bias"
+    );
     assert!(
         !results_with_bias.is_empty(),
         "Should find content with bias"
@@ -224,19 +237,32 @@ async fn test_recency_bias_multisession() -> Result<()> {
     // Wait for vectorization
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-    let engine: Arc<post_cortex_memory::semantic_query_engine::SemanticQueryEngine> =
-        system.ensure_semantic_engine_initialized().await
+    let engine: Arc<post_cortex_memory::semantic_query_engine::SemanticQueryEngine> = system
+        .ensure_semantic_engine_initialized()
+        .await
         .map_err(|e| anyhow::anyhow!(e))?;
 
     // Search across both sessions with recency bias
     let session_ids = vec![session1, session2];
     let results_no_bias = engine
-        .semantic_search_multisession(&session_ids, "semantic search embeddings", None, None, Some(0.0))
+        .semantic_search_multisession(
+            &session_ids,
+            "semantic search embeddings",
+            None,
+            None,
+            Some(0.0),
+        )
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
 
     let results_with_bias = engine
-        .semantic_search_multisession(&session_ids, "semantic search embeddings", None, None, Some(1.0))
+        .semantic_search_multisession(
+            &session_ids,
+            "semantic search embeddings",
+            None,
+            None,
+            Some(1.0),
+        )
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
 
@@ -245,14 +271,24 @@ async fn test_recency_bias_multisession() -> Result<()> {
     println!("Results WITH bias=1.0: {} items", results_with_bias.len());
 
     // Should find results from both sessions
-    assert_eq!(results_no_bias.len(), 2, "Should find 2 results without bias");
-    assert_eq!(results_with_bias.len(), 2, "Should find 2 results with bias");
+    assert_eq!(
+        results_no_bias.len(),
+        2,
+        "Should find 2 results without bias"
+    );
+    assert_eq!(
+        results_with_bias.len(),
+        2,
+        "Should find 2 results with bias"
+    );
 
     // With high recency bias, session2 (more recent) should have equal or higher score
-    let session1_result = results_with_bias.iter()
+    let session1_result = results_with_bias
+        .iter()
         .find(|r| r.session_id == session1)
         .expect("Should find session1 result");
-    let session2_result = results_with_bias.iter()
+    let session2_result = results_with_bias
+        .iter()
         .find(|r| r.session_id == session2)
         .expect("Should find session2 result");
 
@@ -295,8 +331,9 @@ async fn test_recency_bias_formula_consistency() -> Result<()> {
 
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-    let engine: Arc<post_cortex_memory::semantic_query_engine::SemanticQueryEngine> =
-        system.ensure_semantic_engine_initialized().await
+    let engine: Arc<post_cortex_memory::semantic_query_engine::SemanticQueryEngine> = system
+        .ensure_semantic_engine_initialized()
+        .await
         .map_err(|e| anyhow::anyhow!(e))?;
 
     // Search with different lambda values and verify monotonic behavior
@@ -319,17 +356,16 @@ async fn test_recency_bias_formula_consistency() -> Result<()> {
 
         if !results.is_empty() {
             let score = results[0].combined_score;
-            println!(
-                "  λ={:.1}: combined_score={:.4}",
-                lambda, score
-            );
+            println!("  λ={:.1}: combined_score={:.4}", lambda, score);
 
             // Higher lambda should not increase score for same content
             if let Some(prev) = previous_score {
                 assert!(
                     score <= prev + 0.001, // Allow small floating point errors
                     "Increasing lambda should not increase score. Got λ={:.1} > λ_prev, score={:.4} > prev_score={:.4}",
-                    lambda, score, prev
+                    lambda,
+                    score,
+                    prev
                 );
             }
 
@@ -382,21 +418,16 @@ async fn test_recency_bias_cache_collision() -> Result<()> {
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
     // Ensure semantic engine is initialized
-    let engine: Arc<post_cortex_memory::semantic_query_engine::SemanticQueryEngine> =
-        system.ensure_semantic_engine_initialized().await
+    let engine: Arc<post_cortex_memory::semantic_query_engine::SemanticQueryEngine> = system
+        .ensure_semantic_engine_initialized()
+        .await
         .map_err(|e| anyhow::anyhow!(e))?;
 
     let query = "JWT tokens authentication";
 
     // First search with bias=0.5
     let results_first = engine
-        .semantic_search_session(
-            session_id,
-            query,
-            Some(10),
-            None,
-            Some(0.5),
-        )
+        .semantic_search_session(session_id, query, Some(10), None, Some(0.5))
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
 
@@ -407,7 +438,7 @@ async fn test_recency_bias_cache_collision() -> Result<()> {
             query,
             Some(10),
             None,
-            Some(0.5),  // Same bias - should hit cache
+            Some(0.5), // Same bias - should hit cache
         )
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
@@ -419,22 +450,30 @@ async fn test_recency_bias_cache_collision() -> Result<()> {
             query,
             Some(10),
             None,
-            Some(1.0),  // Different bias - should miss cache and recalculate
+            Some(1.0), // Different bias - should miss cache and recalculate
         )
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
 
     println!("\n=== Test: Cache Collision Prevention ===");
     println!("Search 1 (bias=0.5): {} items", results_first.len());
-    println!("Search 2 (bias=0.5, cached): {} items", results_cached.len());
-    println!("Search 3 (bias=1.0, cache miss): {} items", results_different_bias.len());
+    println!(
+        "Search 2 (bias=0.5, cached): {} items",
+        results_cached.len()
+    );
+    println!(
+        "Search 3 (bias=1.0, cache miss): {} items",
+        results_different_bias.len()
+    );
 
     // Verify: Same bias values produce IDENTICAL results (cache works)
-    let score_first = results_first.first()
+    let score_first = results_first
+        .first()
         .map(|r| r.combined_score)
         .expect("Should find results");
 
-    let score_cached = results_cached.first()
+    let score_cached = results_cached
+        .first()
         .map(|r| r.combined_score)
         .expect("Should find cached results");
 
@@ -452,7 +491,10 @@ async fn test_recency_bias_cache_collision() -> Result<()> {
     // indicates that recency_bias is properly included in the cache key.
     // If it weren't, the second search (with different bias) would incorrectly return
     // cached results from the first search.
-    assert!(!results_different_bias.is_empty(), "Search with different bias should find results");
+    assert!(
+        !results_different_bias.is_empty(),
+        "Search with different bias should find results"
+    );
 
     println!("✓ Searches with different bias values execute successfully");
     println!("✓ Cache key includes recency_bias (no collision bug)");
@@ -480,8 +522,14 @@ async fn test_recency_bias_metrics_shared_across_clones() -> Result<()> {
     let metrics1 = vectorizer1.get_recency_bias_metrics();
     let metrics2 = vectorizer2.get_recency_bias_metrics();
 
-    assert!(metrics1.is_none(), "Initially, no metrics should be available");
-    assert!(metrics2.is_none(), "Initially, no metrics should be available");
+    assert!(
+        metrics1.is_none(),
+        "Initially, no metrics should be available"
+    );
+    assert!(
+        metrics2.is_none(),
+        "Initially, no metrics should be available"
+    );
 
     println!("\nTest: Metrics sharing across clones");
     println!("✓ Both clones start with no metrics");
@@ -508,8 +556,9 @@ async fn test_recency_bias_metrics_shared_across_clones() -> Result<()> {
     // Wait for vectorization
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-    let engine: Arc<post_cortex_memory::semantic_query_engine::SemanticQueryEngine> =
-        system.ensure_semantic_engine_initialized().await
+    let engine: Arc<post_cortex_memory::semantic_query_engine::SemanticQueryEngine> = system
+        .ensure_semantic_engine_initialized()
+        .await
         .map_err(|e| anyhow::anyhow!(e))?;
 
     // Perform search with recency bias to trigger metrics collection

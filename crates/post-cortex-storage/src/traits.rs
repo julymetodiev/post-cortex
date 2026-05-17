@@ -23,17 +23,17 @@
 //! This module defines the core storage traits that allow different backends
 //! (RocksDB, SurrealDB, etc.) to be used interchangeably.
 
-use post_cortex_core::core::context_update::{ContextUpdate, EntityData, EntityRelationship, RelationType};
-use post_cortex_embeddings::{SearchMatch, VectorMetadata};
-use post_cortex_proto::pb::{
-    CascadeInvalidateReport, FreshnessEntry, SourceReference, SymbolId,
+use crate::rocksdb_storage::{SessionCheckpoint, StoredWorkspace};
+use anyhow::Result;
+use async_trait::async_trait;
+use post_cortex_core::core::context_update::{
+    ContextUpdate, EntityData, EntityRelationship, RelationType,
 };
 use post_cortex_core::graph::entity_graph::EntityNetwork;
 use post_cortex_core::session::active_session::ActiveSession;
-use crate::rocksdb_storage::{SessionCheckpoint, StoredWorkspace};
 use post_cortex_core::workspace::SessionRole;
-use anyhow::Result;
-use async_trait::async_trait;
+use post_cortex_embeddings::{SearchMatch, VectorMetadata};
+use post_cortex_proto::pb::{CascadeInvalidateReport, FreshnessEntry, SourceReference, SymbolId};
 use uuid::Uuid;
 
 /// Report returned when checking if sources are still fresh
@@ -321,10 +321,7 @@ pub trait FreshnessStorage: Send + Sync {
     /// are still marked stale (status=1) for the given file.  Called by Axon after
     /// `register_source_batch` to detect symbols that were deleted from the file
     /// (they were marked stale by `invalidate_source` but never re-registered).
-    async fn get_stale_entries_by_source(
-        &self,
-        file_path: &str,
-    ) -> Result<Vec<StaleEntryInfo>>;
+    async fn get_stale_entries_by_source(&self, file_path: &str) -> Result<Vec<StaleEntryInfo>>;
 
     /// Register symbol-level dependencies (e.g., fn foo depends on struct Bar).
     /// Used for cascade invalidation.
@@ -807,10 +804,7 @@ impl FreshnessStorage for StorageBackend {
         }
     }
 
-    async fn get_stale_entries_by_source(
-        &self,
-        file_path: &str,
-    ) -> Result<Vec<StaleEntryInfo>> {
+    async fn get_stale_entries_by_source(&self, file_path: &str) -> Result<Vec<StaleEntryInfo>> {
         match self {
             StorageBackend::RocksDB(storage) => {
                 storage.get_stale_entries_by_source(file_path).await
@@ -920,7 +914,6 @@ pub enum StorageBackendType {
     #[cfg(feature = "surrealdb-storage")]
     SurrealDB,
 }
-
 
 impl StorageBackendType {
     /// Parse storage backend type from string

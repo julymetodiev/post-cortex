@@ -46,8 +46,7 @@ fn bench_cache_search(c: &mut Criterion) {
                         let results = create_test_results();
                         for i in 0..load {
                             let query_text = format!("query {}", i);
-                            let query_vector =
-                                vec![i as f32 * 0.1, i as f32 * 0.2, i as f32 * 0.3];
+                            let query_vector = vec![i as f32 * 0.1, i as f32 * 0.2, i as f32 * 0.3];
                             let _ = cache.cache_results(
                                 query_text,
                                 query_vector,
@@ -61,8 +60,7 @@ fn bench_cache_search(c: &mut Criterion) {
                     |cache| {
                         for j in 0..load {
                             let query_text = format!("query {}", j % load);
-                            let query_vector =
-                                vec![j as f32 * 0.1, j as f32 * 0.2, j as f32 * 0.3];
+                            let query_vector = vec![j as f32 * 0.1, j as f32 * 0.2, j as f32 * 0.3];
                             let params_hash = (j % load) as u64;
                             let hit = cache.search(&query_text, &query_vector, params_hash);
                             black_box(hit);

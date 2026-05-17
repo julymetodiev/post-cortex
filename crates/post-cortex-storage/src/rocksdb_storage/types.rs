@@ -12,12 +12,14 @@
 
 //! Persisted record types and shared constants for the RocksDB backend.
 
-use post_cortex_core::core::context_update::{ContextUpdate, EntityData, EntityRelationship, RelationType};
+use chrono::{DateTime, Utc};
+use post_cortex_core::core::context_update::{
+    ContextUpdate, EntityData, EntityRelationship, RelationType,
+};
 use post_cortex_core::core::structured_context::StructuredContext;
-use post_cortex_embeddings::VectorMetadata;
 use post_cortex_core::session::active_session::{ChangeRecord, CodeReference};
 use post_cortex_core::workspace::SessionRole;
-use chrono::{DateTime, Utc};
+use post_cortex_embeddings::VectorMetadata;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;

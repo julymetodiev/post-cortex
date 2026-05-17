@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use super::SurrealDBStorage;
+use crate::traits::{GraphStorage, Storage};
 use post_cortex_core::core::context_update::{
     ContextUpdate, EntityData, EntityRelationship, EntityType, RelationType, UpdateContent,
     UpdateType,
@@ -22,7 +23,6 @@ use post_cortex_core::core::context_update::{
 use post_cortex_core::core::structured_context::StructuredContext;
 use post_cortex_core::graph::entity_graph::SimpleEntityGraph;
 use post_cortex_core::session::active_session::{ActiveSession, UserPreferences};
-use crate::traits::{GraphStorage, Storage};
 
 /// Compute cosine similarity between two vectors (used in tests)
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {

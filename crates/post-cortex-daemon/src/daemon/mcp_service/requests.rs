@@ -18,12 +18,14 @@ use serde::Deserialize;
 #[derive(Deserialize, JsonSchema, Debug)]
 pub struct AssembleContextRequest {
     /// Optional session UUID; ignored when `workspace_id` is set.
-    #[schemars(description = r#"Session UUID. Required when workspace_id is not provided.
+    #[schemars(
+        description = r#"Session UUID. Required when workspace_id is not provided.
 
 Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
 Note: If both session_id and workspace_id are provided, workspace_id takes precedence
-(context is merged across all sessions in the workspace)."#)]
+(context is merged across all sessions in the workspace)."#
+    )]
     pub session_id: Option<String>,
     /// Optional workspace UUID; takes precedence over `session_id`.
     #[schemars(
@@ -77,19 +79,23 @@ Note: Must be lowercase. Additional actions may be added later."#)]
 Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"#)]
     pub session_id: String,
     /// Entity name for the `delete` action.
-    #[schemars(description = r#"Entity name to operate on (required for action=delete).
+    #[schemars(
+        description = r#"Entity name to operate on (required for action=delete).
 
 Example: "RocksDB"
 
-Note: Names are matched case-insensitively in the entity graph."#)]
+Note: Names are matched case-insensitively in the entity graph."#
+    )]
     pub entity_name: Option<String>,
     /// Context-update ID for the `delete_update` action.
-    #[schemars(description = r#"Context-update id (required for action=delete_update).
+    #[schemars(
+        description = r#"Context-update id (required for action=delete_update).
 
 Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
 Note: This is the `entry_id` returned by `assemble_context` items, or the id of a
-ContextUpdate stored in the session. Use it to remove ghost / mis-shaped writes."#)]
+ContextUpdate stored in the session. Use it to remove ghost / mis-shaped writes."#
+    )]
     pub entry_id: Option<String>,
 }
 
@@ -118,9 +124,11 @@ Examples:
 Note: Must be lowercase."#)]
     pub action: String,
     /// Session UUID for actions that target a specific session.
-    #[schemars(description = r#"Session UUID for vectorize_session and create_checkpoint.
+    #[schemars(
+        description = r#"Session UUID for vectorize_session and create_checkpoint.
 
-Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"#)]
+Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"#
+    )]
     pub session_id: Option<String>,
 }
 
@@ -161,18 +169,22 @@ Examples:
 Note: For update_metadata, only provided fields are changed."#)]
     pub name: Option<String>,
     /// Session description (used by `create` and `update_metadata`).
-    #[schemars(description = r#"Session description (used by create and update_metadata).
+    #[schemars(
+        description = r#"Session description (used by create and update_metadata).
 
 Example: "Working on implementing OAuth2 login flow"
 
-Note: For update_metadata, only provided fields are changed."#)]
+Note: For update_metadata, only provided fields are changed."#
+    )]
     pub description: Option<String>,
     /// Session UUID (required for `load`, `update_metadata`, `delete`).
-    #[schemars(description = r#"Session UUID (required for load, update_metadata, delete).
+    #[schemars(
+        description = r#"Session UUID (required for load, update_metadata, delete).
 
 Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
-Example: "60c598e2-d602-4e07-a328-c458006d48c7""#)]
+Example: "60c598e2-d602-4e07-a328-c458006d48c7""#
+    )]
     pub session_id: Option<String>,
     /// Search query for the `search` action.
     #[schemars(description = r#"Search query for the search action.
@@ -224,21 +236,17 @@ Note: For complex nested data, stringify as JSON first. Do not pass nested objec
     /// Named entities mentioned in this update. Required by the canonical
     /// write path so the entity graph is never silently empty.
     #[serde(default)]
-    #[schemars(
-        description = r#"Named entities mentioned in this update.
+    #[schemars(description = r#"Named entities mentioned in this update.
 
 Each entry: {"name": "<unique name>", "entity_type": "concept|technology|problem|solution|decision|code_component"}.
-Required (must contain at least one entity) so the entity graph captures every write."#
-    )]
+Required (must contain at least one entity) so the entity graph captures every write."#)]
     pub entities: Vec<post_cortex_mcp::EntityItem>,
     /// Relations between the entities listed above.
     #[serde(default)]
-    #[schemars(
-        description = r#"Relations between the entities listed above.
+    #[schemars(description = r#"Relations between the entities listed above.
 
 Each entry: {"from_entity": "<name>", "to_entity": "<name>", "relation_type": "depends_on|implements|caused_by|leads_to|related_to|required_by|conflicts_with|solves", "context": "<short why>"}.
-Required (must contain at least one relation). Both endpoints must appear in the `entities` array; self-relations and dangling references are rejected with InvalidArgument."#
-    )]
+Required (must contain at least one relation). Both endpoints must appear in the `entities` array; self-relations and dangling references are rejected with InvalidArgument."#)]
     pub relations: Vec<post_cortex_mcp::RelationItem>,
     /// Optional code location reference.
     #[schemars(description = r#"Optional code reference for context.
@@ -300,21 +308,17 @@ Note: For complex nested data, stringify as JSON first. Required for single upda
     /// Named entities mentioned in this update (single-update mode).
     /// Required by the canonical write path.
     #[serde(default)]
-    #[schemars(
-        description = r#"Named entities mentioned in this update.
+    #[schemars(description = r#"Named entities mentioned in this update.
 
 Each entry: {"name": "<unique name>", "entity_type": "concept|technology|problem|solution|decision|code_component"}.
-Required (must contain at least one entity) so the entity graph captures every write."#
-    )]
+Required (must contain at least one entity) so the entity graph captures every write."#)]
     pub entities: Vec<post_cortex_mcp::EntityItem>,
     /// Relations between the entities listed above (single-update mode).
     #[serde(default)]
-    #[schemars(
-        description = r#"Relations between the entities listed above.
+    #[schemars(description = r#"Relations between the entities listed above.
 
 Each entry: {"from_entity": "<name>", "to_entity": "<name>", "relation_type": "depends_on|implements|caused_by|leads_to|related_to|required_by|conflicts_with|solves", "context": "<short why>"}.
-Required (must contain at least one relation). Both endpoints must appear in the `entities` array; self-relations and dangling references are rejected with InvalidArgument."#
-    )]
+Required (must contain at least one relation). Both endpoints must appear in the `entities` array; self-relations and dangling references are rejected with InvalidArgument."#)]
     pub relations: Vec<post_cortex_mcp::RelationItem>,
     /// Optional code reference for single-update mode.
     #[schemars(description = r#"Optional code reference for single update.

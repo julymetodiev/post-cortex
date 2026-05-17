@@ -122,6 +122,13 @@ jobs:
   audit:
     name: cargo audit
     runs-on: ubuntu-latest
+    # `rustsec/audit-check` creates a Check Run on each PR to surface
+    # advisories inline. That needs `checks: write` + `contents: read`
+    # — the default `GITHUB_TOKEN` permissions don't include them on
+    # workflows triggered from forks.
+    permissions:
+      checks: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -148,7 +155,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
+      - uses: dtolnay/rust-toolchain@1.90
       - uses: Swatinem/rust-cache@v2
       - name: Install system deps
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler

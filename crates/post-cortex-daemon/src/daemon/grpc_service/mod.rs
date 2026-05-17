@@ -13,8 +13,8 @@
 //! `helpers`.
 
 use post_cortex_core::services::PostCortexService;
-use post_cortex_memory::services::MemoryServiceImpl;
 use post_cortex_memory::ConversationMemorySystem;
+use post_cortex_memory::services::MemoryServiceImpl;
 use post_cortex_storage::rocksdb_storage::SessionCheckpoint;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -278,7 +278,11 @@ impl PostCortex for PcxGrpcService {
         }
         let session_id = parse_uuid(&req.session_id)?;
 
-        match self.memory.delete_entity(session_id, &req.entity_name).await {
+        match self
+            .memory
+            .delete_entity(session_id, &req.entity_name)
+            .await
+        {
             Ok(existed) => Ok(Response::new(DeleteEntityResponse { existed })),
             Err(e) => {
                 error!("gRPC DeleteEntity failed: {}", e);
@@ -505,7 +509,9 @@ impl PostCortex for PcxGrpcService {
                     .memory
                     .workspace_manager
                     .get_workspace(&workspace_id)
-                    .ok_or_else(|| Status::not_found(format!("Workspace {workspace_id} not found")))?;
+                    .ok_or_else(|| {
+                        Status::not_found(format!("Workspace {workspace_id} not found"))
+                    })?;
 
                 let session_ids: Vec<uuid::Uuid> = workspace
                     .get_all_sessions()
@@ -521,14 +527,15 @@ impl PostCortex for PcxGrpcService {
                         .await
                     {
                         Ok(results) => merged.extend(results),
-                        Err(e) => warn!(
-                            "SemanticSearch: session {} search failed: {}",
-                            sid, e
-                        ),
+                        Err(e) => warn!("SemanticSearch: session {} search failed: {}", sid, e),
                     }
                 }
                 // Sort by combined_score descending and cap at max_results
-                merged.sort_by(|a, b| b.combined_score.partial_cmp(&a.combined_score).unwrap_or(std::cmp::Ordering::Equal));
+                merged.sort_by(|a, b| {
+                    b.combined_score
+                        .partial_cmp(&a.combined_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
                 merged.truncate(max_results);
                 merged
             } else if req.session_id.is_empty() {
@@ -698,7 +705,10 @@ impl PostCortex for PcxGrpcService {
         debug!("gRPC GetStructuredSummary: session_id={}", req.session_id);
 
         let session_id = parse_uuid(&req.session_id)?;
-        let session_arc = self.memory.get_session(session_id).await
+        let session_arc = self
+            .memory
+            .get_session(session_id)
+            .await
             .map_err(Status::not_found)?;
         let session = session_arc.load();
 
@@ -724,8 +734,8 @@ impl PostCortex for PcxGrpcService {
         };
 
         let summary = SummaryGenerator::generate_structured_summary_filtered(&session, &options);
-        let text = serde_json::to_string_pretty(&summary)
-            .unwrap_or_else(|_| format!("{summary:?}"));
+        let text =
+            serde_json::to_string_pretty(&summary).unwrap_or_else(|_| format!("{summary:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -738,14 +748,17 @@ impl PostCortex for PcxGrpcService {
         debug!("gRPC GetKeyDecisions: session_id={}", req.session_id);
 
         let session_id = parse_uuid(&req.session_id)?;
-        let session_arc = self.memory.get_session(session_id).await
+        let session_arc = self
+            .memory
+            .get_session(session_id)
+            .await
             .map_err(Status::not_found)?;
         let session = session_arc.load();
 
         use post_cortex_core::summary::SummaryGenerator;
         let decisions = SummaryGenerator::extract_decision_timeline(&session);
-        let text = serde_json::to_string_pretty(&decisions)
-            .unwrap_or_else(|_| format!("{decisions:?}"));
+        let text =
+            serde_json::to_string_pretty(&decisions).unwrap_or_else(|_| format!("{decisions:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -758,14 +771,20 @@ impl PostCortex for PcxGrpcService {
         debug!("gRPC GetKeyInsights: session_id={}", req.session_id);
 
         let session_id = parse_uuid(&req.session_id)?;
-        let session_arc = self.memory.get_session(session_id).await
+        let session_arc = self
+            .memory
+            .get_session(session_id)
+            .await
             .map_err(Status::not_found)?;
         let session = session_arc.load();
 
         use post_cortex_core::summary::SummaryGenerator;
-        let insights = SummaryGenerator::extract_key_insights(&session, req.limit.map(|v| v as usize).unwrap_or(5));
-        let text = serde_json::to_string_pretty(&insights)
-            .unwrap_or_else(|_| format!("{insights:?}"));
+        let insights = SummaryGenerator::extract_key_insights(
+            &session,
+            req.limit.map(|v| v as usize).unwrap_or(5),
+        );
+        let text =
+            serde_json::to_string_pretty(&insights).unwrap_or_else(|_| format!("{insights:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -778,7 +797,10 @@ impl PostCortex for PcxGrpcService {
         debug!("gRPC GetEntityImportance: session_id={}", req.session_id);
 
         let session_id = parse_uuid(&req.session_id)?;
-        let session_arc = self.memory.get_session(session_id).await
+        let session_arc = self
+            .memory
+            .get_session(session_id)
+            .await
             .map_err(Status::not_found)?;
         let session = session_arc.load();
 
@@ -789,8 +811,8 @@ impl PostCortex for PcxGrpcService {
         if let Some(limit) = req.limit {
             analysis.truncate(limit as usize);
         }
-        let text = serde_json::to_string_pretty(&analysis)
-            .unwrap_or_else(|_| format!("{analysis:?}"));
+        let text =
+            serde_json::to_string_pretty(&analysis).unwrap_or_else(|_| format!("{analysis:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -803,7 +825,10 @@ impl PostCortex for PcxGrpcService {
         debug!("gRPC GetEntityNetwork: session_id={}", req.session_id);
 
         let session_id = parse_uuid(&req.session_id)?;
-        let session_arc = self.memory.get_session(session_id).await
+        let session_arc = self
+            .memory
+            .get_session(session_id)
+            .await
             .map_err(Status::not_found)?;
         let session = session_arc.load();
 
@@ -818,8 +843,8 @@ impl PostCortex for PcxGrpcService {
                 }
             }
         };
-        let text = serde_json::to_string_pretty(&network)
-            .unwrap_or_else(|_| format!("{network:?}"));
+        let text =
+            serde_json::to_string_pretty(&network).unwrap_or_else(|_| format!("{network:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -832,14 +857,16 @@ impl PostCortex for PcxGrpcService {
         debug!("gRPC GetSessionStatistics: session_id={}", req.session_id);
 
         let session_id = parse_uuid(&req.session_id)?;
-        let session_arc = self.memory.get_session(session_id).await
+        let session_arc = self
+            .memory
+            .get_session(session_id)
+            .await
             .map_err(Status::not_found)?;
         let session = session_arc.load();
 
         use post_cortex_core::summary::SummaryGenerator;
         let stats = SummaryGenerator::calculate_session_stats(&session);
-        let text = serde_json::to_string_pretty(&stats)
-            .unwrap_or_else(|_| format!("{stats:?}"));
+        let text = serde_json::to_string_pretty(&stats).unwrap_or_else(|_| format!("{stats:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -856,13 +883,22 @@ impl PostCortex for PcxGrpcService {
             req.session_id, req.workspace_id, req.query
         );
 
-        let token_budget = if req.token_budget == 0 { 4000 } else { req.token_budget as usize };
+        let token_budget = if req.token_budget == 0 {
+            4000
+        } else {
+            req.token_budget as usize
+        };
 
-        use post_cortex_memory::context_assembly;
         use post_cortex_core::graph::entity_graph::SimpleEntityGraph;
+        use post_cortex_memory::context_assembly;
 
         // Resolve scope: workspace_id takes precedence over session_id
-        let (updates, graph) = if req.workspace_id.as_deref().map(|s| !s.is_empty()).unwrap_or(false) {
+        let (updates, graph) = if req
+            .workspace_id
+            .as_deref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
+        {
             // Workspace-scoped: merge context from all sessions in the workspace
             let workspace_id = parse_uuid(req.workspace_id.as_deref().unwrap_or(""))?;
             let workspace = self
@@ -878,12 +914,8 @@ impl PostCortex for PcxGrpcService {
                 match self.memory.get_session(ws_session_id).await {
                     Ok(session_arc) => {
                         let session = session_arc.load();
-                        all_updates.extend(
-                            session.hot_context.iter().iter().cloned(),
-                        );
-                        all_updates.extend(
-                            session.warm_context.iter().map(|c| c.update.clone()),
-                        );
+                        all_updates.extend(session.hot_context.iter().iter().cloned());
+                        all_updates.extend(session.warm_context.iter().map(|c| c.update.clone()));
                         merged_graph.merge_from(&session.entity_graph);
                     }
                     Err(e) => {
@@ -899,73 +931,97 @@ impl PostCortex for PcxGrpcService {
         } else {
             // Single-session (existing behaviour)
             let session_id = parse_uuid(&req.session_id)?;
-            let session_arc = self.memory.get_session(session_id).await
+            let session_arc = self
+                .memory
+                .get_session(session_id)
+                .await
                 .map_err(Status::not_found)?;
             let session = session_arc.load();
-            let updates: Vec<_> = session.hot_context.iter().iter()
+            let updates: Vec<_> = session
+                .hot_context
+                .iter()
+                .iter()
                 .chain(session.warm_context.iter().map(|c| &c.update))
                 .cloned()
                 .collect();
             (updates, (*session.entity_graph).clone())
         };
 
-        let assembled = context_assembly::assemble_context(
-            &req.query,
-            &graph,
-            &updates,
-            token_budget,
-        );
+        let assembled =
+            context_assembly::assemble_context(&req.query, &graph, &updates, token_budget);
 
         let formatted_text = context_assembly::format_for_llm(&assembled);
 
         // Convert to proto types
-        let items: Vec<AssembledContextItem> = assembled.items.iter().map(|item| {
-            let (source, via_entity) = match &item.source {
-                context_assembly::ContextSource::SemanticMatch => ("semantic_match".to_string(), String::new()),
-                context_assembly::ContextSource::GraphTraversal { via_entity } => ("graph_traversal".to_string(), via_entity.clone()),
-                context_assembly::ContextSource::RecentUpdate => ("recent_update".to_string(), String::new()),
-            };
-            AssembledContextItem {
-                text: item.text.clone(),
-                score: item.score,
-                source,
-                via_entity,
-                entities: item.entities.clone(),
-                token_estimate: item.token_estimate as u32,
-                entry_id: item.entry_id.clone(),
-            }
-        }).collect();
-
-        let entity_context: Vec<AssembledEntityContext> = assembled.entity_context.iter().map(|ec| {
-            let (relevance, via_entity, via_relation) = match &ec.relevance {
-                context_assembly::EntityRelevance::DirectMention => ("direct_mention".to_string(), String::new(), String::new()),
-                context_assembly::EntityRelevance::GraphNeighbor { via, relation } => ("graph_neighbor".to_string(), via.clone(), relation.clone()),
-            };
-            let relationships: Vec<EntityRelation> = ec.relationships.iter().map(|r| {
-                EntityRelation {
-                    from_entity: r.from_entity.clone(),
-                    to_entity: r.to_entity.clone(),
-                    relation_type: format!("{:?}", r.relation_type),
-                    context: r.context.clone(),
+        let items: Vec<AssembledContextItem> = assembled
+            .items
+            .iter()
+            .map(|item| {
+                let (source, via_entity) = match &item.source {
+                    context_assembly::ContextSource::SemanticMatch => {
+                        ("semantic_match".to_string(), String::new())
+                    }
+                    context_assembly::ContextSource::GraphTraversal { via_entity } => {
+                        ("graph_traversal".to_string(), via_entity.clone())
+                    }
+                    context_assembly::ContextSource::RecentUpdate => {
+                        ("recent_update".to_string(), String::new())
+                    }
+                };
+                AssembledContextItem {
+                    text: item.text.clone(),
+                    score: item.score,
+                    source,
+                    via_entity,
+                    entities: item.entities.clone(),
+                    token_estimate: item.token_estimate as u32,
+                    entry_id: item.entry_id.clone(),
                 }
-            }).collect();
-            AssembledEntityContext {
-                name: ec.name.clone(),
-                relevance,
-                via_entity,
-                via_relation,
-                relationships,
-            }
-        }).collect();
+            })
+            .collect();
 
-        let impact: Vec<pb::ImpactEntry> = assembled.impact.iter().map(|i| {
-            pb::ImpactEntry {
+        let entity_context: Vec<AssembledEntityContext> = assembled
+            .entity_context
+            .iter()
+            .map(|ec| {
+                let (relevance, via_entity, via_relation) = match &ec.relevance {
+                    context_assembly::EntityRelevance::DirectMention => {
+                        ("direct_mention".to_string(), String::new(), String::new())
+                    }
+                    context_assembly::EntityRelevance::GraphNeighbor { via, relation } => {
+                        ("graph_neighbor".to_string(), via.clone(), relation.clone())
+                    }
+                };
+                let relationships: Vec<EntityRelation> = ec
+                    .relationships
+                    .iter()
+                    .map(|r| EntityRelation {
+                        from_entity: r.from_entity.clone(),
+                        to_entity: r.to_entity.clone(),
+                        relation_type: format!("{:?}", r.relation_type),
+                        context: r.context.clone(),
+                    })
+                    .collect();
+                AssembledEntityContext {
+                    name: ec.name.clone(),
+                    relevance,
+                    via_entity,
+                    via_relation,
+                    relationships,
+                }
+            })
+            .collect();
+
+        let impact: Vec<pb::ImpactEntry> = assembled
+            .impact
+            .iter()
+            .map(|i| pb::ImpactEntry {
                 entity: i.entity.clone(),
                 depends_on: i.depends_on.clone(),
                 relation_type: format!("{:?}", i.relation_type),
                 context: i.context.clone(),
-            }
-        }).collect();
+            })
+            .collect();
 
         Ok(Response::new(AssembleContextResponse {
             items,
@@ -1133,7 +1189,6 @@ impl PostCortex for PcxGrpcService {
             success: true,
         }))
     }
-
 
     // --- Source Tracking (Phase 9): delegated to ./freshness.rs ---
 

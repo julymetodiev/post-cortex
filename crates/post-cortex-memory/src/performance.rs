@@ -18,11 +18,11 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 use atomic_float::AtomicF64;
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, bounded};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
 
@@ -447,7 +447,8 @@ impl PerformanceMonitor {
 
         // Sort by impact - handle NaN values safely
         slow_operations.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        error_prone_operations.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        error_prone_operations
+            .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         PerformanceSnapshot {
             session_id: self.session_id.clone(),
@@ -779,8 +780,7 @@ impl Drop for OperationTimer {
 }
 
 // Global performance monitor
-static GLOBAL_MONITOR: std::sync::OnceLock<Arc<PerformanceMonitor>> =
-    std::sync::OnceLock::new();
+static GLOBAL_MONITOR: std::sync::OnceLock<Arc<PerformanceMonitor>> = std::sync::OnceLock::new();
 
 /// Initialize the global performance monitor with an optional session identifier
 pub fn init_monitoring(session_id: Option<String>) {

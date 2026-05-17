@@ -21,9 +21,9 @@
 //! Common test utilities and fixtures
 
 use anyhow::Result;
-use post_cortex_memory::{ConversationMemorySystem, SystemConfig};
 #[cfg(feature = "surrealdb-storage")]
 use post_cortex::storage::traits::StorageBackendType;
+use post_cortex_memory::{ConversationMemorySystem, SystemConfig};
 use std::sync::Arc;
 use tempfile::{TempDir, tempdir};
 use uuid::Uuid;

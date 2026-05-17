@@ -3,12 +3,12 @@
 
 //! Tool 3: semantic_search — session / workspace / global scope.
 
-use post_cortex_memory::ConversationMemorySystem;
 use crate::daemon::coerce::{CoercionError, coerce_and_validate};
 use crate::daemon::validate::{
     validate_limits, validate_recency_bias, validate_scope, validate_session_id,
 };
 use post_cortex_mcp::{MCPToolResult, get_memory_system};
+use post_cortex_memory::ConversationMemorySystem;
 use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, ErrorData as McpError},

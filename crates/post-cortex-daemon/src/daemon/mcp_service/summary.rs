@@ -3,9 +3,9 @@
 
 //! Tool 4: get_structured_summary — full or sectioned summary.
 
-use post_cortex_memory::ConversationMemorySystem;
 use crate::daemon::coerce::coerce_and_validate;
 use crate::daemon::validate::{validate_limits, validate_session_id};
+use post_cortex_memory::ConversationMemorySystem;
 use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content, ErrorData as McpError},
@@ -39,20 +39,18 @@ pub(super) async fn handle(
 
     validate_session_id(&req.session_id).map_err(|e| e.to_mcp_error())?;
 
-    let validated_decisions_limit =
-        validate_limits(req.decisions_limit, 10, 100).map_err(|e| {
-            e.with_parameter_path("decisions_limit".to_string())
-                .to_mcp_error()
-        })?;
+    let validated_decisions_limit = validate_limits(req.decisions_limit, 10, 100).map_err(|e| {
+        e.with_parameter_path("decisions_limit".to_string())
+            .to_mcp_error()
+    })?;
     let validated_entities_limit = validate_limits(req.entities_limit, 20, 200).map_err(|e| {
         e.with_parameter_path("entities_limit".to_string())
             .to_mcp_error()
     })?;
-    let validated_questions_limit =
-        validate_limits(req.questions_limit, 5, 50).map_err(|e| {
-            e.with_parameter_path("questions_limit".to_string())
-                .to_mcp_error()
-        })?;
+    let validated_questions_limit = validate_limits(req.questions_limit, 5, 50).map_err(|e| {
+        e.with_parameter_path("questions_limit".to_string())
+            .to_mcp_error()
+    })?;
     let validated_concepts_limit = validate_limits(req.concepts_limit, 10, 50).map_err(|e| {
         e.with_parameter_path("concepts_limit".to_string())
             .to_mcp_error()

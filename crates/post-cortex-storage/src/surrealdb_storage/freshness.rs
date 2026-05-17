@@ -21,10 +21,10 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use surrealdb::types::SurrealValue;
 
+use crate::traits::FreshnessStorage;
 use post_cortex_proto::pb::{
     CascadeInvalidateReport, FreshnessEntry, FreshnessStatus, SourceReference, SymbolId,
 };
-use crate::traits::FreshnessStorage;
 
 use super::SurrealDBStorage;
 use super::records::{SourceReferenceRecord, SymbolDepRecord, source_record_to_reference};
@@ -167,7 +167,10 @@ impl FreshnessStorage for SurrealDBStorage {
 
         let records: Vec<SourceReferenceRecord> = response.take(0)?;
 
-        let references = records.into_iter().map(source_record_to_reference).collect();
+        let references = records
+            .into_iter()
+            .map(source_record_to_reference)
+            .collect();
 
         Ok(references)
     }
@@ -433,7 +436,7 @@ impl FreshnessStorage for SurrealDBStorage {
         // Mark source_reference entries stale rather than deleting them.
         // This preserves baseline records so freshness checks return Stale (status=1)
         // instead of Unknown (no record), which is what triggers cascade invalidation.
-        
+
         let mut cascade_count = 0u32;
 
         // Direct: mark entries for the changed symbol as stale
@@ -450,8 +453,7 @@ impl FreshnessStorage for SurrealDBStorage {
         // Cascade: mark entries for dependent symbols as stale
         for dep_key in &dependent_symbols {
             if let Some((file, sym)) = dep_key.split_once("::") {
-                let query =
-                    "UPDATE source_reference SET status = 1 WHERE file_path = $file AND symbol_name = $symbol;";
+                let query = "UPDATE source_reference SET status = 1 WHERE file_path = $file AND symbol_name = $symbol;";
                 let mut response = self
                     .db
                     .query(query)

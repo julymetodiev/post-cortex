@@ -137,7 +137,10 @@ impl LocalEmbeddingEngine {
         // that variant; Model2Vec is a legitimate static-embedding
         // backend and silently uses the same direct path.
         if !self.backend.is_bert_based() {
-            if matches!(self.config.model_type, EmbeddingModelType::StaticSimilarityMRL) {
+            if matches!(
+                self.config.model_type,
+                EmbeddingModelType::StaticSimilarityMRL
+            ) {
                 warn!(
                     "Using StaticHashBackend for model_type {:?} — semantic search will NOT \
                      work correctly! Pick PotionMultilingual (default) or a BERT variant.",

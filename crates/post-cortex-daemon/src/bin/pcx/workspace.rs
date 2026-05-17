@@ -3,8 +3,8 @@
 
 //! `pcx workspace` — create / delete / list / attach.
 
-use post_cortex_daemon::daemon::{DaemonConfig, is_daemon_running};
 use post_cortex_core::workspace::SessionRole;
+use post_cortex_daemon::daemon::{DaemonConfig, is_daemon_running};
 use uuid::Uuid;
 
 use super::admin::init_admin_system;

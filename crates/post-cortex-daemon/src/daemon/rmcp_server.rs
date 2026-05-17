@@ -5,7 +5,6 @@
 //!
 //! Provides SSE transport using rmcp library following official shuttle patterns.
 
-use post_cortex_memory::ConversationMemorySystem;
 use crate::daemon::{DaemonConfig, PostCortexService};
 use axum::{
     Json, Router,
@@ -13,6 +12,7 @@ use axum::{
     http::StatusCode,
     routing::{delete, get, post},
 };
+use post_cortex_memory::ConversationMemorySystem;
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
@@ -173,7 +173,9 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
             .map_err(|e| format!("Invalid gRPC address: {}", e))?;
         let grpc_memory = memory_system.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::daemon::grpc_service::start_grpc_server(grpc_memory, grpc_addr).await {
+            if let Err(e) =
+                crate::daemon::grpc_service::start_grpc_server(grpc_memory, grpc_addr).await
+            {
                 error!("gRPC server error: {}", e);
             }
         });

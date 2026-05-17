@@ -10,8 +10,8 @@
 use std::env;
 
 use dialoguer::{Input, Select};
-use post_cortex_daemon::daemon::{DaemonConfig, is_daemon_running};
 use post_cortex_core::workspace::SessionRole;
+use post_cortex_daemon::daemon::{DaemonConfig, is_daemon_running};
 use uuid::Uuid;
 
 use super::admin::init_admin_system;
@@ -52,7 +52,11 @@ pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result
     } else {
         let system = init_admin_system().await?;
         let session_ids = system.list_sessions().await.unwrap_or_default();
-        let workspaces_raw = system.get_storage().list_all_workspaces().await.unwrap_or_default();
+        let workspaces_raw = system
+            .get_storage()
+            .list_all_workspaces()
+            .await
+            .unwrap_or_default();
 
         let mut sessions = Vec::new();
         for id in session_ids {
@@ -144,8 +148,7 @@ pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result
                     .default(project_name.clone())
                     .interact_text()
                     .map_err(|e| format!("Input error: {}", e))?;
-                let (id, name) =
-                    create_workspace_for_setup(&config, use_daemon, &ws_name).await?;
+                let (id, name) = create_workspace_for_setup(&config, use_daemon, &ws_name).await?;
                 workspace_id = id;
                 workspace_name = name;
             }
@@ -174,8 +177,7 @@ pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result
                 .default(project_name.clone())
                 .interact_text()
                 .map_err(|e| format!("Input error: {}", e))?;
-            let (id, name) =
-                create_workspace_for_setup(&config, use_daemon, &ws_name).await?;
+            let (id, name) = create_workspace_for_setup(&config, use_daemon, &ws_name).await?;
             workspace_id = id;
             workspace_name = name;
         }
@@ -204,10 +206,8 @@ pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result
             .attach_session(&workspace_id, &session_id, "primary")
             .await?;
     } else {
-        let ws_uuid =
-            Uuid::parse_str(&workspace_id).map_err(|e| format!("Invalid UUID: {}", e))?;
-        let sess_uuid =
-            Uuid::parse_str(&session_id).map_err(|e| format!("Invalid UUID: {}", e))?;
+        let ws_uuid = Uuid::parse_str(&workspace_id).map_err(|e| format!("Invalid UUID: {}", e))?;
+        let sess_uuid = Uuid::parse_str(&session_id).map_err(|e| format!("Invalid UUID: {}", e))?;
         let system = init_admin_system().await?;
         system
             .get_storage()
@@ -265,9 +265,7 @@ pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result
                 } else {
                     // Parse PCX hooks and merge into existing
                     let pcx_settings = generate_settings_json(&session_id);
-                    if let Ok(pcx_json) =
-                        serde_json::from_str::<serde_json::Value>(&pcx_settings)
-                    {
+                    if let Ok(pcx_json) = serde_json::from_str::<serde_json::Value>(&pcx_settings) {
                         if let Some(hooks) = pcx_json.get("hooks") {
                             existing_json
                                 .as_object_mut()
@@ -348,11 +346,17 @@ pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result
     for (rel_path, content) in agent_files {
         let target = agents_dir.join(rel_path);
         if target.exists() {
-            println!("  ~/.claude/agents/post-cortex-agents/{} already exists, skipping", rel_path);
+            println!(
+                "  ~/.claude/agents/post-cortex-agents/{} already exists, skipping",
+                rel_path
+            );
         } else {
             std::fs::write(&target, content)
                 .map_err(|e| format!("Failed to write {}: {}", rel_path, e))?;
-            println!("  Created: ~/.claude/agents/post-cortex-agents/{}", rel_path);
+            println!(
+                "  Created: ~/.claude/agents/post-cortex-agents/{}",
+                rel_path
+            );
         }
     }
 
@@ -403,10 +407,7 @@ async fn create_workspace_for_setup(
     if use_daemon {
         let client = DaemonClient::new(config);
         let ws = client
-            .create_workspace(
-                name.to_string(),
-                format!("{} workspace", name),
-            )
+            .create_workspace(name.to_string(), format!("{} workspace", name))
             .await?;
         Ok((ws.id, ws.name))
     } else {

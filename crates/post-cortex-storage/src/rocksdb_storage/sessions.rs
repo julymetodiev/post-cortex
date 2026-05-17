@@ -20,9 +20,9 @@ use rocksdb::WriteBatch;
 use tracing::{debug, info};
 use uuid::Uuid;
 
+use crate::traits::Storage;
 use post_cortex_core::core::context_update::ContextUpdate;
 use post_cortex_core::session::active_session::ActiveSession;
-use crate::traits::Storage;
 use post_cortex_core::workspace::SessionRole;
 
 use super::RealRocksDBStorage;

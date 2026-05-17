@@ -9,10 +9,8 @@ use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use crate::performance::PerformanceMonitor;
-use post_cortex_proto::pb::{
-    CascadeInvalidateReport, FreshnessEntry, SourceReference, SymbolId,
-};
 use post_cortex_core::session::active_session::ActiveSession;
+use post_cortex_proto::pb::{CascadeInvalidateReport, FreshnessEntry, SourceReference, SymbolId};
 
 use super::config::OperationType;
 
@@ -91,7 +89,9 @@ pub enum StorageMessage {
         /// ID of the checkpoint to load.
         checkpoint_id: Uuid,
         /// One-shot channel for returning the checkpoint.
-        response_tx: oneshot::Sender<Result<post_cortex_storage::rocksdb_storage::SessionCheckpoint, String>>,
+        response_tx: oneshot::Sender<
+            Result<post_cortex_storage::rocksdb_storage::SessionCheckpoint, String>,
+        >,
     },
     /// Save or update workspace metadata.
     SaveWorkspaceMetadata {
@@ -136,7 +136,9 @@ pub enum StorageMessage {
     /// List all stored workspaces.
     ListAllWorkspaces {
         /// One-shot channel for returning the workspace list.
-        response_tx: oneshot::Sender<Result<Vec<post_cortex_storage::rocksdb_storage::StoredWorkspace>, String>>,
+        response_tx: oneshot::Sender<
+            Result<Vec<post_cortex_storage::rocksdb_storage::StoredWorkspace>, String>,
+        >,
     },
     /// Batch-save multiple context updates for a session.
     BatchSaveUpdates {
@@ -217,7 +219,8 @@ pub enum StorageMessage {
         /// Source file path to query.
         file_path: String,
         /// One-shot channel for returning the stale entries.
-        response_tx: oneshot::Sender<Result<Vec<post_cortex_storage::traits::StaleEntryInfo>, String>>,
+        response_tx:
+            oneshot::Sender<Result<Vec<post_cortex_storage::traits::StaleEntryInfo>, String>>,
     },
     /// Shut down the storage actor loop.
     Shutdown,
@@ -348,11 +351,7 @@ impl StorageActorHandle {
     }
 
     /// Delete a specific entity from a session.
-    pub async fn delete_entity(
-        &self,
-        session_id: Uuid,
-        entity_name: &str,
-    ) -> Result<(), String> {
+    pub async fn delete_entity(&self, session_id: Uuid, entity_name: &str) -> Result<(), String> {
         let entity_name = entity_name.to_string();
         let entity_name_for_err = entity_name.clone();
         self.send_request(
