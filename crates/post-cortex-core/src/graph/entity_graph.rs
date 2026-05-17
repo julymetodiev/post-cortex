@@ -435,23 +435,41 @@ impl SimpleEntityGraph {
             .push(update_id);
     }
 
-    /// Add relationship - now uses petgraph for efficient storage
+    /// Add relationship - idempotent on (from, to, relation_type).
+    ///
+    /// petgraph treats `add_edge` as multigraph insert (always creates a new
+    /// EdgeIndex), so repeated calls with the same triple would accumulate
+    /// parallel edges. We scan existing edges between the endpoints and
+    /// update the context in place if one matches the relation type;
+    /// otherwise we add a fresh edge.
     pub fn add_relationship(&mut self, relationship: EntityRelationship) {
         let timestamp = Utc::now();
 
-        // Use safe helper to get or create nodes - no more unwrap()!
         let from_node =
             self.get_or_create_node(&relationship.from_entity, EntityType::Concept, timestamp);
-
         let to_node =
             self.get_or_create_node(&relationship.to_entity, EntityType::Concept, timestamp);
 
-        // Add edge to graph with full EdgeData (includes context)
-        let edge_data = EdgeData {
-            relation_type: relationship.relation_type,
-            context: relationship.context,
-        };
-        self.graph.add_edge(from_node, to_node, edge_data);
+        let existing = self
+            .graph
+            .edges_connecting(from_node, to_node)
+            .find(|edge| edge.weight().relation_type == relationship.relation_type)
+            .map(|edge| edge.id());
+
+        match existing {
+            Some(edge_id) => {
+                if let Some(weight) = self.graph.edge_weight_mut(edge_id) {
+                    weight.context = relationship.context;
+                }
+            }
+            None => {
+                let edge_data = EdgeData {
+                    relation_type: relationship.relation_type,
+                    context: relationship.context,
+                };
+                self.graph.add_edge(from_node, to_node, edge_data);
+            }
+        }
     }
 
     /// Merge all entities and relationships from another graph into this one.
@@ -1169,6 +1187,66 @@ mod tests {
         assert_eq!(stats.edge_count, 2);
         assert_eq!(stats.entity_count, 3);
         assert!(stats.avg_degree > 0.0);
+    }
+
+    #[test]
+    fn test_add_relationship_is_idempotent_on_same_triple() {
+        let mut graph = create_test_graph();
+        let baseline_edges = graph.get_graph_stats().edge_count;
+
+        // Re-add the same (from, to, relation_type) several times with new contexts.
+        for ctx in ["first repeat", "second repeat", "third repeat"] {
+            graph.add_relationship(EntityRelationship {
+                from_entity: "rust".to_string(),
+                to_entity: "petgraph".to_string(),
+                relation_type: RelationType::Implements,
+                context: ctx.to_string(),
+            });
+        }
+
+        assert_eq!(
+            graph.get_graph_stats().edge_count,
+            baseline_edges,
+            "Repeated (from, to, relation_type) must not accumulate parallel edges"
+        );
+
+        let all_rels = graph.get_all_relationships();
+        let rust_to_petgraph: Vec<_> = all_rels
+            .iter()
+            .filter(|r| {
+                r.from_entity == "rust"
+                    && r.to_entity == "petgraph"
+                    && r.relation_type == RelationType::Implements
+            })
+            .collect();
+        assert_eq!(rust_to_petgraph.len(), 1, "Exactly one edge expected");
+        assert_eq!(
+            rust_to_petgraph[0].context, "third repeat",
+            "Context should be updated to the latest value"
+        );
+    }
+
+    #[test]
+    fn test_add_relationship_keeps_distinct_relation_types() {
+        let mut graph = SimpleEntityGraph::new();
+        graph.add_or_update_entity("a".to_string(), EntityType::Concept, Utc::now(), "");
+        graph.add_or_update_entity("b".to_string(), EntityType::Concept, Utc::now(), "");
+
+        for rt in [
+            RelationType::DependsOn,
+            RelationType::Implements,
+            RelationType::RelatedTo,
+        ] {
+            graph.add_relationship(EntityRelationship {
+                from_entity: "a".to_string(),
+                to_entity: "b".to_string(),
+                relation_type: rt,
+                context: "".to_string(),
+            });
+        }
+
+        // Distinct relation types between the same pair are legitimate multi-edges.
+        assert_eq!(graph.get_graph_stats().edge_count, 3);
     }
 
     #[test]
