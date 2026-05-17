@@ -18,6 +18,14 @@ post-cortex-proto.workspace = true
 post-cortex-storage.workspace = true
 post-cortex-embeddings = { workspace = true, features = ["bert"] }
 
+# Observability — OTel exporter is gated behind the `otel` feature so
+# library users that don't want it pay zero cost. The `tracing` crate
+# itself is always present (cheap no-op spans by default).
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+
 # Async + serialisation
 anyhow.workspace = true
 serde.workspace = true
@@ -65,7 +73,15 @@ tokio-stream.workspace = true
 default = ["embeddings"]
 embeddings = []
 surrealdb-storage = ["post-cortex-storage/surrealdb-storage"]
-otel = []
+# Pulls the OpenTelemetry exporter stack — see services::observability.
+# When disabled, every `#[tracing::instrument]` macro compiles to a
+# no-op via tracing's ZST spans, so library users pay nothing.
+otel = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:tracing-opentelemetry",
+]
 
 [package.metadata.docs.rs]
 all-features = true

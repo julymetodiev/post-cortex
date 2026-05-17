@@ -85,7 +85,11 @@ default = ["embeddings"]
 embeddings = ["post-cortex-memory/embeddings", "post-cortex-mcp/embeddings"]
 surrealdb-storage = ["post-cortex-memory/surrealdb-storage"]
 surrealdb-tikv = ["surrealdb-storage", "post-cortex-storage/surrealdb-tikv"]
-otel = []
+# Wires the OpenTelemetry OTLP exporter into observability::init().
+# Forwards to post-cortex-memory so trait-method spans are also
+# exported. When off, observability::init() still installs the fmt
+# subscriber so logs work — only the OTLP layer disappears.
+otel = ["post-cortex-memory/otel"]
 
 [package.metadata.docs.rs]
 all-features = true

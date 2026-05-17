@@ -90,6 +90,7 @@ impl MemoryServiceImpl {
 
 #[async_trait]
 impl PostCortexService for MemoryServiceImpl {
+    #[tracing::instrument(skip(self), name = "post_cortex.health")]
     async fn health(&self) -> Result<HealthReport, SystemError> {
         let health = self.system.get_system_health();
         Ok(HealthReport {
@@ -107,6 +108,7 @@ impl PostCortexService for MemoryServiceImpl {
         })
     }
 
+    #[tracing::instrument(skip(self, _req), name = "post_cortex.update_context")]
     async fn update_context(
         &self,
         _req: UpdateContextRequest,
@@ -114,6 +116,7 @@ impl PostCortexService for MemoryServiceImpl {
         Self::not_yet_wired("update_context")
     }
 
+    #[tracing::instrument(skip(self, _req), name = "post_cortex.bulk_update_context")]
     async fn bulk_update_context(
         &self,
         _req: BulkUpdateContextRequest,
@@ -121,6 +124,7 @@ impl PostCortexService for MemoryServiceImpl {
         Self::not_yet_wired("bulk_update_context")
     }
 
+    #[tracing::instrument(skip(self, _req), name = "post_cortex.semantic_search")]
     async fn semantic_search(
         &self,
         _req: SemanticSearchRequest,
@@ -128,6 +132,7 @@ impl PostCortexService for MemoryServiceImpl {
         Self::not_yet_wired("semantic_search")
     }
 
+    #[tracing::instrument(skip(self, _req), name = "post_cortex.query_context")]
     async fn query_context(
         &self,
         _req: QueryContextRequest,
@@ -135,6 +140,7 @@ impl PostCortexService for MemoryServiceImpl {
         Self::not_yet_wired("query_context")
     }
 
+    #[tracing::instrument(skip(self, _req), name = "post_cortex.assemble_context")]
     async fn assemble_context(
         &self,
         _req: AssembleContextRequest,
@@ -142,6 +148,7 @@ impl PostCortexService for MemoryServiceImpl {
         Self::not_yet_wired("assemble_context")
     }
 
+    #[tracing::instrument(skip(self, _req), name = "post_cortex.manage_session")]
     async fn manage_session(
         &self,
         _req: ManageSessionRequest,
@@ -149,6 +156,7 @@ impl PostCortexService for MemoryServiceImpl {
         Self::not_yet_wired("manage_session")
     }
 
+    #[tracing::instrument(skip(self, _req), name = "post_cortex.manage_workspace")]
     async fn manage_workspace(
         &self,
         _req: ManageWorkspaceRequest,
@@ -156,6 +164,7 @@ impl PostCortexService for MemoryServiceImpl {
         Self::not_yet_wired("manage_workspace")
     }
 
+    #[tracing::instrument(skip(self, _req), name = "post_cortex.manage_entity")]
     async fn manage_entity(
         &self,
         _req: ManageEntityRequest,
@@ -163,6 +172,7 @@ impl PostCortexService for MemoryServiceImpl {
         Self::not_yet_wired("manage_entity")
     }
 
+    #[tracing::instrument(skip(self, _req), name = "post_cortex.get_structured_summary")]
     async fn get_structured_summary(
         &self,
         _req: StructuredSummaryRequest,
@@ -170,6 +180,7 @@ impl PostCortexService for MemoryServiceImpl {
         Self::not_yet_wired("get_structured_summary")
     }
 
+    #[tracing::instrument(skip(self, _req), name = "post_cortex.admin")]
     async fn admin(&self, _req: AdminRequest) -> Result<AdminResponse, SystemError> {
         Self::not_yet_wired("admin")
     }
