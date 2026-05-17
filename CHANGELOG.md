@@ -5,6 +5,96 @@ All notable changes to Post-Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — Single-entrypoint write path
+
+The `update_context` / `bulk_update_context` write path is now routed
+through a single canonical implementation across every transport
+(gRPC, MCP, future REST). Validation, entity-graph metadata shaping,
+and persistence live in exactly one place — `MemoryServiceImpl` in
+`post-cortex-memory`. Transports translate their wire payload to a
+typed `UpdateContextRequest` and delegate; they no longer carry their
+own parsing or graph-shaping logic.
+
+### Added
+
+- **`MemoryServiceImpl::update_context` / `bulk_update_context`** are
+  now wired (previously `not_yet_wired` stubs). They enforce: title +
+  description not both empty; entities non-empty; relations non-empty
+  with referential integrity (each `from_entity` / `to_entity` must
+  appear in the entities list); no self-relations; non-empty relation
+  context. Validation failures surface as `SystemError::InvalidArgument`,
+  which transports map to `Status::invalid_argument` (gRPC) or an MCP
+  error payload.
+- **`SystemError::InvalidArgument(String)`** variant in
+  `post-cortex-core` — replaces the previous habit of stuffing
+  validation failures into `SystemError::Internal`. Existing match
+  arms keep compiling because every other variant is unchanged.
+- **MCP wire types `EntityItem` and `RelationItem`** (in `post-cortex-mcp`)
+  carry the typed entity graph from the LLM client through to the
+  canonical impl. Used by both single and bulk update tools.
+- **`get_service()` singleton** in `post-cortex-mcp` returns the
+  cached `Arc<MemoryServiceImpl>` so MCP write calls share one
+  background pipeline with the rest of the process. Built lazily; the
+  daemon's `inject_memory_system` swaps in a fresh service alongside
+  the new memory system.
+
+### Changed
+
+- **gRPC `UpdateContext` / `BulkUpdateContext` handlers** in
+  `post-cortex-daemon` no longer call `ConversationMemorySystem`
+  directly. They translate proto → typed `UpdateContextRequest` via
+  `proto_update_to_request` / `proto_bulk_item_to_request` and call
+  `MemoryServiceImpl::update_context`. Per-item error semantics in
+  bulk mode are preserved (translation failures count as failures, the
+  rest still land).
+- **MCP `update_conversation_context` signature** now requires
+  `entities: Vec<EntityItem>` and `relations: Vec<RelationItem>`
+  positional arguments. Both the in-tree daemon handlers
+  (`daemon/server/handlers.rs` and `daemon/mcp_service/update_context.rs`)
+  have been updated; external Rust consumers that call this function
+  directly need to pass the new arguments.
+- **`UpdateContextRequest::code_reference`** in
+  `post-cortex-core/services/types.rs` is now `Option<CodeReference>`
+  (was `Option<String>`). Transports that carry the rich proto
+  `CodeReference` no longer lose `code_snippet` / `commit_hash` /
+  `branch` / `change_description` at the service boundary.
+
+### Removed
+
+- **`update_conversation_context_with_system`** and
+  **`interaction_to_context_update`** in `post-cortex-mcp` — both
+  superseded by the canonical service path. Internal tests that
+  bypassed the MCP layer for cross-session search experiments now
+  call `ConversationMemorySystem::add_incremental_update` directly.
+- **`validate_entities_and_relations` / `build_update_metadata` /
+  `format_context_description`** in `post-cortex-daemon::grpc_service::helpers`
+  — moved into `MemoryServiceImpl` so every transport uses the same
+  validation and metadata shape.
+
+### Breaking — MCP tool schema (`update_conversation_context`,
+`bulk_update_conversation_context`)
+
+Both tools' input schemas now **require** `entities` and `relations`
+arrays with `minItems: 1`. Schema fragment:
+
+```jsonc
+"entities": [
+  {"name": "<unique name>", "entity_type": "concept|technology|problem|solution|decision|code_component"}
+],
+"relations": [
+  {"from_entity": "<name>", "to_entity": "<name>",
+   "relation_type": "depends_on|implements|caused_by|leads_to|related_to|required_by|conflicts_with|solves",
+   "context": "<short why>"}
+]
+```
+
+The legacy freeform `content["entities"]` / `content["relationships"]`
+string fallback is gone. Self-relations and dangling references are
+rejected with `InvalidArgument`. Existing agent prompts that ignored
+the entity graph now need to surface entities/relations explicitly —
+this is the change that finally makes the graph non-empty for
+MCP-driven writes.
+
 ## [0.2.0] - 2026-05-17 — Workspace split
 
 The single-crate `post-cortex` package is now a Cargo workspace of eight publishable crates. Existing imports through `post_cortex::*` keep working via the facade meta-crate.

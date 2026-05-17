@@ -134,7 +134,9 @@ pub(super) async fn handle_update_context(
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use post_cortex_core::core::context_update::CodeReference;
-    use post_cortex_mcp::update_conversation_context;
+    use post_cortex_mcp::{
+        update_conversation_context, EntityItem, RelationItem,
+    };
 
     let interaction_type = arguments["interaction_type"]
         .as_str()
@@ -154,16 +156,32 @@ pub(super) async fn handle_update_context(
         content.insert(key.clone(), value_str);
     }
 
+    let entities: Vec<EntityItem> = arguments
+        .get("entities")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    let relations: Vec<RelationItem> = arguments
+        .get("relations")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
     let code_reference: Option<CodeReference> = arguments
         .get("code_reference")
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
     let session_id = parse_uuid_arg(arguments, "session_id")?;
 
-    let result =
-        update_conversation_context(interaction_type, content, code_reference, session_id)
-            .await
-            .map_err(|e| format!("Failed to update context: {}", e))?;
+    let result = update_conversation_context(
+        interaction_type,
+        content,
+        entities,
+        relations,
+        code_reference,
+        session_id,
+    )
+    .await
+    .map_err(|e| format!("Failed to update context: {}", e))?;
 
     Ok(text_response(&result.message))
 }

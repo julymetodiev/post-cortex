@@ -90,6 +90,8 @@ pub(super) async fn handle(
             .map(|u| post_cortex_mcp::ContextUpdateItem {
                 interaction_type: u.interaction_type.clone(),
                 content: u.content.clone(),
+                entities: u.entities.clone(),
+                relations: u.relations.clone(),
                 code_reference: u
                     .code_reference
                     .as_ref()
@@ -156,6 +158,8 @@ pub(super) async fn handle(
         match post_cortex_mcp::update_conversation_context(
             interaction_type.clone(),
             content.clone(),
+            req.entities.clone(),
+            req.relations.clone(),
             code_ref,
             uuid,
         )

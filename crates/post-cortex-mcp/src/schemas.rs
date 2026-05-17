@@ -60,7 +60,7 @@ pub fn get_all_tool_schemas() -> Vec<serde_json::Value> {
         }),
         json!({
             "name": "update_conversation_context",
-            "description": "Add new knowledge to the conversation: QA, decisions, problems solved, code changes, requirements, or concepts. Content fields vary by interaction_type: qa={question,answer}, decision_made={decision,rationale}, problem_solved={problem,solution}, code_change={file_path|description,changes|diff}, requirement_added={requirement,priority}, concept_defined={concept,definition}. Extra fields become details.",
+            "description": "Add new knowledge to the conversation along with the entity graph for that knowledge. Every call MUST supply at least one entity in `entities` and one relation in `relations`; both endpoints of every relation must appear in the `entities` array (self-relations are rejected). Content fields vary by interaction_type: qa={question,answer}, decision_made={decision,rationale}, problem_solved={problem,solution}, code_change={file_path|description,changes|diff}, requirement_added={requirement,priority}, concept_defined={concept,definition}. Extra fields become details.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -70,9 +70,37 @@ pub fn get_all_tool_schemas() -> Vec<serde_json::Value> {
                         "type": "object",
                         "description": "Content object. Expected fields by type: qa={question,answer}, decision_made={decision,rationale}, problem_solved={problem,solution}, code_change={file_path,changes}, requirement_added={requirement,priority}, concept_defined={concept,definition}. Accepts variations: question/title/query, answer/response, problem/issue/bug, solution/fix, decision/choice, rationale/reason/why, file_path/file/description, changes/diff/changes_made. Extra fields become details array."
                     },
+                    "entities": {
+                        "type": "array",
+                        "description": "Named entities mentioned in this update. Required: must contain at least one entry so the entity graph is never empty. Each entry: {name, entity_type}. entity_type is one of: technology, concept, problem, solution, decision, code_component.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "entity_type": {"type": "string", "enum": ["technology", "concept", "problem", "solution", "decision", "code_component"]}
+                            },
+                            "required": ["name", "entity_type"]
+                        },
+                        "minItems": 1
+                    },
+                    "relations": {
+                        "type": "array",
+                        "description": "Relations between the entities above. Required: must contain at least one entry. Each entry: {from_entity, to_entity, relation_type, context}. Both endpoints must appear in the entities array; self-relations are rejected. relation_type is one of: required_by, leads_to, related_to, conflicts_with, depends_on, implements, caused_by, solves.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "from_entity": {"type": "string"},
+                                "to_entity": {"type": "string"},
+                                "relation_type": {"type": "string", "enum": ["required_by", "leads_to", "related_to", "conflicts_with", "depends_on", "implements", "caused_by", "solves"]},
+                                "context": {"type": "string", "description": "Short explanation of why this relation exists"}
+                            },
+                            "required": ["from_entity", "to_entity", "relation_type", "context"]
+                        },
+                        "minItems": 1
+                    },
                     "code_reference": {"type": "object", "description": "Optional code reference with file paths and line numbers"}
                 },
-                "required": ["session_id", "interaction_type", "content"]
+                "required": ["session_id", "interaction_type", "content", "entities", "relations"]
             }
         }),
         json!({
@@ -90,12 +118,50 @@ pub fn get_all_tool_schemas() -> Vec<serde_json::Value> {
         }),
         json!({
             "name": "bulk_update_conversation_context",
-            "description": "Add multiple context updates in a single operation for better performance",
+            "description": "Add multiple context updates in a single operation. Each item must follow the same shape as update_conversation_context — interaction_type + content + entities + relations are all required per item. Items that fail translation or validation are reported individually in the response payload.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "session_id": {"type": "string", "description": "UUID of the session"},
-                    "updates": {"type": "array", "description": "Array of context update objects"}
+                    "updates": {
+                        "type": "array",
+                        "description": "Array of context update objects. Each entry mirrors update_conversation_context fields (without session_id).",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "interaction_type": {"type": "string"},
+                                "content": {"type": "object"},
+                                "entities": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "name": {"type": "string"},
+                                            "entity_type": {"type": "string", "enum": ["technology", "concept", "problem", "solution", "decision", "code_component"]}
+                                        },
+                                        "required": ["name", "entity_type"]
+                                    },
+                                    "minItems": 1
+                                },
+                                "relations": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "from_entity": {"type": "string"},
+                                            "to_entity": {"type": "string"},
+                                            "relation_type": {"type": "string", "enum": ["required_by", "leads_to", "related_to", "conflicts_with", "depends_on", "implements", "caused_by", "solves"]},
+                                            "context": {"type": "string"}
+                                        },
+                                        "required": ["from_entity", "to_entity", "relation_type", "context"]
+                                    },
+                                    "minItems": 1
+                                },
+                                "code_reference": {"type": "object"}
+                            },
+                            "required": ["interaction_type", "content", "entities", "relations"]
+                        }
+                    }
                 },
                 "required": ["session_id", "updates"]
             }

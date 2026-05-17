@@ -113,6 +113,13 @@ pub enum SystemError {
     #[error("Configuration error: {0}")]
     Configuration(String),
 
+    /// Caller-supplied input failed validation (referential integrity,
+    /// missing required field, unknown enum variant, etc.). Transports
+    /// should map this to their `invalid_argument` equivalent
+    /// (`Status::invalid_argument` for gRPC, structured error for MCP).
+    #[error("Invalid argument: {0}")]
+    InvalidArgument(String),
+
     /// I/O error from the filesystem or network
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),

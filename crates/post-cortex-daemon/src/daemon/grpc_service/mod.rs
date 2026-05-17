@@ -12,6 +12,8 @@
 //! interactive surface. Shared parsing/validation helpers live in
 //! `helpers`.
 
+use post_cortex_core::services::PostCortexService;
+use post_cortex_memory::services::MemoryServiceImpl;
 use post_cortex_memory::ConversationMemorySystem;
 use post_cortex_storage::rocksdb_storage::SessionCheckpoint;
 use std::sync::Arc;
@@ -30,21 +32,37 @@ mod freshness;
 mod helpers;
 
 use helpers::{
-    build_update_metadata, format_context_description, parse_session_role, parse_uuid,
-    validate_entities_and_relations, workspace_to_info,
+    parse_session_role, parse_uuid, proto_bulk_item_to_request, proto_update_to_request,
+    system_error_to_status, workspace_to_info,
 };
 use pb::post_cortex_server::{PostCortex, PostCortexServer};
 use pb::*;
 
-/// gRPC service backed by ConversationMemorySystem
+/// gRPC service backed by ConversationMemorySystem.
+///
+/// Holds both the raw [`ConversationMemorySystem`] (used by handlers
+/// that have not yet migrated to the canonical trait) and the
+/// canonical [`MemoryServiceImpl`]. Newly-migrated handlers — currently
+/// `update_context` / `bulk_update_context` — translate proto types
+/// into [`post_cortex_core::services`] requests and delegate to
+/// `self.service`, so validation lives in exactly one place.
 pub struct PcxGrpcService {
     pub(super) memory: Arc<ConversationMemorySystem>,
+    pub(super) service: Arc<MemoryServiceImpl>,
 }
 
 impl PcxGrpcService {
     /// Wrap a shared memory system in a new gRPC service handle.
     pub fn new(memory: Arc<ConversationMemorySystem>) -> Self {
-        Self { memory }
+        let service = Arc::new(MemoryServiceImpl::new(memory.clone()));
+        Self { memory, service }
+    }
+
+    /// Build a gRPC service from an existing canonical service so several
+    /// transports can share the same background pipeline (Phase 11).
+    pub fn from_service(service: Arc<MemoryServiceImpl>) -> Self {
+        let memory = service.inner().clone();
+        Self { memory, service }
     }
 
     /// Consume `self` and return a tonic [`PostCortexServer`] ready to serve.
@@ -279,33 +297,20 @@ impl PostCortex for PcxGrpcService {
             req.session_id, req.interaction_type
         );
 
-        let session_id = parse_uuid(&req.session_id)?;
-
-        // Validate caller-provided entities and relations.
-        validate_entities_and_relations(&req.entities, &req.relations)?;
-
-        // Build the description from ContextContent
-        let content = req.content.unwrap_or_default();
-        let description = format_context_description(&req.interaction_type, &content);
-
-        // Build metadata JSON with entities and relations injected.
-        let metadata =
-            build_update_metadata(&req.interaction_type, &content, &req.entities, &req.relations);
-
-        match self
-            .memory
-            .add_incremental_update(session_id, description, Some(metadata))
+        let service_req = proto_update_to_request(req)?;
+        let resp = self
+            .service
+            .update_context(service_req)
             .await
-        {
-            Ok(update_id) => Ok(Response::new(UpdateContextResponse {
-                update_id,
-                success: true,
-            })),
-            Err(e) => {
+            .map_err(|e| {
                 error!("gRPC UpdateContext failed: {}", e);
-                Err(Status::internal(e))
-            }
-        }
+                system_error_to_status(e)
+            })?;
+
+        Ok(Response::new(UpdateContextResponse {
+            update_id: resp.entry_id.to_string(),
+            success: resp.durable,
+        }))
     }
 
     async fn bulk_update_context(
@@ -319,39 +324,29 @@ impl PostCortex for PcxGrpcService {
             req.updates.len()
         );
 
-        let session_id = parse_uuid(&req.session_id)?;
-
+        // Translate every proto item to its canonical request, propagating
+        // session_id from the batch envelope (proto items don't carry it).
+        let batch_session_id = parse_uuid(&req.session_id)?;
         let mut update_ids = Vec::new();
         let mut success_count = 0u32;
         let mut failure_count = 0u32;
 
         for item in req.updates {
-            // Validate entities and relations for each bulk item.
-            if let Err(status) = validate_entities_and_relations(&item.entities, &item.relations) {
-                warn!(
-                    "gRPC BulkUpdateContext item validation failed: {}",
-                    status.message()
-                );
-                failure_count += 1;
-                continue;
-            }
+            let service_req = match proto_bulk_item_to_request(batch_session_id, item) {
+                Ok(r) => r,
+                Err(status) => {
+                    warn!(
+                        "gRPC BulkUpdateContext item translation failed: {}",
+                        status.message()
+                    );
+                    failure_count += 1;
+                    continue;
+                }
+            };
 
-            let content = item.content.unwrap_or_default();
-            let description = format_context_description(&item.interaction_type, &content);
-            let metadata = build_update_metadata(
-                &item.interaction_type,
-                &content,
-                &item.entities,
-                &item.relations,
-            );
-
-            match self
-                .memory
-                .add_incremental_update(session_id, description, Some(metadata))
-                .await
-            {
-                Ok(update_id) => {
-                    update_ids.push(update_id);
+            match self.service.update_context(service_req).await {
+                Ok(resp) => {
+                    update_ids.push(resp.entry_id.to_string());
                     success_count += 1;
                 }
                 Err(e) => {

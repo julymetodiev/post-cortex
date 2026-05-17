@@ -20,7 +20,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::core::context_update::{EntityData, EntityRelationship, UpdateContent, UpdateType};
+use crate::core::context_update::{
+    CodeReference, EntityData, EntityRelationship, UpdateContent, UpdateType,
+};
 
 // ---------------------------------------------------------------------------
 // Health
@@ -58,8 +60,10 @@ pub struct UpdateContextRequest {
     pub entities: Vec<EntityData>,
     /// Relationships between entities in this update.
     pub relations: Vec<EntityRelationship>,
-    /// Optional human-readable code reference (file:line).
-    pub code_reference: Option<String>,
+    /// Optional structured code reference (file path + line range + snippet
+    /// + git metadata). Transports translate their wire format to this
+    /// shape so no transport loses fidelity.
+    pub code_reference: Option<CodeReference>,
 }
 
 /// Outcome of a single write.

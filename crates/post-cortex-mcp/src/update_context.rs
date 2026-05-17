@@ -1,30 +1,39 @@
-//! Helpers for recording context updates (single and bulk).
+//! MCP-side adapter for context-update writes.
+//!
+//! Phase 6 of the single-entrypoint migration: every MCP-driven write
+//! flows through [`post_cortex_memory::services::MemoryServiceImpl`] —
+//! the canonical [`PostCortexService`] implementation. This module only
+//! translates the LLM-friendly wire format (HashMap content + typed
+//! `entities` / `relations` arrays) into the canonical
+//! [`UpdateContextRequest`]; validation, persistence, and metadata
+//! shaping all happen inside the service.
 
-use post_cortex_core::core::context_update::CodeReference;
-use post_cortex_memory::ConversationMemorySystem;
-use post_cortex_core::core::timeout_utils::with_mcp_timeout;
-use crate::{
-    get_memory_system, interaction_to_context_update, string_to_anyhow, ContextUpdateItem,
-    Interaction, MCPToolResult,
+use anyhow::{anyhow, Result};
+use post_cortex_core::core::context_update::{
+    CodeReference, EntityData, EntityRelationship, EntityType, RelationType, UpdateContent,
+    UpdateType,
 };
-use anyhow::Result;
+use post_cortex_core::core::timeout_utils::with_mcp_timeout;
+use post_cortex_core::services::{
+    BulkUpdateContextRequest as ServiceBulkRequest, PostCortexService,
+    UpdateContextRequest as ServiceUpdateRequest,
+};
 use std::collections::HashMap;
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
-/// Build an [`Interaction`] from a flat `interaction_type + content` payload.
-///
-/// Centralises the slot-resolution and extras-collection logic that was once
-/// duplicated verbatim between the single-update and bulk-update entry points
-/// — both now delegate here.
-///
-/// `Ok(None)` is reserved for unknown interaction types so callers can shape
-/// their own error message (single returns immediately, bulk records and
-/// continues).
-fn build_interaction(
+use crate::{
+    get_service, ContextUpdateItem, EntityItem, MCPToolResult, RelationItem,
+};
+
+/// Parse the LLM-provided `interaction_type + content` HashMap into a
+/// typed [`UpdateContent`] using the same key-resolution conventions the
+/// old MCP path used. Returns `Err` if the `interaction_type` is unknown
+/// so callers can surface a precise error.
+fn build_content(
     interaction_type: &str,
     content: &HashMap<String, String>,
-) -> Result<Option<Interaction>> {
+) -> Result<(UpdateType, UpdateContent)> {
     let extract_extras = |exclude_keys: &[&str]| -> Vec<String> {
         content
             .iter()
@@ -44,24 +53,20 @@ fn build_interaction(
         String::new()
     };
 
-    let interaction = match interaction_type {
+    let (update_type, title, description, details, implications) = match interaction_type {
         "qa" => {
-            let question = resolve_slot(&["question"], &["title"]);
-            let answer = resolve_slot(&["answer"], &["description"]);
-            let extras = extract_extras(&["question", "answer", "title", "description"]);
-            Interaction::QA {
-                question,
-                answer,
-                details: extras,
-            }
+            let title = resolve_slot(&["question"], &["title"]);
+            let description = resolve_slot(&["answer"], &["description"]);
+            let details = extract_extras(&["question", "answer", "title", "description"]);
+            (UpdateType::QuestionAnswered, title, description, details, vec![])
         }
         "code_change" => {
-            let file_path = resolve_slot(&["file_path", "file"], &["title", "description"]);
-            let changes = resolve_slot(
+            let title = resolve_slot(&["file_path", "file"], &["title", "description"]);
+            let description = resolve_slot(
                 &["changes", "diff", "change_type", "change"],
                 &["description"],
             );
-            let extras = extract_extras(&[
+            let details = extract_extras(&[
                 "file_path",
                 "file",
                 "title",
@@ -71,214 +76,212 @@ fn build_interaction(
                 "change_type",
                 "change",
             ]);
-            Interaction::CodeChange {
-                file_path,
-                diff: changes,
-                details: extras,
-            }
+            (
+                UpdateType::CodeChanged,
+                title,
+                description,
+                details,
+                vec!["Code functionality updated".to_string()],
+            )
         }
         "problem_solved" => {
-            let problem = resolve_slot(&["problem"], &["title"]);
-            let solution = resolve_slot(&["solution"], &["description"]);
-            let extras = extract_extras(&["problem", "solution", "title", "description"]);
-            Interaction::ProblemSolved {
-                problem,
-                solution,
-                details: extras,
-            }
+            let title = resolve_slot(&["problem"], &["title"]);
+            let description = resolve_slot(&["solution"], &["description"]);
+            let details = extract_extras(&["problem", "solution", "title", "description"]);
+            (
+                UpdateType::ProblemSolved,
+                title,
+                description,
+                details,
+                vec!["Problem resolved".to_string()],
+            )
         }
         "decision_made" => {
-            let decision = resolve_slot(&["decision"], &["title"]);
-            let rationale = resolve_slot(&["rationale"], &["description"]);
-            let extras = extract_extras(&["decision", "rationale", "title", "description"]);
-            Interaction::DecisionMade {
-                decision,
-                rationale,
-                details: extras,
-            }
+            let title = resolve_slot(&["decision"], &["title"]);
+            let description = resolve_slot(&["rationale"], &["description"]);
+            let details = extract_extras(&["decision", "rationale", "title", "description"]);
+            (UpdateType::DecisionMade, title, description, details, vec![])
         }
         "requirement_added" => {
-            let requirement = resolve_slot(&["requirement"], &["title"]);
-            let priority = content
-                .get("priority")
-                .cloned()
-                .unwrap_or_else(|| "medium".to_string());
-            let extras = extract_extras(&["requirement", "priority", "title", "description"]);
-            Interaction::RequirementAdded {
-                requirement,
-                priority,
-                details: extras,
-            }
+            let title = resolve_slot(&["requirement"], &["title"]);
+            let description = resolve_slot(&["description"], &[]);
+            let details = extract_extras(&["requirement", "priority", "title", "description"]);
+            (
+                UpdateType::RequirementAdded,
+                title,
+                description,
+                details,
+                vec![],
+            )
         }
         "concept_defined" => {
-            let concept = resolve_slot(&["concept"], &["title"]);
-            let definition = resolve_slot(&["definition"], &["description"]);
-            let extras = extract_extras(&["concept", "definition", "title", "description"]);
-            Interaction::ConceptDefined {
-                concept,
-                definition,
-                details: extras,
-            }
+            let title = resolve_slot(&["concept"], &["title"]);
+            let description = resolve_slot(&["definition"], &["description"]);
+            let details = extract_extras(&["concept", "definition", "title", "description"]);
+            (UpdateType::ConceptDefined, title, description, details, vec![])
         }
-        _ => return Ok(None),
+        other => return Err(anyhow!("Unknown interaction type: {}", other)),
     };
 
-    Ok(Some(interaction))
+    Ok((
+        update_type,
+        UpdateContent {
+            title,
+            description,
+            details,
+            examples: vec![],
+            implications,
+        },
+    ))
 }
 
-/// Parse the optional `entities` / `relationships` extras that the single
-/// update path supports as freeform comma/space-separated strings.
-fn parse_entity_extras(
+/// Parse an MCP `entity_type` string (lowercase) into [`EntityType`].
+/// Unknown values default to `Concept` to match the gRPC parser.
+fn parse_entity_type(s: &str) -> EntityType {
+    match s.to_lowercase().as_str() {
+        "technology" => EntityType::Technology,
+        "concept" => EntityType::Concept,
+        "problem" => EntityType::Problem,
+        "solution" => EntityType::Solution,
+        "decision" => EntityType::Decision,
+        "code_component" | "codecomponent" => EntityType::CodeComponent,
+        _ => EntityType::Concept,
+    }
+}
+
+/// Parse an MCP `relation_type` string (lowercase) into [`RelationType`].
+/// Returns `None` for unknown values — the caller surfaces this as an
+/// `InvalidArgument` error rather than silently defaulting.
+fn parse_relation_type(s: &str) -> Option<RelationType> {
+    match s.to_lowercase().as_str() {
+        "required_by" | "requiredby" => Some(RelationType::RequiredBy),
+        "leads_to" | "leadsto" => Some(RelationType::LeadsTo),
+        "related_to" | "relatedto" => Some(RelationType::RelatedTo),
+        "conflicts_with" | "conflictswith" => Some(RelationType::ConflictsWith),
+        "depends_on" | "dependson" => Some(RelationType::DependsOn),
+        "implements" => Some(RelationType::Implements),
+        "caused_by" | "causedby" => Some(RelationType::CausedBy),
+        "solves" => Some(RelationType::Solves),
+        _ => None,
+    }
+}
+
+fn entities_to_domain(items: &[EntityItem]) -> Vec<EntityData> {
+    let now = chrono::Utc::now();
+    items
+        .iter()
+        .map(|e| EntityData {
+            name: e.name.clone(),
+            entity_type: parse_entity_type(&e.entity_type),
+            first_mentioned: now,
+            last_mentioned: now,
+            mention_count: 1,
+            importance_score: 1.0,
+            description: None,
+        })
+        .collect()
+}
+
+fn relations_to_domain(items: &[RelationItem]) -> Result<Vec<EntityRelationship>> {
+    let mut out = Vec::with_capacity(items.len());
+    for (i, r) in items.iter().enumerate() {
+        let rt = parse_relation_type(&r.relation_type).ok_or_else(|| {
+            anyhow!(
+                "relation[{i}]: unknown relation_type {:?}; valid values are: \
+                 required_by, leads_to, related_to, conflicts_with, depends_on, implements, caused_by, solves",
+                r.relation_type
+            )
+        })?;
+        out.push(EntityRelationship {
+            from_entity: r.from_entity.clone(),
+            to_entity: r.to_entity.clone(),
+            relation_type: rt,
+            context: r.context.clone(),
+        });
+    }
+    Ok(out)
+}
+
+/// Build a canonical [`ServiceUpdateRequest`] from the MCP wire payload.
+fn build_request(
+    session_id: Uuid,
+    interaction_type: &str,
     content: &HashMap<String, String>,
-) -> (Vec<String>, Vec<post_cortex_core::core::context_update::EntityRelationship>) {
-    use post_cortex_core::core::context_update::{EntityRelationship, RelationType};
-
-    let entities: Vec<String> = content
-        .get("entities")
-        .map(|s| {
-            s.split([',', ' '])
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty() && t.len() > 2)
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let relationships: Vec<EntityRelationship> = content
-        .get("relationships")
-        .map(|rels_str| {
-            rels_str
-                .split(',')
-                .filter_map(|rel_part| {
-                    let parts: Vec<&str> = rel_part.split_whitespace().collect();
-                    if parts.len() < 3 {
-                        return None;
-                    }
-                    let from = parts[0].to_string();
-                    let rel_type = match parts[1].to_uppercase().as_str() {
-                        "DEPENDS_ON" => RelationType::DependsOn,
-                        "IMPLEMENTS" => RelationType::Implements,
-                        "CAUSES" | "CAUSED_BY" => RelationType::CausedBy,
-                        "SOLVES" => RelationType::Solves,
-                        "LEADS_TO" => RelationType::LeadsTo,
-                        "REQUIRED_BY" => RelationType::RequiredBy,
-                        "CONFLICTS_WITH" => RelationType::ConflictsWith,
-                        _ => RelationType::RelatedTo,
-                    };
-                    Some(EntityRelationship {
-                        from_entity: from,
-                        to_entity: parts[2..].join(" "),
-                        relation_type: rel_type,
-                        context: String::new(),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    (entities, relationships)
+    entities: &[EntityItem],
+    relations: &[RelationItem],
+    code_reference: Option<CodeReference>,
+) -> Result<ServiceUpdateRequest> {
+    let (update_type, update_content) = build_content(interaction_type, content)?;
+    Ok(ServiceUpdateRequest {
+        session_id,
+        interaction_type: update_type,
+        content: update_content,
+        entities: entities_to_domain(entities),
+        relations: relations_to_domain(relations)?,
+        code_reference,
+    })
 }
 
-/// Record a single context update using an explicit memory system reference.
-#[instrument(skip(system, content), fields(
+/// Record a single context update via the canonical
+/// [`PostCortexService::update_context`] path.
+#[instrument(skip(content, entities, relations), fields(
     session_id = %session_id,
     interaction_type = %interaction_type,
+    entities_count = entities.len(),
+    relations_count = relations.len(),
     has_code_reference = code_reference.is_some()
 ))]
-pub async fn update_conversation_context_with_system(
+pub async fn update_conversation_context(
     interaction_type: String,
     content: HashMap<String, String>,
+    entities: Vec<EntityItem>,
+    relations: Vec<RelationItem>,
     code_reference: Option<CodeReference>,
     session_id: Uuid,
-    system: &ConversationMemorySystem,
 ) -> Result<MCPToolResult> {
-    info!("Starting update_conversation_context_with_system");
-    debug!("Parsing interaction type: {}", interaction_type);
+    info!("MCP-TOOLS: update_conversation_context() called");
+    let service = get_service().await?;
+
+    let req = match build_request(
+        session_id,
+        &interaction_type,
+        &content,
+        &entities,
+        &relations,
+        code_reference,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            error!("update_conversation_context: bad input — {}", e);
+            return Ok(MCPToolResult::error(e.to_string()));
+        }
+    };
 
     let result = with_mcp_timeout(async {
-        let interaction = match build_interaction(&interaction_type, &content)? {
-            Some(i) => i,
-            None => {
-                error!("Unknown interaction type: {}", interaction_type);
-                return Ok(MCPToolResult::error(format!(
-                    "Unknown interaction type: {}",
-                    interaction_type
-                )));
+        match service.update_context(req).await {
+            Ok(resp) => {
+                debug!(
+                    "update_conversation_context: persisted entry {} in session {}",
+                    resp.entry_id, resp.session_id
+                );
+                Ok(MCPToolResult::success(
+                    "Context updated successfully".to_string(),
+                    None,
+                ))
             }
-        };
-
-        debug!("Converting interaction to ContextUpdate...");
-        let mut update = interaction_to_context_update(interaction, code_reference)?;
-
-        if update.content.title.trim().is_empty()
-            && update.content.description.trim().is_empty()
-        {
-            let known_keys: Vec<String> = content.keys().cloned().collect();
-            warn!(
-                "Rejecting empty update for interaction_type='{}' (no usable title/description). Provided keys: {:?}",
-                interaction_type, known_keys
-            );
-            return Ok(MCPToolResult::error(format!(
-                "Refusing to store empty update for interaction_type='{}': none of the recognised keys carried text. \
-                 Provide one of the type-specific keys (e.g. decision/rationale, problem/solution, concept/definition, \
-                 question/answer, file/changes, requirement) or a generic 'title' and/or 'description'. \
-                 Got keys: {:?}",
-                interaction_type, known_keys
-            )));
+            Err(e) => {
+                warn!("update_conversation_context: service rejected — {}", e);
+                Ok(MCPToolResult::error(e.to_string()))
+            }
         }
-
-        // Optional freeform `entities` / `relationships` overrides (single-update only).
-        let (extra_entities, extra_relationships) = parse_entity_extras(&content);
-        if !extra_entities.is_empty() {
-            info!(
-                "Parsed {} explicit entities: {:?}",
-                extra_entities.len(),
-                extra_entities
-            );
-            update.creates_entities = extra_entities;
-        }
-        if !extra_relationships.is_empty() {
-            info!("Parsed {} explicit relationships", extra_relationships.len());
-            // Relationship context defaults to the update title for traceability.
-            let title = update.content.title.clone();
-            update.creates_relationships = extra_relationships
-                .into_iter()
-                .map(|mut r| {
-                    r.context = title.clone();
-                    r
-                })
-                .collect();
-        }
-
-        info!(
-            "Created ContextUpdate with {} entities and {} relationships",
-            update.creates_entities.len(),
-            update.creates_relationships.len()
-        );
-
-        debug!("Adding context update to session: {}", session_id);
-        let text = format!("{}\n{}", update.content.title, update.content.description);
-        let metadata = Some(
-            serde_json::to_value(&update)
-                .map_err(|e| anyhow::anyhow!("Failed to serialize update metadata: {}", e))?,
-        );
-        system
-            .add_incremental_update(session_id, text, metadata)
-            .await
-            .map_err(string_to_anyhow)?;
-        info!("system.add_context_update completed successfully!");
-
-        Ok(MCPToolResult::success(
-            "Context updated successfully".to_string(),
-            None,
-        ))
     })
     .await;
 
     match result {
-        Ok(success_result) => success_result,
+        Ok(r) => r,
         Err(timeout_error) => {
             error!(
-                "TIMEOUT: update_conversation_context_with_system - session: {}, error: {}",
+                "TIMEOUT: update_conversation_context — session: {}, error: {}",
                 session_id, timeout_error
             );
             Ok(MCPToolResult::error(format!(
@@ -289,7 +292,10 @@ pub async fn update_conversation_context_with_system(
     }
 }
 
-/// Record multiple context updates in a single batch operation.
+/// Record multiple context updates in a single batch via the canonical
+/// service. Items that fail translation or persistence are reported in
+/// the response payload — the rest still land, matching the legacy
+/// gRPC bulk semantics.
 pub async fn bulk_update_conversation_context(
     updates: Vec<ContextUpdateItem>,
     session_id: Uuid,
@@ -300,80 +306,62 @@ pub async fn bulk_update_conversation_context(
         session_id
     );
 
-    let system = get_memory_system().await?;
-    let mut success_count = 0;
+    let service = get_service().await?;
+
+    let mut requests = Vec::with_capacity(updates.len());
     let mut error_count = 0;
     let mut errors: Vec<String> = Vec::new();
-
-    for (index, update_item) in updates.into_iter().enumerate() {
-        let interaction = match build_interaction(&update_item.interaction_type, &update_item.content) {
-            Ok(Some(i)) => i,
-            Ok(None) => {
-                error_count += 1;
-                errors.push(format!(
-                    "Update {}: Unknown interaction type: {}",
-                    index, update_item.interaction_type
-                ));
-                continue;
-            }
+    for (index, item) in updates.iter().enumerate() {
+        match build_request(
+            session_id,
+            &item.interaction_type,
+            &item.content,
+            &item.entities,
+            &item.relations,
+            item.code_reference.clone(),
+        ) {
+            Ok(req) => requests.push(req),
             Err(e) => {
                 error_count += 1;
-                errors.push(format!("Update {}: Failed to build interaction: {}", index, e));
-                continue;
-            }
-        };
-
-        match interaction_to_context_update(interaction, update_item.code_reference) {
-            Ok(update) => {
-                if update.content.title.trim().is_empty()
-                    && update.content.description.trim().is_empty()
-                {
-                    let known_keys: Vec<String> =
-                        update_item.content.keys().cloned().collect();
-                    error_count += 1;
-                    errors.push(format!(
-                        "Update {}: empty title and description for interaction_type='{}'. \
-                         Provided keys: {:?}. Supply a recognised key or a generic 'title'/'description'.",
-                        index, update_item.interaction_type, known_keys
-                    ));
-                    continue;
-                }
-                // Match the single-update path: feed vectorizer "title\ndescription"
-                // (was just `description` before, which dropped half the signal
-                // for bulk-written records and hurt cross-session search).
-                let text = format!("{}\n{}", update.content.title, update.content.description);
-                let metadata = match serde_json::to_value(&update) {
-                    Ok(v) => Some(v),
-                    Err(e) => {
-                        error_count += 1;
-                        errors.push(format!(
-                            "Update {}: Failed to serialize metadata: {}",
-                            index, e
-                        ));
-                        continue;
-                    }
-                };
-
-                match system
-                    .add_incremental_update(session_id, text, metadata)
-                    .await
-                {
-                    Ok(_) => {
-                        success_count += 1;
-                        debug!("Update {} added successfully", index);
-                    }
-                    Err(e) => {
-                        error_count += 1;
-                        errors.push(format!("Update {}: Failed to add: {}", index, e));
-                    }
-                }
-            }
-            Err(e) => {
-                error_count += 1;
-                errors.push(format!("Update {}: Failed to convert: {}", index, e));
+                errors.push(format!("Update {}: {}", index, e));
             }
         }
     }
+
+    // Persist via the canonical bulk method when every translation
+    // succeeded; otherwise fall back to per-item calls so partial
+    // failure semantics are preserved.
+    let success_count = if errors.is_empty() {
+        match service
+            .bulk_update_context(ServiceBulkRequest {
+                session_id,
+                updates: requests,
+            })
+            .await
+        {
+            Ok(resp) => resp.entry_ids.len(),
+            Err(e) => {
+                errors.push(format!("Bulk persist failed: {}", e));
+                error_count += 1;
+                0
+            }
+        }
+    } else {
+        // At least one item failed translation: keep the legacy
+        // "best effort" behaviour and persist the good ones one at a
+        // time so the caller still gets partial progress.
+        let mut count = 0;
+        for (offset, req) in requests.into_iter().enumerate() {
+            match service.update_context(req).await {
+                Ok(_) => count += 1,
+                Err(e) => {
+                    error_count += 1;
+                    errors.push(format!("Update (translated index {offset}): {}", e));
+                }
+            }
+        }
+        count
+    };
 
     let message = if error_count == 0 {
         format!(
@@ -387,48 +375,12 @@ pub async fn bulk_update_conversation_context(
         )
     };
 
-    #[cfg(feature = "embeddings")]
-    {
-        if let Err(e) = system.auto_vectorize_if_enabled(session_id).await {
-            tracing::warn!(
-                "Auto-vectorization warning after bulk updates for session {}: {}",
-                session_id, e
-            );
-        } else {
-            tracing::info!(
-                "Auto-vectorization completed after {} bulk updates for session {}",
-                success_count, session_id
-            );
-        }
-    }
-
     Ok(MCPToolResult::success(
         message,
         Some(serde_json::json!({
             "success_count": success_count,
             "error_count": error_count,
-            "errors": errors
+            "errors": errors,
         })),
     ))
-}
-
-/// Record a single context update via the global memory system.
-pub async fn update_conversation_context(
-    interaction_type: String,
-    content: HashMap<String, String>,
-    code_reference: Option<CodeReference>,
-    session_id: Uuid,
-) -> Result<MCPToolResult> {
-    info!("MCP-TOOLS: Getting memory system for update_conversation_context");
-    let system = get_memory_system().await?;
-    info!("MCP-TOOLS: Got memory system, delegating to update_conversation_context_with_system");
-
-    update_conversation_context_with_system(
-        interaction_type,
-        content,
-        code_reference,
-        session_id,
-        &system,
-    )
-    .await
 }

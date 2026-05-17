@@ -1,3 +1,4 @@
+#![allow(missing_docs)]
 use post_cortex::{ConversationMemorySystem, SystemConfig};
 use serial_test::serial;
 use std::sync::Arc;
@@ -50,18 +51,15 @@ async fn test_comprehensive_unified_search() {
     
     // 4. Add Content
     
+    // Bypass MCP layer — these tests exercise cross-session search, not
+    // the MCP write contract. The canonical service now requires
+    // entities/relations on every write, which would force every test
+    // text to carry synthetic graph metadata.
     async fn add_updates(sys: &ConversationMemorySystem, sess: Uuid, updates: Vec<&str>) {
         for text in updates {
-            let mut content = std::collections::HashMap::new();
-            content.insert("text".to_string(), text.to_string());
-            
-            post_cortex::tools::mcp::update_conversation_context_with_system(
-                "qa".to_string(), 
-                content, 
-                None, 
-                sess,
-                sys
-            ).await.unwrap();
+            sys.add_incremental_update(sess, text.to_string(), None)
+                .await
+                .unwrap();
         }
     }
     
@@ -211,20 +209,14 @@ async fn test_session_isolation_bug_reproduction() {
         "In-app notification badges and unread counts"
     ];
 
-    // Helper to add updates
+    // Helper to add updates. Bypasses the MCP layer for the same reason
+    // as the first `add_updates` above: this test exercises cross-session
+    // semantic search, not the MCP write contract.
     async fn add_updates(sys: &ConversationMemorySystem, sess: Uuid, updates: Vec<&str>) {
         for text in updates {
-            let mut content = std::collections::HashMap::new();
-            content.insert("question".to_string(), "How does this work?".to_string());
-            content.insert("answer".to_string(), text.to_string());
-
-            post_cortex::tools::mcp::update_conversation_context_with_system(
-                "qa".to_string(),
-                content,
-                None,
-                sess,
-                sys
-            ).await.unwrap();
+            sys.add_incremental_update(sess, text.to_string(), None)
+                .await
+                .unwrap();
         }
     }
 

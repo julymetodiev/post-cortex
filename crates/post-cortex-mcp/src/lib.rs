@@ -33,7 +33,7 @@
 pub mod error;
 pub use error::{Error, Result as McpResult};
 
-use post_cortex_core::core::context_update::{CodeReference, ContextUpdate, EntityType, UpdateType};
+use post_cortex_core::core::context_update::{CodeReference, ContextUpdate, EntityType};
 use anyhow::Result;
 use arc_swap::ArcSwap;
 use schemars::JsonSchema;
@@ -41,8 +41,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 use tracing::info;
-use uuid::Uuid;
 
+use post_cortex_memory::services::MemoryServiceImpl;
 use post_cortex_memory::{ConversationMemorySystem, SystemConfig};
 
 /// Helpers for recording context updates (single and bulk).
@@ -60,10 +60,7 @@ pub mod workspace;
 /// JSON Schema descriptors for every MCP tool.
 pub mod schemas;
 
-pub use update_context::{
-    update_conversation_context, update_conversation_context_with_system,
-    bulk_update_conversation_context,
-};
+pub use update_context::{bulk_update_conversation_context, update_conversation_context};
 pub use query::{query_conversation_context, query_conversation_context_with_system};
 pub use session::{
     create_session_checkpoint, create_session_checkpoint_with_system,
@@ -269,11 +266,54 @@ pub enum ContextResponse {
 static MEMORY_SYSTEM: LazyLock<ArcSwap<Option<Arc<ConversationMemorySystem>>>> =
     LazyLock::new(|| ArcSwap::new(Arc::new(None)));
 
+/// Global singleton holding the canonical [`MemoryServiceImpl`] derived
+/// from `MEMORY_SYSTEM`. Built lazily on the first call to `get_service`
+/// and replaced whenever a new memory system is injected.
+///
+/// Phase 6 (this commit) wires only `update_conversation_context` and
+/// `bulk_update_conversation_context` through this service. Other MCP
+/// tools still use the raw [`ConversationMemorySystem`] until they're
+/// migrated. Once every tool flows through the service, the singleton
+/// goes away and the function signatures flip to take
+/// `&dyn PostCortexService` (Phase 7).
+static SERVICE: LazyLock<ArcSwap<Option<Arc<MemoryServiceImpl>>>> =
+    LazyLock::new(|| ArcSwap::new(Arc::new(None)));
+
 /// Inject a pre-built memory system for daemon mode.
 pub fn inject_memory_system(system: Arc<ConversationMemorySystem>) {
     info!("MCP-TOOLS: Injecting external memory system for daemon mode");
+    // Wrap the injected system in a canonical service and store it
+    // alongside the raw handle so write-path callers can pick it up
+    // without reconstructing the Pipeline on every request.
+    let service = Arc::new(MemoryServiceImpl::new(system.clone()));
     MEMORY_SYSTEM.store(Arc::new(Some(system)));
+    SERVICE.store(Arc::new(Some(service)));
     info!("MCP-TOOLS: Memory system injection complete");
+}
+
+/// Return the cached canonical service, building it from the current
+/// memory system if necessary. Both `update_conversation_context` and
+/// `bulk_update_conversation_context` flow through this — no transport
+/// is allowed to bypass the canonical impl.
+pub async fn get_service() -> Result<Arc<MemoryServiceImpl>> {
+    if let Some(svc) = SERVICE.load().as_ref() {
+        return Ok(svc.clone());
+    }
+    // Cold start: build from the (possibly cold) memory system. If two
+    // callers race here they'll each construct a `MemoryServiceImpl`,
+    // but `rcu` keeps the first one installed and the loser is dropped
+    // when its Arc goes out of scope.
+    let system = get_memory_system().await?;
+    let new_svc = Arc::new(MemoryServiceImpl::new(system));
+    let new_option = Arc::new(Some(new_svc));
+    SERVICE.rcu(|current| {
+        if current.is_none() {
+            new_option.clone()
+        } else {
+            current.clone()
+        }
+    });
+    Ok(SERVICE.load().as_ref().as_ref().unwrap().clone())
 }
 
 /// Create a new memory system from the given configuration.
@@ -443,118 +483,52 @@ pub struct ContextUpdateItem {
     pub interaction_type: String,
     /// Key-value content fields for the interaction.
     pub content: HashMap<String, String>,
+    /// Named entities mentioned in this update. Required by the canonical
+    /// write path so the entity graph is never silently empty for
+    /// MCP-driven writes.
+    #[serde(default)]
+    pub entities: Vec<EntityItem>,
+    /// Relations between the entities listed above. Both endpoints must
+    /// appear in `entities`; the canonical impl rejects dangling
+    /// references and self-relations.
+    #[serde(default)]
+    pub relations: Vec<RelationItem>,
     /// Optional code reference attached to the update.
     pub code_reference: Option<CodeReference>,
 }
 
-/// Convert an [`Interaction`] into a domain-layer [`ContextUpdate`].
-pub(crate) fn interaction_to_context_update(
-    interaction: Interaction,
-    code_reference: Option<CodeReference>,
-) -> Result<ContextUpdate> {
-    let id = Uuid::new_v4();
-    let timestamp = chrono::Utc::now();
+/// Wire shape for an entity carried by an MCP `update_conversation_context`
+/// call. `entity_type` is a lowercase string from the closed set:
+/// `technology`, `concept`, `problem`, `solution`, `decision`,
+/// `code_component`. Unknown values fall back to `concept` server-side.
+#[derive(Serialize, Deserialize, Debug, JsonSchema, Clone)]
+pub struct EntityItem {
+    /// Unique human-readable entity name.
+    pub name: String,
+    /// Lowercase entity-type string (`technology`, `concept`, ...).
+    #[serde(default = "default_entity_type")]
+    pub entity_type: String,
+}
 
-    let (update_type, content) = match interaction {
-        Interaction::QA {
-            question,
-            answer,
-            details,
-        } => (
-            UpdateType::QuestionAnswered,
-            post_cortex_core::core::context_update::UpdateContent {
-                title: question.clone(),
-                description: answer.clone(),
-                details,
-                examples: vec![],
-                implications: vec![],
-            },
-        ),
-        Interaction::CodeChange {
-            file_path,
-            diff,
-            details,
-        } => (
-            UpdateType::CodeChanged,
-            post_cortex_core::core::context_update::UpdateContent {
-                title: file_path.clone(),
-                description: diff.clone(),
-                details,
-                examples: vec![],
-                implications: vec!["Code functionality updated".to_string()],
-            },
-        ),
-        Interaction::ProblemSolved {
-            problem,
-            solution,
-            details,
-        } => (
-            UpdateType::ProblemSolved,
-            post_cortex_core::core::context_update::UpdateContent {
-                title: problem.clone(),
-                description: solution.clone(),
-                details,
-                examples: vec![],
-                implications: vec!["Problem resolved".to_string()],
-            },
-        ),
-        Interaction::DecisionMade {
-            decision,
-            rationale,
-            details,
-        } => (
-            UpdateType::DecisionMade,
-            post_cortex_core::core::context_update::UpdateContent {
-                title: decision.clone(),
-                description: rationale.clone(),
-                details,
-                examples: vec![],
-                implications: vec!["Decision recorded".to_string()],
-            },
-        ),
-        Interaction::RequirementAdded {
-            requirement,
-            priority,
-            details,
-        } => (
-            UpdateType::RequirementAdded,
-            post_cortex_core::core::context_update::UpdateContent {
-                title: requirement.clone(),
-                description: format!("Priority: {}", priority),
-                details,
-                examples: vec![],
-                implications: vec!["Requirement added".to_string()],
-            },
-        ),
-        Interaction::ConceptDefined {
-            concept,
-            definition,
-            details,
-        } => (
-            UpdateType::ConceptDefined,
-            post_cortex_core::core::context_update::UpdateContent {
-                title: concept.clone(),
-                description: definition.clone(),
-                details,
-                examples: vec![],
-                implications: vec!["Concept defined".to_string()],
-            },
-        ),
-    };
+fn default_entity_type() -> String {
+    "concept".to_string()
+}
 
-    Ok(ContextUpdate {
-        id,
-        timestamp,
-        update_type,
-        content,
-        related_code: code_reference,
-        parent_update: None,
-        user_marked_important: false,
-        creates_entities: vec![],
-        creates_relationships: vec![],
-        references_entities: vec![],
-        typed_entities: vec![],
-    })
+/// Wire shape for a relation between two named entities. `relation_type`
+/// is a lowercase string from the closed set: `required_by`, `leads_to`,
+/// `related_to`, `conflicts_with`, `depends_on`, `implements`,
+/// `caused_by`, `solves`. Unknown values cause the request to be
+/// rejected with `InvalidArgument`.
+#[derive(Serialize, Deserialize, Debug, JsonSchema, Clone)]
+pub struct RelationItem {
+    /// Source entity name (must match a `name` in the `entities` array).
+    pub from_entity: String,
+    /// Target entity name (must also match an `entities` entry).
+    pub to_entity: String,
+    /// Lowercase relation-type string.
+    pub relation_type: String,
+    /// Short explanation of why this relation exists.
+    pub context: String,
 }
 
 /// Parse a datetime string in RFC 3339, `%Y-%m-%d %H:%M:%S`, or `%Y-%m-%d` format.

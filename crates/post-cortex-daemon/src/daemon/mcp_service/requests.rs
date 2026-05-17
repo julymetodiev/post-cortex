@@ -221,6 +221,25 @@ Complex: {"criteria": "{\"performance\": 9, \"safety\": 10}", "date": "2025-01-1
 Note: For complex nested data, stringify as JSON first. Do not pass nested objects directly."#
     )]
     pub content: std::collections::HashMap<String, String>,
+    /// Named entities mentioned in this update. Required by the canonical
+    /// write path so the entity graph is never silently empty.
+    #[serde(default)]
+    #[schemars(
+        description = r#"Named entities mentioned in this update.
+
+Each entry: {"name": "<unique name>", "entity_type": "concept|technology|problem|solution|decision|code_component"}.
+Required (must contain at least one entity) so the entity graph captures every write."#
+    )]
+    pub entities: Vec<post_cortex_mcp::EntityItem>,
+    /// Relations between the entities listed above.
+    #[serde(default)]
+    #[schemars(
+        description = r#"Relations between the entities listed above.
+
+Each entry: {"from_entity": "<name>", "to_entity": "<name>", "relation_type": "depends_on|implements|caused_by|leads_to|related_to|required_by|conflicts_with|solves", "context": "<short why>"}.
+Required (must contain at least one relation). Both endpoints must appear in the `entities` array; self-relations and dangling references are rejected with InvalidArgument."#
+    )]
+    pub relations: Vec<post_cortex_mcp::RelationItem>,
     /// Optional code location reference.
     #[schemars(description = r#"Optional code reference for context.
 
@@ -278,6 +297,25 @@ Complex: {"criteria": "{\"performance\": 9}", "date": "2025-01-12"}
 Note: For complex nested data, stringify as JSON first. Required for single update mode."#
     )]
     pub content: Option<std::collections::HashMap<String, String>>,
+    /// Named entities mentioned in this update (single-update mode).
+    /// Required by the canonical write path.
+    #[serde(default)]
+    #[schemars(
+        description = r#"Named entities mentioned in this update.
+
+Each entry: {"name": "<unique name>", "entity_type": "concept|technology|problem|solution|decision|code_component"}.
+Required (must contain at least one entity) so the entity graph captures every write."#
+    )]
+    pub entities: Vec<post_cortex_mcp::EntityItem>,
+    /// Relations between the entities listed above (single-update mode).
+    #[serde(default)]
+    #[schemars(
+        description = r#"Relations between the entities listed above.
+
+Each entry: {"from_entity": "<name>", "to_entity": "<name>", "relation_type": "depends_on|implements|caused_by|leads_to|related_to|required_by|conflicts_with|solves", "context": "<short why>"}.
+Required (must contain at least one relation). Both endpoints must appear in the `entities` array; self-relations and dangling references are rejected with InvalidArgument."#
+    )]
+    pub relations: Vec<post_cortex_mcp::RelationItem>,
     /// Optional code reference for single-update mode.
     #[schemars(description = r#"Optional code reference for single update.
 

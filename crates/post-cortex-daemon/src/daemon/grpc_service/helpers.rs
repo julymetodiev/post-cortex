@@ -3,12 +3,27 @@
 
 //! Shared parsing / formatting / validation helpers used by the gRPC
 //! service.
+//!
+//! After the single-entrypoint migration the write-path validation /
+//! metadata-shaping helpers live in
+//! [`post_cortex_memory::services::MemoryServiceImpl`]. This module is
+//! left with: proto-UUID parsing, workspace formatting, and proto →
+//! domain translation at the gRPC boundary (`proto_update_to_request`,
+//! `system_error_to_status`).
 
+use post_cortex_core::core::context_update::{
+    EntityData, EntityRelationship, EntityType, RelationType, UpdateContent, UpdateType,
+};
+use post_cortex_core::core::error::SystemError;
+use post_cortex_core::services::UpdateContextRequest as ServiceUpdateRequest;
 use post_cortex_core::workspace::SessionRole;
 use tonic::{Request, Status};
 use uuid::Uuid;
 
-use super::pb::{ContextContent, EntityInfo, RelationInfo, WorkspaceInfo, WorkspaceSessionEntry};
+use super::pb::{
+    ContextUpdateItem as ProtoUpdateItem, UpdateContextRequest as ProtoUpdateRequest,
+    WorkspaceInfo, WorkspaceSessionEntry,
+};
 
 pub(super) fn parse_uuid(s: &str) -> Result<Uuid, Status> {
     Uuid::parse_str(s).map_err(|_| Status::invalid_argument(format!("Invalid UUID: {s}")))
@@ -57,101 +72,9 @@ pub(super) fn workspace_to_info(workspace: &post_cortex_core::workspace::Workspa
     }
 }
 
-pub(super) fn format_context_description(
-    interaction_type: &str,
-    content: &ContextContent,
-) -> String {
-    let mut desc = String::new();
-    if !content.title.is_empty() {
-        desc.push_str(&content.title);
-    }
-    if !content.description.is_empty() {
-        if !desc.is_empty() {
-            desc.push_str(": ");
-        }
-        desc.push_str(&content.description);
-    }
-    if desc.is_empty() {
-        desc = format!("[{interaction_type}] update");
-    }
-    desc
-}
-
-/// Validate entities and relations provided by the caller (Claude-driven extraction).
-/// Returns `Err(Status)` with a precise message on the first validation failure.
-pub(super) fn validate_entities_and_relations(
-    entities: &[EntityInfo],
-    relations: &[RelationInfo],
-) -> Result<(), Status> {
-    use std::collections::HashSet;
-
-    if entities.is_empty() {
-        return Err(Status::invalid_argument(
-            "entities field is required and must not be empty",
-        ));
-    }
-
-    if relations.is_empty() {
-        return Err(Status::invalid_argument(
-            "relations field is required and must not be empty",
-        ));
-    }
-
-    // Build a set of known entity names for referential-integrity checks.
-    let entity_names: HashSet<&str> = entities.iter().map(|e| e.name.as_str()).collect();
-
-    for (i, rel) in relations.iter().enumerate() {
-        if rel.from_entity.is_empty() {
-            return Err(Status::invalid_argument(format!(
-                "relation[{i}]: from_entity must not be empty"
-            )));
-        }
-        if rel.to_entity.is_empty() {
-            return Err(Status::invalid_argument(format!(
-                "relation[{i}]: to_entity must not be empty"
-            )));
-        }
-        if rel.from_entity == rel.to_entity {
-            return Err(Status::invalid_argument(format!(
-                "relation[{i}]: self-relations are not allowed (from_entity == to_entity == {:?})",
-                rel.from_entity
-            )));
-        }
-        if rel.context.is_empty() {
-            return Err(Status::invalid_argument(format!(
-                "relation[{i}]: context must not be empty — every relation requires an explanation"
-            )));
-        }
-        // Validate relation_type is a known variant.
-        if parse_relation_type(&rel.relation_type).is_none() {
-            return Err(Status::invalid_argument(format!(
-                "relation[{i}]: unknown relation_type {:?}; valid values are: \
-                 required_by, leads_to, related_to, conflicts_with, depends_on, implements, caused_by, solves",
-                rel.relation_type
-            )));
-        }
-        // Referential integrity: both endpoints must be declared in entities.
-        if !entity_names.contains(rel.from_entity.as_str()) {
-            return Err(Status::invalid_argument(format!(
-                "relation[{i}]: from_entity {:?} is not declared in the entities list",
-                rel.from_entity
-            )));
-        }
-        if !entity_names.contains(rel.to_entity.as_str()) {
-            return Err(Status::invalid_argument(format!(
-                "relation[{i}]: to_entity {:?} is not declared in the entities list",
-                rel.to_entity
-            )));
-        }
-    }
-
-    Ok(())
-}
-
-/// Parse a relation_type string (case-insensitive) into a `RelationType`,
+/// Parse a relation_type string (case-insensitive) into a [`RelationType`],
 /// returning `None` for unknown values.
-pub(super) fn parse_relation_type(s: &str) -> Option<post_cortex_core::core::context_update::RelationType> {
-    use post_cortex_core::core::context_update::RelationType;
+fn parse_relation_type(s: &str) -> Option<RelationType> {
     match s.to_lowercase().as_str() {
         "required_by" | "requiredby" => Some(RelationType::RequiredBy),
         "leads_to" | "leadsto" => Some(RelationType::LeadsTo),
@@ -165,10 +88,9 @@ pub(super) fn parse_relation_type(s: &str) -> Option<post_cortex_core::core::con
     }
 }
 
-/// Parse an entity_type string (case-insensitive) into an `EntityType`,
+/// Parse an entity_type string (case-insensitive) into an [`EntityType`],
 /// defaulting to `Concept`.
-pub(super) fn parse_entity_type(s: &str) -> post_cortex_core::core::context_update::EntityType {
-    use post_cortex_core::core::context_update::EntityType;
+fn parse_entity_type(s: &str) -> EntityType {
     match s.to_lowercase().as_str() {
         "technology" => EntityType::Technology,
         "concept" => EntityType::Concept,
@@ -180,88 +102,152 @@ pub(super) fn parse_entity_type(s: &str) -> post_cortex_core::core::context_upda
     }
 }
 
-pub(super) fn build_update_metadata(
-    interaction_type: &str,
-    content: &ContextContent,
-    entities: &[EntityInfo],
-    relations: &[RelationInfo],
-) -> serde_json::Value {
-    use post_cortex_core::core::context_update::{
-        ContextUpdate, EntityRelationship, TypedEntity, UpdateContent, UpdateType,
-    };
-
-    let update_type = match interaction_type {
+/// Parse a proto `interaction_type` string into a typed [`UpdateType`].
+/// Unknown values fall back to `ConceptDefined` to match historical
+/// behaviour (the legacy `build_update_metadata` used the same catch-all).
+fn parse_update_type(s: &str) -> UpdateType {
+    match s {
         "decision_made" => UpdateType::DecisionMade,
         "problem_solved" => UpdateType::ProblemSolved,
         "code_change" | "code_changed" => UpdateType::CodeChanged,
         "qa" | "question_answered" => UpdateType::QuestionAnswered,
         "requirement_added" => UpdateType::RequirementAdded,
-        "concept_defined" | _ => UpdateType::ConceptDefined,
+        _ => UpdateType::ConceptDefined,
+    }
+}
+
+/// Translate the proto [`ContextContent.code_ref`] into the core
+/// [`post_cortex_core::core::context_update::CodeReference`]. Returns
+/// `None` when the proto field is missing.
+fn proto_code_ref_to_domain(
+    proto: Option<&super::pb::CodeReference>,
+) -> Option<post_cortex_core::core::context_update::CodeReference> {
+    proto.map(|c| post_cortex_core::core::context_update::CodeReference {
+        file_path: c.file_path.clone(),
+        start_line: c.start_line,
+        end_line: c.end_line,
+        code_snippet: c.code_snippet.clone(),
+        commit_hash: if c.commit_hash.is_empty() {
+            None
+        } else {
+            Some(c.commit_hash.clone())
+        },
+        branch: if c.branch.is_empty() {
+            None
+        } else {
+            Some(c.branch.clone())
+        },
+        change_description: c.change_description.clone(),
+    })
+}
+
+/// Translate a proto [`UpdateContextRequest`] into the canonical
+/// [`ServiceUpdateRequest`] consumed by
+/// [`post_cortex_memory::services::MemoryServiceImpl::update_context`].
+///
+/// Performs the proto-only checks the canonical impl cannot do
+/// (session-UUID parsing, `relation_type` enum lookup) and surfaces them
+/// as `Status::invalid_argument`. Domain-level validation (referential
+/// integrity, empty fields, self-relations) is left to the canonical
+/// impl so every transport gets identical error messages.
+pub(super) fn proto_update_to_request(
+    proto: ProtoUpdateRequest,
+) -> Result<ServiceUpdateRequest, Status> {
+    let session_id = parse_uuid(&proto.session_id)?;
+    translate_payload(
+        session_id,
+        &proto.interaction_type,
+        proto.content,
+        &proto.entities,
+        &proto.relations,
+    )
+}
+
+/// Translate a bulk `ContextUpdateItem` (which has no session_id of its own)
+/// using the session_id from the bulk envelope.
+pub(super) fn proto_bulk_item_to_request(
+    session_id: Uuid,
+    item: ProtoUpdateItem,
+) -> Result<ServiceUpdateRequest, Status> {
+    translate_payload(
+        session_id,
+        &item.interaction_type,
+        item.content,
+        &item.entities,
+        &item.relations,
+    )
+}
+
+fn translate_payload(
+    session_id: Uuid,
+    interaction_type: &str,
+    content_proto: Option<super::pb::ContextContent>,
+    entities_proto: &[super::pb::EntityInfo],
+    relations_proto: &[super::pb::RelationInfo],
+) -> Result<ServiceUpdateRequest, Status> {
+    let interaction_type = parse_update_type(interaction_type);
+    let content_proto = content_proto.unwrap_or_default();
+    let content = UpdateContent {
+        title: content_proto.title.clone(),
+        description: content_proto.description.clone(),
+        details: content_proto.details.clone(),
+        examples: content_proto.examples.clone(),
+        implications: content_proto.implications.clone(),
     };
 
-    let related_code = content
-        .code_ref
-        .as_ref()
-        .map(|c| post_cortex_core::core::context_update::CodeReference {
-            file_path: c.file_path.clone(),
-            start_line: c.start_line,
-            end_line: c.end_line,
-            code_snippet: c.code_snippet.clone(),
-            commit_hash: if c.commit_hash.is_empty() {
-                None
-            } else {
-                Some(c.commit_hash.clone())
-            },
-            branch: if c.branch.is_empty() {
-                None
-            } else {
-                Some(c.branch.clone())
-            },
-            change_description: c.change_description.clone(),
-        });
-
-    // Map proto EntityInfo → TypedEntity and collect entity names for creates_entities.
-    let typed_entities: Vec<TypedEntity> = entities
+    let entities: Vec<EntityData> = entities_proto
         .iter()
-        .map(|e| TypedEntity {
+        .map(|e| EntityData {
             name: e.name.clone(),
             entity_type: parse_entity_type(&e.entity_type),
-        })
-        .collect();
-    let creates_entities: Vec<String> = typed_entities.iter().map(|e| e.name.clone()).collect();
-
-    // Map proto RelationInfo → EntityRelationship.
-    let creates_relationships: Vec<EntityRelationship> = relations
-        .iter()
-        .filter_map(|r| {
-            parse_relation_type(&r.relation_type).map(|rt| EntityRelationship {
-                from_entity: r.from_entity.clone(),
-                to_entity: r.to_entity.clone(),
-                relation_type: rt,
-                context: r.context.clone(),
-            })
+            first_mentioned: chrono::Utc::now(),
+            last_mentioned: chrono::Utc::now(),
+            mention_count: 1,
+            importance_score: 1.0,
+            description: None,
         })
         .collect();
 
-    let update = ContextUpdate {
-        id: Uuid::new_v4(),
-        timestamp: chrono::Utc::now(),
-        update_type,
-        content: UpdateContent {
-            title: content.title.clone(),
-            description: content.description.clone(),
-            details: content.details.clone(),
-            examples: content.examples.clone(),
-            implications: content.implications.clone(),
-        },
-        related_code,
-        parent_update: None,
-        user_marked_important: false,
-        creates_entities,
-        creates_relationships,
-        references_entities: Vec::new(),
-        typed_entities,
-    };
+    let mut relations = Vec::with_capacity(relations_proto.len());
+    for (i, r) in relations_proto.iter().enumerate() {
+        let rt = parse_relation_type(&r.relation_type).ok_or_else(|| {
+            Status::invalid_argument(format!(
+                "relation[{i}]: unknown relation_type {:?}; valid values are: \
+                 required_by, leads_to, related_to, conflicts_with, depends_on, implements, caused_by, solves",
+                r.relation_type
+            ))
+        })?;
+        relations.push(EntityRelationship {
+            from_entity: r.from_entity.clone(),
+            to_entity: r.to_entity.clone(),
+            relation_type: rt,
+            context: r.context.clone(),
+        });
+    }
 
-    serde_json::to_value(update).expect("ContextUpdate serialization cannot fail")
+    Ok(ServiceUpdateRequest {
+        session_id,
+        interaction_type,
+        content,
+        entities,
+        relations,
+        code_reference: proto_code_ref_to_domain(content_proto.code_ref.as_ref()),
+    })
+}
+
+/// Map a domain [`SystemError`] onto the appropriate tonic [`Status`].
+/// Validation failures surface as `invalid_argument`; everything else is
+/// `internal`. Storage / circuit-breaker errors are deliberately not
+/// promoted to `unavailable` here — the existing handlers always
+/// returned `internal` for those, and changing that is out of scope for
+/// the single-entrypoint migration.
+pub(super) fn system_error_to_status(err: SystemError) -> Status {
+    match err {
+        SystemError::InvalidArgument(msg) => Status::invalid_argument(msg),
+        SystemError::SessionNotFound(id) => Status::not_found(format!("session {id} not found")),
+        SystemError::WorkspaceNotFound(id) => {
+            Status::not_found(format!("workspace {id} not found"))
+        }
+        other => Status::internal(other.to_string()),
+    }
 }
