@@ -47,3 +47,4 @@ export-*
 .worktrees
 settings.local.json
 .claude/settings.local.json
+test_data_*
