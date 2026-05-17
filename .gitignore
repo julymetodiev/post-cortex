@@ -49,3 +49,4 @@ settings.local.json
 .claude/settings.local.json
 test_data_*
 RELEASING.md
+history.txt
