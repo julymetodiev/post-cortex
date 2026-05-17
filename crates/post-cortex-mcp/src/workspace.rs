@@ -1,5 +1,5 @@
-use crate::core::memory_system::ConversationMemorySystem;
-use crate::tools::mcp::{get_memory_system, MCPToolResult};
+use post_cortex_memory::ConversationMemorySystem;
+use crate::{get_memory_system, MCPToolResult};
 use anyhow::Result;
 use tracing::{error, info, instrument};
 use uuid::Uuid;
@@ -181,11 +181,11 @@ pub async fn add_session_to_workspace(
     let system = get_memory_system().await?;
 
     let role_enum = match role.to_lowercase().as_str() {
-        "primary" => crate::workspace::SessionRole::Primary,
-        "related" => crate::workspace::SessionRole::Related,
-        "dependency" => crate::workspace::SessionRole::Dependency,
-        "shared" => crate::workspace::SessionRole::Shared,
-        _ => crate::workspace::SessionRole::Related,
+        "primary" => post_cortex_core::workspace::SessionRole::Primary,
+        "related" => post_cortex_core::workspace::SessionRole::Related,
+        "dependency" => post_cortex_core::workspace::SessionRole::Dependency,
+        "shared" => post_cortex_core::workspace::SessionRole::Shared,
+        _ => post_cortex_core::workspace::SessionRole::Related,
     };
 
     match system

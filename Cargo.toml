@@ -197,6 +197,7 @@ post-cortex-core = { workspace = true }
 post-cortex-embeddings = { workspace = true, features = ["bert"] }
 post-cortex-storage.workspace = true
 post-cortex-memory.workspace = true
+post-cortex-mcp.workspace = true
 
 # [build-dependencies] section intentionally absent — the legacy root no
 # longer compiles proto. tonic-build moved to crates/post-cortex-proto.
@@ -232,6 +233,6 @@ llm-integration = []
 # `cargo build --features embeddings,surrealdb-storage` invocation that
 # existed for the single-crate package keeps producing an identical
 # build of the legacy daemon + tools tree.
-embeddings = ["post-cortex-memory/embeddings"]
+embeddings = ["post-cortex-memory/embeddings", "post-cortex-mcp/embeddings"]
 surrealdb-storage = ["post-cortex-memory/surrealdb-storage"]
 surrealdb-tikv = ["post-cortex-memory/surrealdb-storage", "post-cortex-storage/surrealdb-tikv"]

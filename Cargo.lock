@@ -4342,6 +4342,7 @@ dependencies = [
  "portpicker",
  "post-cortex-core",
  "post-cortex-embeddings",
+ "post-cortex-mcp",
  "post-cortex-memory",
  "post-cortex-proto",
  "post-cortex-storage",
@@ -4456,6 +4457,27 @@ version = "0.1.23"
 [[package]]
 name = "post-cortex-mcp"
 version = "0.1.23"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-trait",
+ "chrono",
+ "dirs",
+ "log",
+ "post-cortex-core",
+ "post-cortex-embeddings",
+ "post-cortex-memory",
+ "post-cortex-storage",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "post-cortex-memory"

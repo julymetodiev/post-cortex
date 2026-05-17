@@ -6,11 +6,57 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Pure-library MCP tool definitions for post-cortex. Embed in any MCP-compatible host (rmcp, custom servers) without pulling the post-cortex daemon."
-keywords = ["mcp", "tools", "memory", "ai", "post-cortex"]
+description = "Model Context Protocol (MCP) tool definitions for post-cortex. Pure library — embed in rmcp, custom MCP servers, or anywhere else; no rmcp / axum / tonic transport dependencies."
+keywords = ["mcp", "tools", "post-cortex", "ai", "memory"]
 categories = ["api-bindings", "data-structures"]
 readme = "README.md"
 documentation = "https://docs.rs/post-cortex-mcp"
 
 [dependencies]
-# Phase 6 fills in: post-cortex-core, serde, serde_json, schemars, uuid, chrono, tracing.
+# Phase 6 transitional — MCP tools call into ConversationMemorySystem
+# directly (via post-cortex-memory) and reach into storage / core for
+# request types. When Phase 4's PostCortexService trait impl is fully
+# wired (Phase 7), this crate's signatures swap to take
+# `&dyn post_cortex_core::PostCortexService` and the post-cortex-memory
+# / post-cortex-storage dependencies drop to dev-only.
+post-cortex-core.workspace = true
+post-cortex-memory.workspace = true
+post-cortex-storage.workspace = true
+post-cortex-embeddings.workspace = true
+
+# Serialisation + schemas
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+# Async + concurrency
+tokio.workspace = true
+async-trait.workspace = true
+arc-swap.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+
+# Observability
+tracing.workspace = true
+log.workspace = true
+
+# Filesystem (default data-directory lookup in MEMORY_SYSTEM init)
+dirs.workspace = true
+
+[dev-dependencies]
+tokio-test.workspace = true
+tempfile.workspace = true
+
+[features]
+default = ["embeddings"]
+# `embeddings` mirrors the legacy single-crate feature name so the
+# `#[cfg(feature = "embeddings")]` annotations in search.rs etc. resolve.
+# Forward to post-cortex-memory which forwards to post-cortex-embeddings.
+embeddings = ["post-cortex-memory/embeddings"]
+otel = []
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

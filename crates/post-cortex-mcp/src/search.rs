@@ -1,5 +1,5 @@
-use crate::core::timeout_utils::with_storage_timeout;
-use crate::tools::mcp::{get_memory_system, MCPToolResult};
+use post_cortex_core::core::timeout_utils::with_storage_timeout;
+use crate::{get_memory_system, MCPToolResult};
 use anyhow::Result;
 use tracing::{error, info};
 use uuid::Uuid;
@@ -38,7 +38,7 @@ fn parse_date_range(
 /// global search response; session search omits it since the scope is implicit).
 #[cfg(feature = "embeddings")]
 fn search_hit_to_json(
-    r: &crate::core::content_vectorizer::SemanticSearchResult,
+    r: &post_cortex_memory::content_vectorizer::SemanticSearchResult,
     include_session_id: bool,
 ) -> serde_json::Value {
     let mut obj = serde_json::json!({
@@ -67,7 +67,7 @@ fn search_hit_to_json(
 /// length.
 #[cfg(feature = "embeddings")]
 fn format_results_message(
-    results: &[crate::core::content_vectorizer::SemanticSearchResult],
+    results: &[post_cortex_memory::content_vectorizer::SemanticSearchResult],
     header: String,
     include_session: bool,
     truncate_at: usize,

@@ -1,12 +1,12 @@
-use crate::core::context_update::EntityType;
-use crate::core::memory_system::ConversationMemorySystem;
-use crate::core::timeout_utils::with_mcp_timeout;
-use crate::session::active_session::ActiveSession;
-use crate::tools::mcp::{
+use post_cortex_core::core::context_update::EntityType;
+use post_cortex_memory::ConversationMemorySystem;
+use post_cortex_core::core::timeout_utils::with_mcp_timeout;
+use post_cortex_core::session::active_session::ActiveSession;
+use crate::{
     get_memory_system, parse_datetime, ContextQuery, ContextResponse,
     MCPToolResult,
 };
-use crate::core::context_update::UpdateType;
+use post_cortex_core::core::context_update::UpdateType;
 use anyhow::Result;
 use std::collections::HashMap;
 use tracing::{debug, error};
@@ -292,11 +292,11 @@ pub(crate) async fn query_context(
     session: &ActiveSession,
     query: ContextQuery,
 ) -> Result<ContextResponse> {
-    use crate::core::context_update::CodeReference;
+    use post_cortex_core::core::context_update::CodeReference;
 
     match query {
         ContextQuery::GetRecentChanges { since } => {
-            let recent_updates: Vec<crate::core::context_update::ContextUpdate> = session
+            let recent_updates: Vec<post_cortex_core::core::context_update::ContextUpdate> = session
                 .hot_context
                 .iter()
                 .iter()
@@ -401,7 +401,7 @@ pub(crate) async fn query_context(
             ))
         }
         ContextQuery::SearchUpdates { query } => {
-            let update_results: Vec<crate::core::context_update::ContextUpdate> = session
+            let update_results: Vec<post_cortex_core::core::context_update::ContextUpdate> = session
                 .hot_context
                 .iter()
                 .iter()
@@ -421,7 +421,7 @@ pub(crate) async fn query_context(
             Ok(ContextResponse::SearchResults(update_results))
         }
         ContextQuery::GetDecisions { since: _ } => {
-            let decisions: Vec<crate::core::context_update::ContextUpdate> = session
+            let decisions: Vec<post_cortex_core::core::context_update::ContextUpdate> = session
                 .hot_context
                 .iter()
                 .into_iter()
@@ -433,7 +433,7 @@ pub(crate) async fn query_context(
             "No open questions".to_string(),
         ])),
         ContextQuery::GetChangeHistory { file_path: _ } => {
-            let changes: Vec<crate::core::context_update::ContextUpdate> = session
+            let changes: Vec<post_cortex_core::core::context_update::ContextUpdate> = session
                 .hot_context
                 .iter()
                 .into_iter()
@@ -442,7 +442,7 @@ pub(crate) async fn query_context(
             Ok(ContextResponse::ChangeHistory(changes))
         }
         ContextQuery::AssembleContext { query, token_budget } => {
-            use crate::core::context_assembly;
+            use post_cortex_memory::context_assembly;
 
             let updates: Vec<_> = session.hot_context.iter().iter()
                 .chain(session.warm_context.iter().map(|c| &c.update))

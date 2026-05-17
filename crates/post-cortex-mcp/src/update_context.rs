@@ -1,7 +1,7 @@
-use crate::core::context_update::CodeReference;
-use crate::core::memory_system::ConversationMemorySystem;
-use crate::core::timeout_utils::with_mcp_timeout;
-use crate::tools::mcp::{
+use post_cortex_core::core::context_update::CodeReference;
+use post_cortex_memory::ConversationMemorySystem;
+use post_cortex_core::core::timeout_utils::with_mcp_timeout;
+use crate::{
     get_memory_system, interaction_to_context_update, string_to_anyhow, ContextUpdateItem,
     Interaction, MCPToolResult,
 };
@@ -128,8 +128,8 @@ fn build_interaction(
 /// update path supports as freeform comma/space-separated strings.
 fn parse_entity_extras(
     content: &HashMap<String, String>,
-) -> (Vec<String>, Vec<crate::core::context_update::EntityRelationship>) {
-    use crate::core::context_update::{EntityRelationship, RelationType};
+) -> (Vec<String>, Vec<post_cortex_core::core::context_update::EntityRelationship>) {
+    use post_cortex_core::core::context_update::{EntityRelationship, RelationType};
 
     let entities: Vec<String> = content
         .get("entities")

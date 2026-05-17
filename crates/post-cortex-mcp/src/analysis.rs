@@ -1,5 +1,5 @@
-use crate::summary::SummaryGenerator;
-use crate::tools::mcp::{get_memory_system, MCPToolResult};
+use post_cortex_core::summary::SummaryGenerator;
+use crate::{get_memory_system, MCPToolResult};
 use anyhow::Result;
 use uuid::Uuid;
 
@@ -23,7 +23,7 @@ pub async fn get_structured_summary(
 
     let session = session_arc.load();
 
-    use crate::summary::SummaryOptions;
+    use post_cortex_core::summary::SummaryOptions;
     let user_requested_compact = compact.unwrap_or(false);
     const MAX_TOKENS: usize = 50_000;
 

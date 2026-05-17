@@ -47,10 +47,16 @@ pub use post_cortex_core::summary;
 pub use post_cortex_core::workspace;
 pub use post_cortex_storage as storage;
 
-// Modules still hosted here. Phase 6 moves tools/mcp into post-cortex-mcp;
-// Phase 7 moves daemon + pcx bin into post-cortex-daemon.
+/// Phase 6 — `tools::mcp` moved to post-cortex-mcp. Legacy callers
+/// (daemon's mcp_service handlers) still use `crate::tools::mcp::X`
+/// paths; the re-export below keeps them compiling until Phase 7
+/// migrates the daemon to import from post-cortex-mcp directly.
+pub mod tools {
+    pub use post_cortex_mcp as mcp;
+}
+
+// Daemon still hosted here. Phase 7 moves it into post-cortex-daemon.
 pub mod daemon;
-pub mod tools;
 
 // Headline re-exports preserved verbatim from the pre-Phase-3 surface.
 pub use post_cortex_core::core::error::{Result, SystemError};
