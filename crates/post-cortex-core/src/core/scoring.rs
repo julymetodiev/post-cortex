@@ -8,7 +8,7 @@
 //! The [`ScoreAdjuster`] trait allows you to compose multiple scoring strategies
 //! without modifying the core search logic.
 
-use crate::core::vector_db::VectorMetadata;
+use post_cortex_embeddings::VectorMetadata;
 use chrono::{DateTime, Utc};
 
 /// Trait for adjusting search result scores based on various factors

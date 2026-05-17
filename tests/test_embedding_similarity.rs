@@ -1,5 +1,5 @@
 use anyhow::Result;
-use post_cortex::core::embeddings::{EmbeddingConfig, LocalEmbeddingEngine};
+use post_cortex_embeddings::{EmbeddingConfig, LocalEmbeddingEngine};
 use serial_test::serial;
 
 #[serial]

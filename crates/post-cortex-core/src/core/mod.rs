@@ -21,7 +21,6 @@ pub mod cache;
 pub mod content_vectorizer;
 pub mod context_assembly;
 pub mod context_update;
-pub mod embeddings;
 pub mod error;
 pub mod memory_system;
 pub mod performance;
@@ -30,4 +29,7 @@ pub mod scoring;
 pub mod semantic_query_engine;
 pub mod structured_context;
 pub mod timeout_utils;
-pub mod vector_db;
+// vector_db moved to post-cortex-embeddings (Phase 3b) — types + impl in one place.
+// Consumers of just the data types (e.g. storage/traits.rs) depend on
+// post-cortex-embeddings with `default-features = false`, which compiles only
+// the lightweight type module (no candle, no HNSW).

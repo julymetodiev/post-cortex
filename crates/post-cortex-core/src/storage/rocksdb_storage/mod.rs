@@ -20,7 +20,7 @@ use rocksdb::DB;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::core::vector_db::VectorDB;
+use post_cortex_embeddings::VectorDB;
 
 mod core;
 mod freshness;

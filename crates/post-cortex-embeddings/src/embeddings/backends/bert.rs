@@ -23,8 +23,8 @@ use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tracing::{debug, info};
 
-use crate::core::embeddings::backend::EmbeddingBackend;
-use crate::core::embeddings::config::EmbeddingModelType;
+use crate::embeddings::backend::EmbeddingBackend;
+use crate::embeddings::config::EmbeddingModelType;
 
 /// Maximum sequence length for BERT models (most variants cap at 512).
 const MAX_SEQ_LENGTH: usize = 512;

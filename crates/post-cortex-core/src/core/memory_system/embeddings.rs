@@ -12,9 +12,9 @@ use crate::session::active_session::ActiveSession;
 #[cfg(feature = "embeddings")]
 use crate::core::content_vectorizer::{ContentVectorizer, ContentVectorizerConfig};
 #[cfg(feature = "embeddings")]
-use crate::core::embeddings::EmbeddingConfig;
+use post_cortex_embeddings::EmbeddingConfig;
 #[cfg(feature = "embeddings")]
-use crate::core::vector_db::VectorDbConfig;
+use post_cortex_embeddings::VectorDbConfig;
 
 use super::system::ConversationMemorySystem;
 

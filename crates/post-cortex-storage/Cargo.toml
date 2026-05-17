@@ -1,0 +1,16 @@
+[package]
+name = "post-cortex-storage"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Storage backends for post-cortex — RocksDB (default) and SurrealDB (feature). Implements the Storage trait over the post-cortex domain types."
+keywords = ["post-cortex", "storage", "rocksdb", "surrealdb", "kv"]
+categories = ["database-implementations"]
+readme = "README.md"
+documentation = "https://docs.rs/post-cortex-storage"
+
+[dependencies]
+# Phase 3c fills this in. Phase 3b stub keeps the workspace loadable.

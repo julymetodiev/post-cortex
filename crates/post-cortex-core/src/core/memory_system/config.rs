@@ -2,7 +2,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 #[cfg(feature = "embeddings")]
-use crate::core::embeddings::EmbeddingModelType;
+use post_cortex_embeddings::EmbeddingModelType;
 
 // Timeout constants used by OperationType
 const TIMEOUT_FAST_MS: u64 = 5_000;

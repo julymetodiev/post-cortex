@@ -1,5 +1,5 @@
 use anyhow::Result;
-use post_cortex::core::embeddings::{EmbeddingConfig, LocalEmbeddingEngine};
+use post_cortex_embeddings::{EmbeddingConfig, LocalEmbeddingEngine};
 
 #[tokio::test]
 async fn test_direct_query_encoding_consistency() -> Result<()> {

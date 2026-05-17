@@ -23,7 +23,7 @@ use super::storage_actor::{StorageActor, StorageActorHandle};
 #[cfg(feature = "embeddings")]
 use super::config::EmbeddingConfigHolder;
 #[cfg(feature = "embeddings")]
-use crate::core::embeddings::EmbeddingModelType;
+use post_cortex_embeddings::EmbeddingModelType;
 
 // Memory management constants
 const MAX_ACTIVE_SESSIONS: usize = 500;

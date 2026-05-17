@@ -15,6 +15,15 @@ documentation = "https://docs.rs/post-cortex-core"
 [dependencies]
 post-cortex-proto.workspace = true
 
+# Phase 3b transitional — embeddings + HNSW impl moved out of core. The
+# orchestrator code (memory_system, content_vectorizer, semantic_query_engine,
+# query_cache, context_assembly) still lives in this crate until Phase 3d
+# extracts it; those modules reach into post-cortex-embeddings for the
+# concrete EmbeddingBackend + VectorDB types. After Phase 3d this becomes
+# `dev-dependencies = true` only or is dropped entirely (core itself is
+# trait-only).
+post-cortex-embeddings.workspace = true
+
 # Direct prost (needed by storage/rocksdb_storage/freshness.rs for
 # encoding SourceReference proto messages into RocksDB).
 prost.workspace = true

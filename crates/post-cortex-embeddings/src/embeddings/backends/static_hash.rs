@@ -23,8 +23,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::core::embeddings::backend::EmbeddingBackend;
-use crate::core::embeddings::pool::MemoryPool;
+use crate::embeddings::backend::EmbeddingBackend;
+use crate::embeddings::pool::MemoryPool;
 
 pub struct StaticHashBackend {
     dimension: usize,
@@ -32,7 +32,7 @@ pub struct StaticHashBackend {
 }
 
 impl StaticHashBackend {
-    pub(in crate::core::embeddings) fn new(dimension: usize, memory_pool: Arc<MemoryPool>) -> Self {
+    pub(in crate::embeddings) fn new(dimension: usize, memory_pool: Arc<MemoryPool>) -> Self {
         Self {
             dimension,
             memory_pool,

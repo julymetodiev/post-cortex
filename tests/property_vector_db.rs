@@ -11,7 +11,7 @@
 //
 // NOTE: All tests in this file should run serially due to shared VectorDB resources
 
-use post_cortex::core::vector_db::{VectorDB, VectorDbConfig, VectorMetadata};
+use post_cortex_embeddings::{VectorDB, VectorDbConfig, VectorMetadata};
 use proptest::prelude::*;
 use serial_test::serial;
 
@@ -969,7 +969,7 @@ mod vector_db_fix_tests {
 #[cfg(test)]
 mod search_mode_tests {
     use super::*;
-    use post_cortex::core::vector_db::SearchMode;
+    use post_cortex_embeddings::SearchMode;
 
     #[test]
     fn test_search_mode_exact_vs_approximate() {

@@ -18,7 +18,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tracing::{debug, info};
 
-use crate::core::vector_db::{VectorDB, VectorDbConfig};
+use post_cortex_embeddings::{VectorDB, VectorDbConfig};
 
 use super::RealRocksDBStorage;
 use super::types::EMBEDDING_DIMENSION;

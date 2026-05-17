@@ -14,7 +14,7 @@
 
 use crate::core::context_update::{ContextUpdate, EntityData, EntityRelationship, RelationType};
 use crate::core::structured_context::StructuredContext;
-use crate::core::vector_db::VectorMetadata;
+use post_cortex_embeddings::VectorMetadata;
 use crate::session::active_session::{ChangeRecord, CodeReference};
 use crate::workspace::SessionRole;
 use chrono::{DateTime, Utc};

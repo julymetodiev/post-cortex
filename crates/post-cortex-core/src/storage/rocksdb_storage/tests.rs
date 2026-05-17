@@ -18,7 +18,7 @@ use tempfile::tempdir;
 use uuid::Uuid;
 
 use crate::core::context_update::{EntityData, EntityRelationship, RelationType};
-use crate::core::vector_db::VectorMetadata;
+use post_cortex_embeddings::VectorMetadata;
 use crate::session::active_session::ActiveSession;
 use crate::storage::traits::{GraphStorage, VectorStorage};
 

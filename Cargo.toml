@@ -4,6 +4,9 @@ members = [
     ".",
     "crates/post-cortex-proto",
     "crates/post-cortex-core",
+    "crates/post-cortex-embeddings",
+    "crates/post-cortex-storage",
+    "crates/post-cortex-memory",
     "crates/post-cortex-mcp",
     "crates/post-cortex-daemon",
     "crates/post-cortex",
@@ -100,6 +103,9 @@ serial_test = { version = "3.3", features = ["async"] }
 # the local path.
 post-cortex-proto = { version = "0.1.23", path = "crates/post-cortex-proto" }
 post-cortex-core = { version = "0.1.23", path = "crates/post-cortex-core" }
+post-cortex-embeddings = { version = "0.1.23", path = "crates/post-cortex-embeddings" }
+post-cortex-storage = { version = "0.1.23", path = "crates/post-cortex-storage" }
+post-cortex-memory = { version = "0.1.23", path = "crates/post-cortex-memory" }
 post-cortex-mcp = { version = "0.1.23", path = "crates/post-cortex-mcp" }
 post-cortex-daemon = { version = "0.1.23", path = "crates/post-cortex-daemon" }
 
@@ -205,6 +211,10 @@ portpicker.workspace = true
 proptest.workspace = true
 serial_test.workspace = true
 tokio-stream.workspace = true
+
+# Integration tests under tests/ import from post-cortex-embeddings directly
+# (test_direct_encoding, test_embedding_similarity, property_vector_db).
+post-cortex-embeddings.workspace = true
 
 [[bin]]
 name = "pcx"

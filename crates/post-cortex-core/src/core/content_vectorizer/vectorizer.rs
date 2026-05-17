@@ -17,9 +17,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use tracing::{debug, info, warn};
 
-use crate::core::embeddings::LocalEmbeddingEngine;
+use post_cortex_embeddings::LocalEmbeddingEngine;
 use crate::core::query_cache::QueryCache;
-use crate::core::vector_db::{VectorDB, VectorMetadata};
+use post_cortex_embeddings::{VectorDB, VectorMetadata};
 
 use super::types::ContentVectorizerConfig;
 

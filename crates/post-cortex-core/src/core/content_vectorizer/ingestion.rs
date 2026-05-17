@@ -18,7 +18,7 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::core::context_update::ContextUpdate;
-use crate::core::vector_db::VectorMetadata;
+use post_cortex_embeddings::VectorMetadata;
 use crate::session::active_session::ActiveSession;
 
 use super::types::ContentType;

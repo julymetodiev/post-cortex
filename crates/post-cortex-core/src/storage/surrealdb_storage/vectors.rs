@@ -21,7 +21,7 @@ use serde::Deserialize;
 use surrealdb::types::SurrealValue;
 use tracing::debug;
 
-use crate::core::vector_db::{SearchMatch, VectorMetadata};
+use post_cortex_embeddings::{SearchMatch, VectorMetadata};
 use crate::storage::traits::VectorStorage;
 
 use super::SurrealDBStorage;

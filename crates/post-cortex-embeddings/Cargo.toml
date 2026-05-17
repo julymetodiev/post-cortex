@@ -1,0 +1,73 @@
+[package]
+name = "post-cortex-embeddings"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Embedding engines (BERT via Candle + static-hash fallback) and HNSW vector database for post-cortex. Self-contained ML stack — depend on this crate when you need vector search without the full post-cortex orchestrator."
+keywords = ["embeddings", "vector-search", "hnsw", "candle", "bert"]
+categories = ["algorithms", "data-structures", "science"]
+readme = "README.md"
+documentation = "https://docs.rs/post-cortex-embeddings"
+
+[dependencies]
+# Self-contained crate — no post-cortex-core dependency. The shared types
+# (VectorMetadata, SearchMatch, VectorDbStats…) live here in
+# `crate::vector_db::types`; storage and other crates that only need
+# round-trip access can depend on this crate with
+# `default-features = false` to skip the candle/HNSW build.
+
+# Async + serialisation
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+bincode.workspace = true
+
+# Concurrency primitives — lock-free where possible
+dashmap.workspace = true
+arc-swap.workspace = true
+parking_lot.workspace = true
+rayon.workspace = true
+num_cpus.workspace = true
+rand.workspace = true
+crossbeam-queue.workspace = true
+log.workspace = true
+
+# ML stack — feature-gated so consumers that only want HNSW + static-hash
+# don't pull candle. Default-on for parity with the legacy crate's
+# default feature set.
+candle-core = { workspace = true, optional = true }
+candle-nn = { workspace = true, optional = true }
+candle-transformers = { workspace = true, optional = true }
+tokenizers = { workspace = true, optional = true }
+hf-hub = { workspace = true, optional = true }
+
+tracing.workspace = true
+
+[dev-dependencies]
+tokio-test.workspace = true
+tempfile.workspace = true
+proptest.workspace = true
+
+[features]
+default = ["bert"]
+bert = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:candle-transformers",
+    "dep:tokenizers",
+    "dep:hf-hub",
+]
+# Phase 10 placeholder.
+otel = []
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

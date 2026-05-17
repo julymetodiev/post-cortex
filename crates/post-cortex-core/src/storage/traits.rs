@@ -24,7 +24,7 @@
 //! (RocksDB, SurrealDB, etc.) to be used interchangeably.
 
 use crate::core::context_update::{ContextUpdate, EntityData, EntityRelationship, RelationType};
-use crate::core::vector_db::{SearchMatch, VectorMetadata};
+use post_cortex_embeddings::{SearchMatch, VectorMetadata};
 use post_cortex_proto::pb::{
     CascadeInvalidateReport, FreshnessEntry, SourceReference, SymbolId,
 };

@@ -20,7 +20,7 @@ use std::sync::atomic::Ordering;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use crate::core::vector_db::SearchMatch;
+use post_cortex_embeddings::SearchMatch;
 use crate::session::active_session::ActiveSession;
 
 use super::types::{ContentType, SearchOptions, SemanticSearchResult};
