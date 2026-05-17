@@ -188,6 +188,12 @@ prost-types.workspace = true
 # directly so the upcoming Phase 3 core extraction is unblocked.
 post-cortex-proto.workspace = true
 
+# Phase 3 — domain modules now live in post-cortex-core. The legacy root
+# re-exports them via src/lib.rs so `crate::core::X` paths inside
+# src/daemon/ and src/tools/ keep resolving until Phases 6/7 finish the
+# split.
+post-cortex-core = { workspace = true }
+
 # [build-dependencies] section intentionally absent — the legacy root no
 # longer compiles proto. tonic-build moved to crates/post-cortex-proto.
 

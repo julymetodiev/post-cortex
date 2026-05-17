@@ -13,8 +13,83 @@ readme = "README.md"
 documentation = "https://docs.rs/post-cortex-core"
 
 [dependencies]
-# Phase 3 fills in the dependency list (rocksdb, dashmap, petgraph, candle*, surrealdb,
-# tracing, opentelemetry, etc.) once the modules move in.
+post-cortex-proto.workspace = true
+
+# Direct prost (needed by storage/rocksdb_storage/freshness.rs for
+# encoding SourceReference proto messages into RocksDB).
+prost.workspace = true
+
+# Filesystem helpers (StorageConfig default path lookup).
+dirs.workspace = true
+
+# Core async runtime + serialisation
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+bincode.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+regex.workspace = true
+
+# Lock-free + concurrency primitives
+dashmap.workspace = true
+crossbeam-channel.workspace = true
+crossbeam-queue.workspace = true
+arc-swap.workspace = true
+atomic_float.workspace = true
+parking_lot.workspace = true
+rayon.workspace = true
+num_cpus.workspace = true
+rand.workspace = true
+
+# Domain
+petgraph.workspace = true
+
+# Storage backends
+rocksdb.workspace = true
+surrealdb = { workspace = true, optional = true }
+surrealdb-types = { workspace = true, optional = true }
+
+# Export / import compression (storage::export_import)
+flate2.workspace = true
+zstd.workspace = true
+
+# Local embeddings (Phase 1+: feature-gated)
+candle-core = { workspace = true, optional = true }
+candle-nn = { workspace = true, optional = true }
+candle-transformers = { workspace = true, optional = true }
+tokenizers = { workspace = true, optional = true }
+hf-hub = { workspace = true, optional = true }
+
+# Observability
+log.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio-test.workspace = true
+tempfile.workspace = true
+criterion.workspace = true
+proptest.workspace = true
+serial_test.workspace = true
+tokio-stream.workspace = true
 
 [features]
-# Phase 3 fills in: default = ["embeddings"], embeddings, surrealdb-storage, otel, ...
+default = ["embeddings"]
+embeddings = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:candle-transformers",
+    "dep:tokenizers",
+    "dep:hf-hub",
+]
+surrealdb-storage = ["dep:surrealdb", "dep:surrealdb-types"]
+surrealdb-tikv = ["dep:surrealdb", "surrealdb/kv-tikv"]
+# Placeholder for Phase 10 — the otel feature toggles between no-op tracing
+# layers and the full OTLP exporter stack. Wired with deps in Phase 10.
+otel = []

@@ -1,36 +1,37 @@
-// Copyright (c) 2025 Julius ML
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
+// Copyright (c) 2025, 2026 Julius ML
+// Licensed under the MIT License. See LICENSE at the workspace root.
 
-pub mod core;
+//! Legacy single-crate root for post-cortex.
+//!
+//! As of Phase 3 of the workspace refactor, the heavy domain modules
+//! (`core`, `storage`, `session`, `graph`, `summary`, `workspace`) have
+//! moved to [`post_cortex_core`]. They are re-exported here unchanged so
+//! the still-in-tree `daemon` and `tools` modules — plus integration
+//! tests under `tests/` — can keep using `crate::core::X`,
+//! `crate::storage::X`, etc. paths until Phases 6–8 finish the split.
+//!
+//! See `/Users/julius/.claude/plans/stateful-hugging-hopper.md`.
+
+// Re-export the post-cortex-core modules so legacy `crate::core::X` paths
+// resolve via the workspace member instead of in-tree code.
+pub use post_cortex_core::core;
+pub use post_cortex_core::graph;
+pub use post_cortex_core::session;
+pub use post_cortex_core::storage;
+pub use post_cortex_core::summary;
+pub use post_cortex_core::workspace;
+
+// Modules still living in this legacy crate. Phase 6 moves `tools/mcp`
+// into post-cortex-mcp; Phase 7 moves `daemon` into post-cortex-daemon.
 pub mod daemon;
-pub mod graph;
-pub mod session;
-pub mod storage;
-pub mod summary;
 pub mod tools;
-pub mod workspace;
 
-pub use core::error::{Result, SystemError};
-pub use core::memory_system::ConversationMemorySystem;
-pub use core::memory_system::SystemConfig;
-pub use summary::{StructuredSummaryView, SummaryGenerator};
+// Headline re-exports preserved verbatim from the pre-Phase-3 surface so
+// `post_cortex::ConversationMemorySystem` etc. keep resolving for
+// integration tests and the `pcx` CLI.
+pub use post_cortex_core::core::error::{Result, SystemError};
+pub use post_cortex_core::core::memory_system::{ConversationMemorySystem, SystemConfig};
+pub use post_cortex_core::summary::{StructuredSummaryView, SummaryGenerator};
 
 #[cfg(test)]
 mod tests {

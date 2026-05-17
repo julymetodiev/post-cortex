@@ -69,8 +69,16 @@ impl BertBackend {
         let bert_config: BertConfig = serde_json::from_str(&bert_config_text)
             .map_err(|e| anyhow::anyhow!("Failed to parse BERT config: {}", e))?;
 
-        let vb =
-            unsafe { VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)? };
+        // SAFETY: `from_mmaped_safetensors` is `unsafe fn` because mapping
+        // an external file means the kernel can change the bytes under us
+        // (the safetensors file could be truncated or replaced mid-read).
+        // In our pipeline the file is downloaded by `hf-hub`, lives in
+        // the user-local model cache, and is never modified after load —
+        // standard candle convention.
+        #[allow(unsafe_code)]
+        let vb = unsafe {
+            VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)?
+        };
         let model = BertModel::load(vb, &bert_config)?;
 
         info!(
