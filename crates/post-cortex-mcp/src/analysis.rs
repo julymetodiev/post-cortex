@@ -200,10 +200,26 @@ pub async fn get_entity_network_view(
     let max_entities = max_entities.unwrap_or(50);
     let max_relationships = max_relationships.unwrap_or(100);
 
-    let entities: Vec<serde_json::Value> = session
-        .entity_graph
-        .get_most_important_entities(max_entities)
-        .into_iter()
+    // Resolve the BFS center identically to the gRPC handler so both transports
+    // hit the same dedup'd code path in SimpleEntityGraph::get_entity_network.
+    let resolved_center = match center_entity.as_deref() {
+        Some(name) if !name.is_empty() => Some(name.to_string()),
+        _ => session
+            .entity_graph
+            .get_most_important_entities(1)
+            .first()
+            .map(|e| e.name.clone()),
+    };
+
+    let network = match resolved_center.as_deref() {
+        Some(center) => session.entity_graph.get_entity_network(center, 2),
+        None => session.entity_graph.get_entity_network("", 2),
+    };
+
+    let entities: Vec<serde_json::Value> = network
+        .entities
+        .values()
+        .take(max_entities)
         .map(|e| {
             serde_json::json!({
                 "name": e.name,
@@ -214,35 +230,18 @@ pub async fn get_entity_network_view(
         })
         .collect();
 
-    let relationships: Vec<serde_json::Value> = if let Some(center) = &center_entity {
-        session
-            .entity_graph
-            .trace_entity_relationships(center, 2)
-            .into_iter()
-            .take(max_relationships)
-            .map(|(entity, rel_type, target)| {
-                serde_json::json!({
-                    "from": entity,
-                    "type": format!("{:?}", rel_type),
-                    "to": target
-                })
+    let relationships: Vec<serde_json::Value> = network
+        .relationships
+        .iter()
+        .take(max_relationships)
+        .map(|r| {
+            serde_json::json!({
+                "from": r.from_entity,
+                "type": format!("{:?}", r.relation_type),
+                "to": r.to_entity
             })
-            .collect()
-    } else {
-        session
-            .entity_graph
-            .get_all_relationships()
-            .into_iter()
-            .take(max_relationships)
-            .map(|r| {
-                serde_json::json!({
-                    "from": r.from_entity,
-                    "type": format!("{:?}", r.relation_type),
-                    "to": r.to_entity
-                })
-            })
-            .collect()
-    };
+        })
+        .collect();
 
     Ok(MCPToolResult::success(
         format!(
@@ -252,7 +251,7 @@ pub async fn get_entity_network_view(
         ),
         Some(serde_json::json!({
             "session_id": session_id,
-            "center_entity": center_entity,
+            "center_entity": resolved_center,
             "entities": entities,
             "relationships": relationships
         })),
