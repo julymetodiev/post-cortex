@@ -87,6 +87,7 @@ candle-nn = "0.9"
 candle-transformers = "0.9"
 tokenizers = "0.22"
 hf-hub = "0.4"
+model2vec-rs = "0.2"
 surrealdb = { version = "3.0.0", features = ["kv-mem", "protocol-ws"] }
 surrealdb-types = "3.0.0"
 axum = "0.8"

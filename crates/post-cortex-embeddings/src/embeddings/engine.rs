@@ -25,9 +25,13 @@ use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
 use super::backend::EmbeddingBackend;
-use super::backends::{BertBackend, StaticHashBackend};
+#[cfg(feature = "bert")]
+use super::backends::BertBackend;
+#[cfg(feature = "model2vec")]
+use super::backends::Model2VecBackend;
+use super::backends::StaticHashBackend;
 use super::concurrency::ConcurrencyController;
-use super::config::EmbeddingConfig;
+use super::config::{EmbeddingConfig, EmbeddingModelType};
 use super::pool::MemoryPool;
 
 /// Local embedding engine.
@@ -51,8 +55,34 @@ impl LocalEmbeddingEngine {
         );
 
         let dimension = config.model_type.embedding_dimension();
-        let backend: Arc<dyn EmbeddingBackend> = if config.model_type.is_bert_based() {
-            Arc::new(BertBackend::load(config.model_type).await?)
+        let backend: Arc<dyn EmbeddingBackend> = if config.model_type.is_model2vec() {
+            #[cfg(feature = "model2vec")]
+            {
+                Arc::new(Model2VecBackend::load(config.model_type).await?)
+            }
+            #[cfg(not(feature = "model2vec"))]
+            {
+                return Err(anyhow::anyhow!(
+                    "Model type {:?} requires the `model2vec` feature, which is disabled. \
+                     Rebuild post-cortex-embeddings with `--features model2vec` or pick a \
+                     different EmbeddingModelType.",
+                    config.model_type
+                ));
+            }
+        } else if config.model_type.is_bert_based() {
+            #[cfg(feature = "bert")]
+            {
+                Arc::new(BertBackend::load(config.model_type).await?)
+            }
+            #[cfg(not(feature = "bert"))]
+            {
+                return Err(anyhow::anyhow!(
+                    "Model type {:?} requires the `bert` feature, which is disabled. \
+                     Rebuild post-cortex-embeddings with `--features bert` or pick a \
+                     different EmbeddingModelType.",
+                    config.model_type
+                ));
+            }
         } else {
             let pool = Arc::new(MemoryPool::new(config.memory_pool_size, dimension));
             Arc::new(StaticHashBackend::new(dimension, pool))
@@ -100,12 +130,20 @@ impl LocalEmbeddingEngine {
             return Ok(Vec::new());
         }
 
-        // Non-BERT path: just dispatch — cheap, no concurrency gating required.
+        // Non-BERT path: dispatch directly — no concurrency gating
+        // required because both Model2Vec and the hash fallback are
+        // ms-cheap. The hash fallback is the only case that does *not*
+        // produce real semantic embeddings, so the warning is scoped to
+        // that variant; Model2Vec is a legitimate static-embedding
+        // backend and silently uses the same direct path.
         if !self.backend.is_bert_based() {
-            warn!(
-                "Using STATIC embeddings (non-BERT) for model_type: {:?} — semantic search will NOT work correctly!",
-                self.config.model_type
-            );
+            if matches!(self.config.model_type, EmbeddingModelType::StaticSimilarityMRL) {
+                warn!(
+                    "Using StaticHashBackend for model_type {:?} — semantic search will NOT \
+                     work correctly! Pick PotionMultilingual (default) or a BERT variant.",
+                    self.config.model_type
+                );
+            }
             return self.backend.process_batch(texts).await;
         }
 

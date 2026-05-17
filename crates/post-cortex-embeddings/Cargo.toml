@@ -6,8 +6,8 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Embedding engines (BERT via Candle + static-hash fallback) and HNSW vector database for post-cortex. Self-contained ML stack — depend on this crate when you need vector search without the full post-cortex orchestrator."
-keywords = ["embeddings", "vector-search", "hnsw", "candle", "bert"]
+description = "Embedding engines (Model2Vec static + BERT via Candle + static-hash fallback) and HNSW vector database for post-cortex. Self-contained ML stack — depend on this crate when you need vector search without the full post-cortex orchestrator."
+keywords = ["embeddings", "vector-search", "hnsw", "model2vec", "bert"]
 categories = ["algorithms", "data-structures", "science"]
 readme = "README.md"
 documentation = "https://docs.rs/post-cortex-embeddings"
@@ -48,6 +48,9 @@ candle-nn = { workspace = true, optional = true }
 candle-transformers = { workspace = true, optional = true }
 tokenizers = { workspace = true, optional = true }
 hf-hub = { workspace = true, optional = true }
+# Static embeddings (Model2Vec — multilingual, lightweight, ms-per-text
+# inference, no GPU). Enabled via the `model2vec` feature.
+model2vec-rs = { workspace = true, optional = true }
 
 tracing.workspace = true
 
@@ -57,7 +60,7 @@ tempfile.workspace = true
 proptest.workspace = true
 
 [features]
-default = ["bert"]
+default = ["model2vec"]
 bert = [
     "dep:candle-core",
     "dep:candle-nn",
@@ -65,6 +68,11 @@ bert = [
     "dep:tokenizers",
     "dep:hf-hub",
 ]
+# Static Model2Vec embeddings (potion-multilingual-128M et al.). Default
+# because it's smaller, faster, and multilingual out of the box; the
+# heavier BERT stack stays opt-in for users who need transformer-grade
+# semantic search.
+model2vec = ["dep:model2vec-rs"]
 # Phase 10 placeholder.
 otel = []
 

@@ -5,7 +5,9 @@ All notable changes to Post-Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — Single-entrypoint write path
+## [Unreleased]
+
+### Single-entrypoint write path
 
 The `update_context` / `bulk_update_context` write path is now routed
 through a single canonical implementation across every transport
@@ -15,7 +17,61 @@ and persistence live in exactly one place — `MemoryServiceImpl` in
 typed `UpdateContextRequest` and delegate; they no longer carry their
 own parsing or graph-shaping logic.
 
-### Added
+### Embedding engine — Model2Vec default
+
+The default embedding backend swaps from BERT (`MultilingualMiniLM`,
+384-dim, Candle + HuggingFace Hub) to Model2Vec
+(`PotionMultilingual`, 256-dim, `minishlab/potion-multilingual-128M`).
+Static embeddings are an order of magnitude faster on CPU, ship as a
+single ~50 MB safetensors file, and cover Latin / Cyrillic / CJK /
+Greek / Arabic out of the box. The BERT path stays available behind
+the `bert` feature for users who need transformer-grade similarity.
+
+**Breaking — embedding dimension changed (384 → 256).** Existing HNSW
+indices were sized for the BERT default and will refuse to accept the
+new vectors. Either rebuild your index (delete `~/.post-cortex/data`
+or call the vectorize-session admin op) or pin the previous default:
+
+```rust
+let config = EmbeddingConfig {
+    model_type: EmbeddingModelType::MultilingualMiniLM,
+    ..Default::default()
+};
+```
+
+#### Added
+
+- **`model2vec` cargo feature** (default-on) on `post-cortex-embeddings`,
+  pulling `model2vec-rs = "0.2"`. Disable with `default-features = false`
+  to drop the dependency.
+- **`Model2VecBackend`** in `crates/post-cortex-embeddings/src/embeddings/backends/model2vec.rs`
+  — wraps `StaticModel::from_pretrained`, runs encode through
+  `tokio::task::spawn_blocking`, and panics at load time if the
+  reported dimension drifts from the `EmbeddingModelType` constant
+  (silent drift would size HNSW indices wrong).
+- **`EmbeddingModelType::PotionMultilingual`** (256-dim,
+  `minishlab/potion-multilingual-128M`, the new `Default`).
+- **`EmbeddingModelType::PotionCode`** (512-dim,
+  `minishlab/potion-code-16M`) for English code search.
+- **`EmbeddingModelType::is_model2vec()`** helper for the engine's
+  dispatch branch.
+
+#### Changed
+
+- **`BertBackend` is now feature-gated** behind `bert`. Existing builds
+  that explicitly opt out of the default feature set must add
+  `features = ["bert"]` to keep transformer-based embeddings.
+- **`LocalEmbeddingEngine::new`** dispatches Model2Vec → BERT → static
+  hash. Selecting a model whose required feature is disabled returns a
+  precise error instead of silently downgrading.
+- **Hash-fallback warning** in `LocalEmbeddingEngine` now fires only
+  for `StaticSimilarityMRL` (true fallback). Model2Vec routes through
+  the same non-BERT direct-dispatch branch but without the spurious
+  "semantic search will NOT work correctly" warning.
+
+### Single-entrypoint — write path details
+
+#### Added
 
 - **`MemoryServiceImpl::update_context` / `bulk_update_context`** are
   now wired (previously `not_yet_wired` stubs). They enforce: title +
@@ -38,7 +94,7 @@ own parsing or graph-shaping logic.
   daemon's `inject_memory_system` swaps in a fresh service alongside
   the new memory system.
 
-### Changed
+#### Changed
 
 - **gRPC `UpdateContext` / `BulkUpdateContext` handlers** in
   `post-cortex-daemon` no longer call `ConversationMemorySystem`
@@ -59,7 +115,7 @@ own parsing or graph-shaping logic.
   `CodeReference` no longer lose `code_snippet` / `commit_hash` /
   `branch` / `change_description` at the service boundary.
 
-### Removed
+#### Removed
 
 - **`update_conversation_context_with_system`** and
   **`interaction_to_context_update`** in `post-cortex-mcp` — both
@@ -71,7 +127,7 @@ own parsing or graph-shaping logic.
   — moved into `MemoryServiceImpl` so every transport uses the same
   validation and metadata shape.
 
-### Breaking — MCP tool schema (`update_conversation_context`,
+#### Breaking — MCP tool schema (`update_conversation_context`,
 `bulk_update_conversation_context`)
 
 Both tools' input schemas now **require** `entities` and `relations`

@@ -54,35 +54,60 @@ impl Default for EmbeddingConfig {
     }
 }
 
-/// Embedding model types
+/// Embedding model types.
+///
+/// `PotionMultilingual` is the default — Model2Vec static embeddings, small
+/// on disk, ms-per-text inference, multilingual (Latin / Cyrillic / CJK / …).
+/// The BERT variants are kept for users who need transformer-grade semantic
+/// quality and are willing to pay the GPU/CPU cost.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[derive(Default)]
 pub enum EmbeddingModelType {
-    /// Static embeddings (fast, lightweight)
+    /// Hash-based pseudo-embeddings — kept for backwards compatibility and
+    /// as a last-resort fallback. **Does not** produce semantically
+    /// meaningful vectors; only use when all real backends are disabled.
     StaticSimilarityMRL,
-    /// MiniLM model (balanced performance, English-only)
+    /// MiniLM model (balanced performance, English-only). Requires the
+    /// `bert` feature.
     MiniLM,
-    /// Multilingual MiniLM model (supports 50+ languages including Bulgarian)
-    #[default]
+    /// Multilingual MiniLM model — 50+ languages including Bulgarian.
+    /// Requires the `bert` feature.
     MultilingualMiniLM,
-    /// TinyBERT model (smallest BERT variant)
+    /// TinyBERT model (smallest BERT variant). Requires the `bert` feature.
     TinyBERT,
-    /// BGE Small model (balanced BERT)
+    /// BGE Small model (balanced BERT). Requires the `bert` feature.
     BGESmall,
+    /// `minishlab/potion-multilingual-128M` — Model2Vec static embeddings,
+    /// multilingual (Latin/Cyrillic/CJK/…). Default — small, fast, no GPU.
+    /// Requires the `model2vec` feature (on by default).
+    #[default]
+    PotionMultilingual,
+    /// `minishlab/potion-code-16M` — Model2Vec static embeddings tuned for
+    /// source code (English-leaning). Requires the `model2vec` feature.
+    PotionCode,
 }
 
 
 impl EmbeddingModelType {
-    /// Get embedding dimension for this model type
+    /// Get embedding dimension for this model type.
+    ///
+    /// The Potion dimensions are taken from each model's published
+    /// config — `Model2VecBackend` verifies the runtime dimension at load
+    /// time and panics if they disagree, so this constant stays the source
+    /// of truth for HNSW index sizing.
     pub fn embedding_dimension(&self) -> usize {
         match self {
             Self::StaticSimilarityMRL => 1024,
             Self::MiniLM | Self::MultilingualMiniLM | Self::BGESmall => 384,
             Self::TinyBERT => 312,
+            // potion-multilingual-128M outputs 256-dim vectors.
+            Self::PotionMultilingual => 256,
+            // potion-code-16M outputs 512-dim vectors.
+            Self::PotionCode => 512,
         }
     }
 
-    /// Get model ID for HuggingFace Hub
+    /// Get model ID for HuggingFace Hub.
     pub fn model_id(&self) -> &'static str {
         match self {
             Self::StaticSimilarityMRL | Self::MiniLM => "sentence-transformers/all-MiniLM-L6-v2",
@@ -91,14 +116,21 @@ impl EmbeddingModelType {
             }
             Self::TinyBERT => "huawei-noah/TinyBERT_General_6L_312D",
             Self::BGESmall => "BAAI/bge-small-en-v1.5",
+            Self::PotionMultilingual => "minishlab/potion-multilingual-128M",
+            Self::PotionCode => "minishlab/potion-code-16M",
         }
     }
 
-    /// Check if this is a BERT-based model
+    /// Check if this is a BERT-based model (Candle transformer).
     pub fn is_bert_based(&self) -> bool {
         matches!(
             self,
             Self::MiniLM | Self::MultilingualMiniLM | Self::TinyBERT | Self::BGESmall
         )
+    }
+
+    /// Check if this is a Model2Vec static-embedding model.
+    pub fn is_model2vec(&self) -> bool {
+        matches!(self, Self::PotionMultilingual | Self::PotionCode)
     }
 }
