@@ -5,6 +5,57 @@ All notable changes to Post-Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-05-17 — Daemon Potion default fix + CI cleanup
+
+Patch release on top of 0.3.0. No public-API changes; this clears the
+last user-facing follow-up from the 0.3.0 cut.
+
+### Fixed
+
+- **`post-cortex-daemon` Potion default** — `rmcp_server.rs` was
+  hard-coding `embeddings_model_type = "MultilingualMiniLM"`,
+  silently downgrading the workspace's `PotionMultilingual` default
+  back to BERT. The runtime vectoriser produced 384-dim embeddings
+  while `SystemConfig::default()` sized the HNSW index for 256-dim,
+  yielding `Query vector dimension 384 does not match expected 256`
+  on every semantic search. The override is gone; the daemon now
+  inherits whatever `SystemConfig::default()` declares and logs the
+  active model + dim at startup.
+- **`cargo test --doc` green** across the workspace. The illustrative
+  daemon doctests in `coerce.rs` / `validate.rs` / `format_helpers.rs`
+  and the `SurrealDBStorage::new` / `TemporalDecayAdjuster::new`
+  snippets reference unqualified internal symbols and the
+  `post_cortex` facade; they document API shape rather than being
+  standalone runnable. Marked `ignore` so they keep the rich
+  docstrings without breaking CI.
+- **CI infra (carried from `main` since 0.3.0)** — `protoc` install
+  steps on macOS / Linux Release runners; `cargo audit` job gets
+  `checks: write` + `contents: read` permissions; `.cargo/audit.toml`
+  mirrors the deny.toml advisory ignores; cargo-deny clarifies the
+  SurrealDB family as BUSL-1.1; MSRV bumped 1.85 → 1.90 to absorb
+  new transitive minimums.
+
+### Migration
+
+Same wire-format and crate APIs as 0.3.0. Drop the in-place upgrade:
+
+```sh
+cargo install post-cortex-daemon --version 0.3.1 \
+    --features "embeddings,surrealdb-storage" --force
+```
+
+After upgrading, semantic search resolves cleanly against the
+256-dim Potion HNSW index. If you previously ran 0.3.0 against
+SurrealDB and have orphan 384-dim rows, drop them once:
+
+```sql
+DELETE embedding;
+```
+
+`initialize_schema` already drops + redefines the HNSW index with
+the requested dimension, so the rows are no longer indexed; deleting
+them stops the warn-spam at startup.
+
 ## [0.3.0] - 2026-05-17 — Model2Vec default + non-blocking write pipeline
 
 This release retires the BERT default embedding model in favour of
