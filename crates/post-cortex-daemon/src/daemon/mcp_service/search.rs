@@ -56,6 +56,35 @@ pub(super) async fn handle(
     let validated_limit = validate_limits(req.limit, 10, 1000)
         .map_err(|e| e.with_parameter_path("limit".to_string()).to_mcp_error())?;
 
+    // Capture select once — applied to every scope branch's MCPToolResult
+    // before returning to the caller.
+    let select = req.select.clone();
+    let select_map = req.select_map.clone();
+    let apply_select = move |mut r: MCPToolResult| -> Result<MCPToolResult, McpError> {
+        if select.is_none() && select_map.is_none() {
+            return Ok(r);
+        }
+        if let Some(data) = r.data.take() {
+            use post_cortex_memory::jsonpath;
+            match jsonpath::apply_select(&data, select.as_deref(), select_map.as_ref()) {
+                Ok(filtered) => {
+                    r.data = Some(filtered);
+                    Ok(r)
+                }
+                Err(e) => Err(McpError::invalid_params(
+                    format!("Invalid JSONPath expression: {}", e.message),
+                    Some(serde_json::json!({
+                        "offset": e.byte_offset,
+                        "hint": "Allowed: $, .field, [n], [-n], [a:b], [*], [0,3,7]. \
+                                 Forbidden: .., [?(...)], functions, [a:b:c]"
+                    })),
+                )),
+            }
+        } else {
+            Ok(r)
+        }
+    };
+
     match scope.to_lowercase().as_str() {
         "session" => {
             let session_id = req.scope_id.as_ref().ok_or_else(|| {
@@ -87,7 +116,7 @@ pub(super) async fn handle(
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-            Ok(mcp_result_to_call_result(search_results))
+            Ok(mcp_result_to_call_result(apply_select(search_results)?))
         }
         "workspace" => {
             let ws_id = req.scope_id.as_ref().ok_or_else(|| {
@@ -136,14 +165,14 @@ pub(super) async fn handle(
             // "no filter" and falls back to a global search. For workspace scope
             // that's wrong — an empty workspace must return zero results.
             if session_ids.is_empty() {
-                return Ok(mcp_result_to_call_result(MCPToolResult::success(
+                return Ok(mcp_result_to_call_result(apply_select(MCPToolResult::success(
                     format!("Found 0 results (workspace {} has no sessions)", ws_uuid),
                     Some(serde_json::json!({
                         "results": [],
                         "workspace_id": ws_uuid.to_string(),
                         "note": "workspace has no sessions",
                     })),
-                )));
+                ))?));
             }
 
             let date_range = parse_date_range(req.date_from.clone(), req.date_to.clone())?;
@@ -169,7 +198,7 @@ pub(super) async fn handle(
                 Some(serde_json::json!({ "results": formatted })),
             );
 
-            Ok(mcp_result_to_call_result(search_results))
+            Ok(mcp_result_to_call_result(apply_select(search_results)?))
         }
         "global" | _ => {
             let validated_recency_bias =
@@ -186,7 +215,7 @@ pub(super) async fn handle(
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-            Ok(mcp_result_to_call_result(search_results))
+            Ok(mcp_result_to_call_result(apply_select(search_results)?))
         }
     }
 }

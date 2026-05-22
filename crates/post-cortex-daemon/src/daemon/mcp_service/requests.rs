@@ -548,6 +548,43 @@ Examples:
 Note: Only affects ranking order, doesn't filter out old results."#
     )]
     pub recency_bias: Option<f32>,
+    /// Form A: single JSONPath expression. The matched value is returned
+    /// directly instead of the full response payload.
+    #[schemars(
+        description = r#"Optional JSONPath expression to filter the response (Form A).
+
+When provided, only the matched portion of the response is returned,
+dramatically reducing payload size — perfect for trimming what the LLM
+sees in tool_result.
+
+Allowed syntax: $, .field, [n], [-n], [a:b], [*], .*, [0,3,7]
+Forbidden: .., [?(...)], functions, [a:b:c]
+
+Examples:
+- "$.results[0:3].content" → returns the first 3 result texts as array
+- "$.results[*].entry_id" → returns all entry IDs as array
+- "$.total_matches" → returns the count
+
+Note: Mutually exclusive with select_map."#
+    )]
+    pub select: Option<String>,
+    /// Form B: map of output-key → JSONPath expression. Returns an object
+    /// with the same keys, each containing the match result.
+    #[schemars(
+        description = r#"Optional map of output keys to JSONPath expressions (Form B).
+
+When provided, returns an object with the same keys, each containing
+the JSONPath match result. Empty matches produce null.
+
+Allowed syntax: same as select (Form A).
+
+Examples:
+- {"top3": "$.results[0:3].content", "ids": "$.results[*].entry_id"}
+- {"count": "$.total_matches", "first": "$.results[0].content"}
+
+Note: Mutually exclusive with select (Form A)."#
+    )]
+    pub select_map: Option<std::collections::HashMap<String, String>>,
 }
 
 // =============================================================================

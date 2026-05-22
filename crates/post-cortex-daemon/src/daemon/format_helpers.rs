@@ -53,6 +53,7 @@ pub fn format_search_results(results: &[SemanticSearchResult]) -> Vec<Value> {
         .iter()
         .map(|r| {
             serde_json::json!({
+                "entry_id": r.content_id,
                 "content": r.text_content,
                 "score": r.combined_score,
                 "session_id": r.session_id,

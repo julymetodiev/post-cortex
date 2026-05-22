@@ -573,9 +573,53 @@ impl PostCortex for PcxGrpcService {
                 .collect();
 
             let total_matches = results.len() as u32;
+
+            // Fast path: when the caller asked for server-side JSONPath filtering,
+            // skip the proto `results` field entirely and ship only `selected_json`.
+            // Same pattern as AssembleContext — empty `repeated` fields are zero
+            // bytes on the wire under proto3.
+            if req.select_string.is_some() || !req.select_map.is_empty() {
+                let full_payload = serde_json::json!({
+                    "results": results.iter().map(|r| serde_json::json!({
+                        "entry_id": r.entry_id,
+                        "content": r.content,
+                        "score": r.score,
+                        "session_id": r.session_id,
+                        "content_type": r.content_type,
+                    })).collect::<Vec<_>>(),
+                    "total_matches": total_matches,
+                });
+
+                use post_cortex_memory::jsonpath;
+                let selected_json = match jsonpath::apply_select(
+                    &full_payload,
+                    req.select_string.as_deref(),
+                    if req.select_map.is_empty() { None } else { Some(&req.select_map) },
+                ) {
+                    Ok(filtered) => serde_json::to_string(&filtered)
+                        .unwrap_or_else(|_| "null".to_string()),
+                    Err(e) => {
+                        return Err(Status::invalid_argument(
+                            format!("Invalid JSONPath expression at offset {}: {}. \
+                                     Allowed: $, .field, [n], [-n], [a:b], [*], [0,3,7]. \
+                                     Forbidden: .., [?(...)], functions, [a:b:c]",
+                                    e.byte_offset, e.message),
+                        ));
+                    }
+                };
+
+                return Ok(Response::new(SemanticSearchResponse {
+                    // Suppressed when a select was requested.
+                    results: Vec::new(),
+                    total_matches,
+                    selected_json,
+                }));
+            }
+
             Ok(Response::new(SemanticSearchResponse {
                 results,
                 total_matches,
+                selected_json: String::new(),
             }))
         }
 

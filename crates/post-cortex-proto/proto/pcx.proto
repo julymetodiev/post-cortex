@@ -266,6 +266,13 @@ message SemanticSearchRequest {
   float min_score = 4;
   // If set, search across ALL sessions in this workspace (takes precedence over session_id)
   optional string workspace_id = 5;
+
+  // Optional server-side JSONPath filtering of the response.
+  // Two mutually exclusive forms; at most one should be set.
+  // Form A: single JSONPath expression → matched value returned directly.
+  optional string select_string = 6;
+  // Form B: map of output-key → JSONPath expression → object with same keys returned.
+  map<string, string> select_map = 7;
 }
 
 message SearchResult {
@@ -280,6 +287,9 @@ message SearchResult {
 message SemanticSearchResponse {
   repeated SearchResult results = 1;
   uint32 total_matches = 2;
+  // When a select filter was requested, contains the JSONPath-filtered result
+  // as a JSON string. Empty when no select was requested.
+  string selected_json = 3;
 }
 
 message FindRelatedContentRequest {
