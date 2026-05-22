@@ -32,6 +32,8 @@ pub mod content_vectorizer;
 /// Graph-aware context assembly that combines semantic search results with entity-graph traversals.
 pub mod context_assembly;
 pub mod error;
+/// JSONPath subset parser and executor for the `select` parameter.
+pub mod jsonpath;
 pub mod memory_system;
 /// Runtime performance monitoring: operation timers, cache trackers, and health snapshots.
 pub mod performance;

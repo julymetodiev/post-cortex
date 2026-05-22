@@ -349,6 +349,13 @@ message AssembleContextRequest {
   uint32 token_budget = 3;    // Max tokens for assembled context (default: 4000)
   // If set, assemble context across ALL sessions in this workspace (takes precedence over session_id)
   optional string workspace_id = 4;
+
+  // Optional server-side JSONPath filtering of the response.
+  // Two mutually exclusive forms; at most one should be set.
+  // Form A: single JSONPath expression → matched value returned directly.
+  optional string select_string = 5;
+  // Form B: map of output-key → JSONPath expression → object with same keys returned.
+  map<string, string> select_map = 6;
 }
 
 message AssembledContextItem {
@@ -394,6 +401,9 @@ message AssembleContextResponse {
   repeated ImpactEntry impact = 3;
   uint32 total_tokens = 4;
   string formatted_text = 5;  // Pre-formatted text for direct LLM injection
+  // When a select filter was requested, contains the JSONPath-filtered result
+  // as a JSON string. Empty when no select was requested.
+  string selected_json = 6;
 }
 
 // ============ Workspace Management ============

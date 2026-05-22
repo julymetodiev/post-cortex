@@ -55,6 +55,43 @@ Examples:
 Note: Must be > 0. Items are packed highest-score-first until budget is consumed."#
     )]
     pub token_budget: Option<u32>,
+    /// Form A: single JSONPath expression. The matched value is returned
+    /// directly instead of the full response payload.
+    #[schemars(
+        description = r#"Optional JSONPath expression to filter the response (Form A).
+
+When provided, only the matched portion of the response is returned,
+dramatically reducing payload size.
+
+Allowed syntax: $, .field, [n], [-n], [a:b], [*], .*, [0,3,7]
+Forbidden: .., [?(...)], functions, [a:b:c]
+
+Examples:
+- "$.formatted_text" → returns the pre-formatted text string
+- "$.items[0].text" → returns the first item's text
+- "$.items[0:3].text" → returns the first 3 item texts as array
+- "$.entity_context[*].name" → returns all entity names as array
+
+Note: Mutually exclusive with select_map."#
+    )]
+    pub select: Option<String>,
+    /// Form B: map of output-key → JSONPath expression. Returns an object
+    /// with the same keys, each containing the match result.
+    #[schemars(
+        description = r#"Optional map of output keys to JSONPath expressions (Form B).
+
+When provided, returns an object with the same keys, each containing
+the JSONPath match result. Empty matches produce null.
+
+Allowed syntax: same as select (Form A).
+
+Examples:
+- {"text": "$.formatted_text", "top3": "$.items[0:3].text", "ids": "$.items[*].entry_id"}
+- {"neighbours": "$.entity_context[0:5].name", "tokens": "$.total_tokens"}
+
+Note: Mutually exclusive with select (Form A)."#
+    )]
+    pub select_map: Option<std::collections::HashMap<String, String>>,
 }
 
 // =============================================================================

@@ -47,6 +47,7 @@ export-*
 .worktrees
 settings.local.json
 .claude/settings.local.json
+.axon/
 test_data_*
 RELEASING.md
 history.txt

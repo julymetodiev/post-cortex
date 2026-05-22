@@ -124,6 +124,30 @@ pub(super) async fn handle(
         "formatted_text": formatted_text,
     });
 
+    // Apply optional JSONPath select filter
+    let payload = if req.select.is_some() || req.select_map.is_some() {
+        use post_cortex_memory::jsonpath;
+
+        let select_string = req.select.as_deref();
+        let select_map = req.select_map.as_ref();
+
+        match jsonpath::apply_select(&payload, select_string, select_map) {
+            Ok(filtered) => filtered,
+            Err(e) => {
+                return Err(McpError::invalid_params(
+                    format!("Invalid JSONPath expression: {}", e.message),
+                    Some(serde_json::json!({
+                        "offset": e.byte_offset,
+                        "hint": "Allowed: $, .field, [n], [-n], [a:b], [*], [0,3,7]. \
+                                 Forbidden: .., [?(...)], functions, [a:b:c]"
+                    })),
+                ));
+            }
+        }
+    } else {
+        payload
+    };
+
     Ok(mcp_result_to_call_result(MCPToolResult::success(
         format!(
             "Assembled {} items ({} tokens) for query: {}",

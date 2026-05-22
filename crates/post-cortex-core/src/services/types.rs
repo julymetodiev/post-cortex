@@ -197,6 +197,12 @@ pub struct AssembleContextRequest {
     pub max_tokens: Option<usize>,
     /// Whether to include impact analysis in the result.
     pub include_impact: bool,
+    /// Optional server-side JSONPath filter (Form A): single expression
+    /// → matched value returned directly.
+    pub select_string: Option<String>,
+    /// Optional server-side JSONPath filter (Form B): map of output-key
+    /// → JSONPath expression → object with same keys returned.
+    pub select_map: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Result of a graph-aware context assembly.

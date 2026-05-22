@@ -952,7 +952,80 @@ impl PostCortex for PcxGrpcService {
 
         let formatted_text = context_assembly::format_for_llm(&assembled);
 
-        // Convert to proto types
+        // Fast path: when the caller asked for server-side JSONPath filtering,
+        // skip the proto conversion entirely. ProtoBuf 3 doesn't serialise empty
+        // `repeated` or default string fields, so leaving them unset produces a
+        // genuinely small response on the wire — the whole point of `select`.
+        // The full structured response is materialised once as JSON, filtered,
+        // and shipped as `selected_json`.
+        if req.select_string.is_some() || !req.select_map.is_empty() {
+            let full_payload = serde_json::json!({
+                "items": assembled.items.iter().map(|item| serde_json::json!({
+                    "text": item.text,
+                    "score": item.score,
+                    "source": match &item.source {
+                        context_assembly::ContextSource::SemanticMatch => "semantic_match",
+                        context_assembly::ContextSource::GraphTraversal { via_entity } => via_entity,
+                        context_assembly::ContextSource::RecentUpdate => "recent_update",
+                    },
+                    "entities": item.entities,
+                    "token_estimate": item.token_estimate,
+                    "entry_id": item.entry_id,
+                })).collect::<Vec<_>>(),
+                "entity_context": assembled.entity_context.iter().map(|ec| serde_json::json!({
+                    "name": ec.name,
+                    "relevance": match &ec.relevance {
+                        context_assembly::EntityRelevance::DirectMention => {
+                            serde_json::Value::String("direct_mention".to_string())
+                        }
+                        context_assembly::EntityRelevance::GraphNeighbor { via, relation } => {
+                            serde_json::Value::String(format!(
+                                "graph_neighbor via {} ({})", via, relation
+                            ))
+                        }
+                    },
+                })).collect::<Vec<_>>(),
+                "impact": assembled.impact.iter().map(|i| serde_json::json!({
+                    "entity": i.entity,
+                    "depends_on": i.depends_on,
+                    "relation_type": format!("{:?}", i.relation_type),
+                    "context": i.context,
+                })).collect::<Vec<_>>(),
+                "total_tokens": assembled.total_tokens,
+                "formatted_text": &formatted_text,
+            });
+
+            use post_cortex_memory::jsonpath;
+            let selected_json = match jsonpath::apply_select(
+                &full_payload,
+                req.select_string.as_deref(),
+                if req.select_map.is_empty() { None } else { Some(&req.select_map) },
+            ) {
+                Ok(filtered) => serde_json::to_string(&filtered)
+                    .unwrap_or_else(|_| "null".to_string()),
+                Err(e) => {
+                    return Err(Status::invalid_argument(
+                        format!("Invalid JSONPath expression at offset {}: {}. \
+                                 Allowed: $, .field, [n], [-n], [a:b], [*], [0,3,7]. \
+                                 Forbidden: .., [?(...)], functions, [a:b:c]",
+                                e.byte_offset, e.message),
+                    ));
+                }
+            };
+
+            return Ok(Response::new(AssembleContextResponse {
+                // Suppressed when a select was requested — caller asked for a
+                // filtered view, so we don't redundantly ship the full payload.
+                items: Vec::new(),
+                entity_context: Vec::new(),
+                impact: Vec::new(),
+                total_tokens: assembled.total_tokens as u32,
+                formatted_text: String::new(),
+                selected_json,
+            }));
+        }
+
+        // No select: emit the full structured response (unchanged behaviour).
         let items: Vec<AssembledContextItem> = assembled
             .items
             .iter()
@@ -1029,6 +1102,7 @@ impl PostCortex for PcxGrpcService {
             impact,
             total_tokens: assembled.total_tokens as u32,
             formatted_text,
+            selected_json: String::new(),
         }))
     }
 
