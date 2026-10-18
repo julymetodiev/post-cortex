@@ -264,7 +264,12 @@ impl SurrealDBStorage {
             DEFINE FIELD IF NOT EXISTS content_type ON embedding TYPE string;
             DEFINE FIELD IF NOT EXISTS timestamp ON embedding TYPE string;
             DEFINE FIELD IF NOT EXISTS metadata ON embedding TYPE object;
-            DEFINE INDEX IF NOT EXISTS idx_embedding_content ON embedding FIELDS content_id UNIQUE;
+            -- Content ids are unique per session only (e.g. `entity:<name>`
+            -- exists in many sessions); records are keyed `{session}_{content}`.
+            -- The old globally-unique index made sessions overwrite each other.
+            REMOVE INDEX IF EXISTS idx_embedding_content ON embedding;
+            DEFINE INDEX IF NOT EXISTS idx_embedding_content_id ON embedding FIELDS content_id;
+            DEFINE INDEX IF NOT EXISTS idx_embedding_session_content ON embedding FIELDS session_id, content_id UNIQUE;
             DEFINE INDEX IF NOT EXISTS idx_embedding_session ON embedding FIELDS session_id;
             DEFINE INDEX IF NOT EXISTS idx_embedding_type ON embedding FIELDS content_type;
             -- HNSW vector index for fast similarity search.

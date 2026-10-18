@@ -13,10 +13,9 @@
 //! Embedding persistence and the [`VectorStorage`] trait implementation.
 //!
 //! Key families:
-//! - `embedding:{session_id}:{content_id}` -> bincode [`StoredEmbedding`]
-//! - `embedding_cid:{content_id}` -> session id (lookup for removal by
-//!   content id; rows written before this index existed are found by a
-//!   key scan instead)
+//! - `embedding:{session_id}:{content_id}` -> bincode [`StoredEmbedding`].
+//!   Content ids repeat across sessions (`entity:<name>`), so removal is
+//!   by `(session, content id)`; removal by content id alone scans keys.
 //!
 //! The memory layer keeps its own in-memory vector index and only uses this
 //! backend for persistence, so the search methods here are exact scans over
@@ -42,17 +41,13 @@ fn embedding_key(session_id: &str, content_id: &str) -> String {
     format!("embedding:{}:{}", session_id, content_id)
 }
 
-fn content_index_key(content_id: &str) -> String {
-    format!("embedding_cid:{}", content_id)
-}
-
 fn decode_embedding(value: &[u8]) -> Option<StoredEmbedding> {
     bincode::serde::decode_from_slice::<StoredEmbedding, _>(value, bincode::config::standard())
         .ok()
         .map(|(e, _)| e)
 }
 
-/// Add the row and its content-id index entry to `batch`.
+/// Add the row to `batch`.
 fn put_embedding(batch: &mut WriteBatch, embedding: &StoredEmbedding) -> Result<()> {
     let data = bincode::serde::encode_to_vec(embedding, bincode::config::standard())
         .map_err(|e| anyhow::anyhow!("Failed to serialize embedding: {}", e))?;
@@ -60,44 +55,26 @@ fn put_embedding(batch: &mut WriteBatch, embedding: &StoredEmbedding) -> Result<
         embedding_key(&embedding.session_id, &embedding.content_id).as_bytes(),
         &data,
     );
-    batch.put(
-        content_index_key(&embedding.content_id).as_bytes(),
-        embedding.session_id.as_bytes(),
-    );
     Ok(())
 }
 
-/// Delete every embedding row for `content_id` (normally one) plus its index
-/// entry. Returns whether any row existed.
+/// Delete the embedding rows for `content_id` in every session, matching on
+/// the key alone (`embedding:{uuid}:{content_id}`; session ids contain no
+/// ':'). Returns whether any row existed.
 fn delete_by_content_id(db: &DB, content_id: &str) -> Result<bool> {
-    let index_key = content_index_key(content_id);
-    let mut row_keys: Vec<Vec<u8>> = Vec::new();
-
-    if let Some(session_id) = db.get(index_key.as_bytes())? {
-        let key = embedding_key(&String::from_utf8_lossy(&session_id), content_id);
-        if db.get(key.as_bytes())?.is_some() {
-            row_keys.push(key.into_bytes());
-        }
-    } else {
-        // Rows persisted before the index existed: match on the key alone
-        // (`embedding:{uuid}:{content_id}`; session ids contain no ':').
-        for key in keys_with_prefix(db, EMBEDDING_PREFIX.as_bytes())? {
-            let rest = &key[EMBEDDING_PREFIX.len()..];
-            if let Some(pos) = rest.iter().position(|b| *b == b':')
-                && &rest[pos + 1..] == content_id.as_bytes()
-            {
-                row_keys.push(key.into_vec());
-            }
-        }
-    }
-
     let mut batch = WriteBatch::default();
-    batch.delete(index_key.as_bytes());
-    for key in &row_keys {
-        batch.delete(key);
+    let mut found = false;
+    for key in keys_with_prefix(db, EMBEDDING_PREFIX.as_bytes())? {
+        let rest = &key[EMBEDDING_PREFIX.len()..];
+        if let Some(pos) = rest.iter().position(|b| *b == b':')
+            && &rest[pos + 1..] == content_id.as_bytes()
+        {
+            batch.delete(&key);
+            found = true;
+        }
     }
     db.write(batch)?;
-    Ok(!row_keys.is_empty())
+    Ok(found)
 }
 
 /// Score candidate with a total order (NaN sorts lowest) for the top-k heap.
@@ -239,17 +216,10 @@ impl RealRocksDBStorage {
     pub async fn delete_embedding(&self, session_id: &str, content_id: &str) -> Result<bool> {
         let db = self.db.clone();
         let key = embedding_key(session_id, content_id);
-        let index_key = content_index_key(content_id);
 
         blocking(move || {
             let existed = db.get(key.as_bytes())?.is_some();
-            let mut batch = WriteBatch::default();
-            batch.delete(key.as_bytes());
-            // Only drop the index entry if it points at this session.
-            if db.get(index_key.as_bytes())?.as_deref() == Some(session_of_key(&key)) {
-                batch.delete(index_key.as_bytes());
-            }
-            db.write(batch)?;
+            db.delete(key.as_bytes())?;
             Ok(existed)
         })
         .await
@@ -283,13 +253,6 @@ impl RealRocksDBStorage {
         })
         .await
     }
-}
-
-/// Session id part of an `embedding:{session_id}:{content_id}` key.
-fn session_of_key(key: &str) -> &[u8] {
-    let rest = &key[EMBEDDING_PREFIX.len()..];
-    let end = rest.find(':').unwrap_or(rest.len());
-    &rest.as_bytes()[..end]
 }
 
 #[async_trait]
@@ -356,11 +319,17 @@ impl VectorStorage for RealRocksDBStorage {
         .await
     }
 
-    /// Remove the embedding stored for content id `id`.
+    /// Remove the embeddings stored for content id `id` in every session
+    /// (a key scan; prefer `remove_session_vector`).
     async fn remove_vector(&self, id: &str) -> Result<bool> {
         let db = self.db.clone();
         let content_id = id.to_string();
         blocking(move || delete_by_content_id(&db, &content_id)).await
+    }
+
+    /// Remove one session's embedding by key.
+    async fn remove_session_vector(&self, session_id: &str, content_id: &str) -> Result<bool> {
+        self.delete_embedding(session_id, content_id).await
     }
 
     async fn has_session_embeddings(&self, session_id: &str) -> bool {

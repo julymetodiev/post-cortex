@@ -397,14 +397,11 @@ async fn test_rocksdb_vector_storage_without_resident_index() {
     assert_eq!(by_type.len(), 1);
     assert_eq!(by_type[0].metadata.id, "y");
 
-    // Removal by content id: indexed row, then a row without index entry.
+    // Removal by content id (any session), then scoped removal.
     assert!(storage.remove_vector("entity:z").await.unwrap());
     assert!(!storage.remove_vector("entity:z").await.unwrap());
-    storage
-        .db
-        .delete(b"embedding_cid:x")
-        .expect("drop index entry to simulate a pre-index row");
-    assert!(storage.remove_vector("x").await.unwrap());
+    assert!(!storage.remove_session_vector(&s2, "x").await.unwrap());
+    assert!(storage.remove_session_vector(&s1, "x").await.unwrap());
     assert_eq!(storage.total_count().await, 1);
     assert_eq!(storage.get_all_vectors().await.unwrap().len(), 1);
 }

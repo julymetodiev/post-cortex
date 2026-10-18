@@ -289,3 +289,64 @@ async fn summaries_workspaces_and_delete_session() {
     let err = storage.load_session(a).await.unwrap_err();
     assert!(crate::is_not_found(&err));
 }
+
+fn vector_meta(content_id: &str, session: &str) -> VectorMetadata {
+    VectorMetadata {
+        id: content_id.to_string(),
+        text: format!("{content_id} in {session}"),
+        source: session.to_string(),
+        content_type: "entity".into(),
+        timestamp: Utc::now(),
+        metadata: HashMap::new(),
+    }
+}
+
+/// `entity:<name>` exists in many sessions: their vectors must not
+/// overwrite each other, legacy records (keyed by the bare content id) are
+/// replaced on rewrite, and removal can target one session.
+#[tokio::test]
+async fn embeddings_are_session_scoped() {
+    let storage = test_storage().await;
+    let (s1, s2) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
+    let v = vec![0.5f32; 8];
+
+    // Legacy record of s1, written under the old id scheme.
+    storage
+        .db
+        .query("CREATE type::record('embedding', 'entity:rust') CONTENT $r")
+        .bind((
+            "r",
+            super::vectors::embedding_record(v.clone(), vector_meta("entity:rust", &s1)),
+        ))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+
+    storage
+        .add_vectors_batch(vec![
+            (v.clone(), vector_meta("entity:rust", &s1)),
+            (v.clone(), vector_meta("entity:rust", &s2)),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(storage.count_session_embeddings(&s1).await, 1);
+    assert_eq!(storage.count_session_embeddings(&s2).await, 1);
+    assert_eq!(storage.total_count().await, 2);
+
+    assert!(
+        storage
+            .remove_session_vector(&s1, "entity:rust")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !storage
+            .remove_session_vector(&s1, "entity:rust")
+            .await
+            .unwrap()
+    );
+    assert_eq!(storage.count_session_embeddings(&s2).await, 1);
+    assert!(storage.remove_vector("entity:rust").await.unwrap());
+    assert_eq!(storage.total_count().await, 0);
+}

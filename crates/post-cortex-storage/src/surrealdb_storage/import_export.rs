@@ -495,9 +495,9 @@ impl SurrealDBStorage {
         &self,
         embeddings: &[crate::export_import::ExportedEmbedding],
     ) -> Result<usize> {
-        let mut count = 0;
-        for emb in embeddings {
-            let record = EmbeddingRecord {
+        let records: Vec<EmbeddingRecord> = embeddings
+            .iter()
+            .map(|emb| EmbeddingRecord {
                 content_id: emb.content_id.clone(),
                 session_id: emb.session_id.clone(),
                 vector: emb.vector.clone(),
@@ -505,14 +505,12 @@ impl SurrealDBStorage {
                 content_type: emb.content_type.clone(),
                 timestamp: emb.timestamp.clone(),
                 metadata: emb.metadata.clone(),
-            };
-
-            let _: Option<EmbeddingRecord> = self
-                .db
-                .create(("embedding", emb.content_id.as_str()))
-                .content(record)
-                .await?;
-            count += 1;
+            })
+            .collect();
+        let count = records.len();
+        // Session-scoped record ids, like `add_vector`.
+        for chunk in records.chunks(500) {
+            self.upsert_embeddings(chunk.to_vec()).await?;
         }
         Ok(count)
     }

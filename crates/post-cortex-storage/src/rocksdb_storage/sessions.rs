@@ -586,15 +586,14 @@ impl RealRocksDBStorage {
     }
 
     /// Delete a session and everything stored under its id: blob, update
-    /// rows and index, meta, embeddings (and their content-id index
-    /// entries), entities, relationships and workspace memberships.
+    /// rows and index, meta, embeddings, entities, relationships and
+    /// workspace memberships.
     pub async fn delete_session(&self, session_id: Uuid) -> Result<()> {
         let db = self.db.clone();
         let locks = self.session_locks.clone();
 
         blocking(move || {
             let _guard = locks.lock(session_id);
-            let sid = session_id.to_string();
             let mut batch = WriteBatch::default();
 
             batch.delete(session_key(session_id).as_bytes());
@@ -604,6 +603,7 @@ impl RealRocksDBStorage {
             let mut deleted = 0usize;
             for prefix in [
                 format!("session:{}:", session_id),
+                format!("embedding:{}:", session_id),
                 format!("entity:{}:", session_id),
                 format!("relationship:{}:", session_id),
             ] {
@@ -611,18 +611,6 @@ impl RealRocksDBStorage {
                     batch.delete(&key);
                     deleted += 1;
                 }
-            }
-
-            let embedding_prefix = format!("embedding:{}:", session_id);
-            for key in keys_with_prefix(&db, embedding_prefix.as_bytes())? {
-                let content_id = &key[embedding_prefix.len()..];
-                let mut index_key = b"embedding_cid:".to_vec();
-                index_key.extend_from_slice(content_id);
-                if db.get(&index_key)?.as_deref() == Some(sid.as_bytes()) {
-                    batch.delete(&index_key);
-                }
-                batch.delete(&key);
-                deleted += 1;
             }
 
             for item in scan_prefix(&db, b"ws_session:") {

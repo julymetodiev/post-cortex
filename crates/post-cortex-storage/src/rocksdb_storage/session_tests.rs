@@ -436,7 +436,7 @@ async fn clear_session_entities_drops_entities_and_relationships() {
 }
 
 #[tokio::test]
-async fn delete_embedding_keeps_index_of_other_session() {
+async fn same_content_id_in_two_sessions_is_removed_per_session() {
     let (_dir, storage) = open().await;
     let embedding = |sid: &str| StoredEmbedding {
         content_id: "shared".into(),
@@ -449,9 +449,12 @@ async fn delete_embedding_keeps_index_of_other_session() {
     };
     storage.save_embedding(&embedding("s1")).await.unwrap();
     storage.save_embedding(&embedding("s2")).await.unwrap();
-    // Index points at the last writer (s2); deleting s1's row keeps it.
-    assert!(storage.delete_embedding("s1", "shared").await.unwrap());
-    assert!(raw_get(&storage, "embedding_cid:shared").is_some());
+    assert_eq!(storage.total_count().await, 2);
+    assert!(storage.remove_session_vector("s1", "shared").await.unwrap());
+    assert!(!storage.remove_session_vector("s1", "shared").await.unwrap());
+    assert_eq!(storage.count_session_embeddings("s2").await, 1);
+    // Unscoped removal takes every session's copy.
+    storage.save_embedding(&embedding("s1")).await.unwrap();
     assert!(storage.remove_vector("shared").await.unwrap());
     assert_eq!(storage.total_count().await, 0);
 }

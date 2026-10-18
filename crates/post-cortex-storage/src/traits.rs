@@ -316,8 +316,22 @@ pub trait VectorStorage: Send + Sync {
         content_type: &str,
     ) -> Result<Vec<SearchMatch>>;
 
-    /// Remove a vector by ID
+    /// Remove the vectors stored under content id `id`, in every session.
+    ///
+    /// Content ids are not unique across sessions (e.g. `entity:<name>`);
+    /// use [`remove_session_vector`](Self::remove_session_vector) to remove
+    /// one session's vector.
     async fn remove_vector(&self, id: &str) -> Result<bool>;
+
+    /// Remove the vector `content_id` of session `session_id` only.
+    /// Returns whether it existed.
+    ///
+    /// The default implementation falls back to the unscoped
+    /// [`remove_vector`](Self::remove_vector).
+    async fn remove_session_vector(&self, session_id: &str, content_id: &str) -> Result<bool> {
+        let _ = session_id;
+        self.remove_vector(content_id).await
+    }
 
     /// Check if a session has any embeddings
     async fn has_session_embeddings(&self, session_id: &str) -> bool;
