@@ -842,12 +842,12 @@ impl PostCortex for PcxGrpcService {
             .map_err(Status::not_found)?;
         let session = session_arc.load();
 
-        let mut analysis = session.entity_graph.analyze_entity_importance();
+        // Ranked by importance_score, so filtering the top `limit` equals
+        // truncating the filtered full ranking; only `limit` are built.
+        let limit = req.limit.map_or(usize::MAX, |l| l as usize);
+        let mut analysis = session.entity_graph.analyze_entity_importance_top(limit);
         if let Some(min_imp) = req.min_importance {
             analysis.retain(|a| a.importance_score >= min_imp);
-        }
-        if let Some(limit) = req.limit {
-            analysis.truncate(limit as usize);
         }
         let text = serde_json::to_string(&analysis).unwrap_or_else(|_| format!("{analysis:?}"));
 

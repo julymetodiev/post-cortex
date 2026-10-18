@@ -140,21 +140,22 @@ pub async fn get_entity_importance_analysis(
         .map_err(|e| anyhow::anyhow!("Failed to load session: {}", e))?;
 
     let session = session_arc.load();
-    let mut analysis = session.entity_graph.analyze_entity_importance();
+    let graph = &session.entity_graph;
 
-    let total_entities = analysis.len();
-
-    if let Some(min_imp) = min_importance {
-        analysis.retain(|entity| entity.importance_score >= min_imp);
-    }
-
-    let after_filter = analysis.len();
-
+    let total_entities = graph.entities.len();
     let entity_limit = limit.unwrap_or(100);
-    let truncated = analysis.len() > entity_limit;
-    if truncated {
-        analysis.truncate(entity_limit);
-    }
+
+    // Ranked by importance_score, so the min_importance filter keeps a
+    // prefix of the ranking: only the top `entity_limit` are built.
+    let mut analysis = graph.analyze_entity_importance_top(entity_limit);
+    let after_filter = match min_importance {
+        Some(min_imp) => {
+            analysis.retain(|entity| entity.importance_score >= min_imp);
+            graph.count_entities_with_importance_at_least(min_imp)
+        }
+        None => total_entities,
+    };
+    let truncated = after_filter > entity_limit;
 
     let result = serde_json::json!({
         "entities": analysis,
@@ -201,8 +202,8 @@ pub async fn get_entity_network_view(
     let max_entities = max_entities.unwrap_or(50);
     let max_relationships = max_relationships.unwrap_or(100);
 
-    // Resolve the BFS center identically to the gRPC handler so both transports
-    // hit the same dedup'd code path in SimpleEntityGraph::get_entity_network.
+    // Resolve the BFS center identically to the gRPC handler (explicit name,
+    // else the most important entity).
     let resolved_center = match center_entity.as_deref() {
         Some(name) if !name.is_empty() => Some(name.to_string()),
         _ => session
@@ -212,19 +213,18 @@ pub async fn get_entity_network_view(
             .map(|e| e.name.clone()),
     };
 
-    // TODO(perf): get_entity_network clones every entity within two hops
-    // before the max_entities/max_relationships cut below; bound the BFS with
-    // relationships_of once available (the current per-entity API drops edge
-    // direction, which this view reports).
-    let network = match resolved_center.as_deref() {
-        Some(center) => session.entity_graph.get_entity_network(center, 2),
-        None => session.entity_graph.get_entity_network("", 2),
-    };
+    // The BFS stops at the limits, so only the entities and relationships
+    // shown are visited and cloned (closest to the center first).
+    let network = session.entity_graph.get_entity_network_bounded(
+        resolved_center.as_deref().unwrap_or(""),
+        2,
+        max_entities,
+        max_relationships,
+    );
 
     let entities: Vec<serde_json::Value> = network
         .entities
         .values()
-        .take(max_entities)
         .map(|e| {
             serde_json::json!({
                 "name": e.name,
@@ -238,7 +238,6 @@ pub async fn get_entity_network_view(
     let relationships: Vec<serde_json::Value> = network
         .relationships
         .iter()
-        .take(max_relationships)
         .map(|r| {
             serde_json::json!({
                 "from": r.from_entity,

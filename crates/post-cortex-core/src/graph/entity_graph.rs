@@ -985,6 +985,75 @@ impl SimpleEntityGraph {
         network
     }
 
+    /// [`get_entity_network`](Self::get_entity_network) that stops growing
+    /// once it holds `max_entities` entities and `max_relationships`
+    /// relationships, so the work and the clones are bounded by the limits
+    /// instead of the size of the 2-hop neighbourhood.
+    ///
+    /// Breadth-first from `center`, so the entities kept are the closest
+    /// ones; relationships keep their direction and only connect entities
+    /// in the result. Walks edges via
+    /// [`relationships_of`](Self::relationships_of), O(degree) per entity.
+    pub fn get_entity_network_bounded(
+        &self,
+        center: &str,
+        max_depth: usize,
+        max_entities: usize,
+        max_relationships: usize,
+    ) -> EntityNetwork {
+        let mut network = EntityNetwork {
+            center: center.to_string(),
+            entities: BTreeMap::new(),
+            relationships: Vec::new(),
+        };
+        let Some((center_name, center_data)) = self.entities.get_key_value(center) else {
+            return network;
+        };
+        if max_entities == 0 || !self.entity_to_node.contains_key(center) {
+            return network;
+        }
+        network
+            .entities
+            .insert(center_name.clone(), center_data.clone());
+
+        let mut visited: HashSet<&str> = HashSet::from([center_name.as_str()]);
+        let mut seen_relationships: HashSet<(&str, &str, &RelationType)> = HashSet::new();
+        let mut queue: VecDeque<(&str, usize)> = VecDeque::from([(center_name.as_str(), 0)]);
+
+        while let Some((name, depth)) = queue.pop_front() {
+            if depth >= max_depth {
+                continue;
+            }
+            let entities_full = network.entities.len() >= max_entities;
+            let relationships_full = network.relationships.len() >= max_relationships;
+            if entities_full && relationships_full {
+                break;
+            }
+
+            for rel in self.relationships_of(name) {
+                let other = if rel.from == name { rel.to } else { rel.from };
+                if network.entities.len() < max_entities
+                    && !visited.contains(other)
+                    && let Some((other_name, data)) = self.entities.get_key_value(other)
+                {
+                    visited.insert(other_name.as_str());
+                    network.entities.insert(other_name.clone(), data.clone());
+                    queue.push_back((other_name.as_str(), depth + 1));
+                }
+
+                if network.relationships.len() < max_relationships
+                    && network.entities.contains_key(rel.from)
+                    && network.entities.contains_key(rel.to)
+                    && seen_relationships.insert((rel.from, rel.to, rel.relation_type))
+                {
+                    network.relationships.push(rel.to_relationship());
+                }
+            }
+        }
+
+        network
+    }
+
     /// Analyze entity importance with graph metrics
     ///
     /// Sorted by enhanced importance (highest first), ties by name.
@@ -1055,6 +1124,22 @@ impl SimpleEntityGraph {
             last_seen: s.entity.last_mentioned,
         })
         .collect()
+    }
+
+    /// How many entries of
+    /// [`analyze_entity_importance`](Self::analyze_entity_importance) have
+    /// an `importance_score` of at least `min`, without building them.
+    pub fn count_entities_with_importance_at_least(&self, min: f32) -> usize {
+        self.entities
+            .iter()
+            .filter(|(name, entity)| {
+                let degree = self.entity_to_node.get(*name).map_or(0, |&n| {
+                    self.graph.edges_directed(n, Direction::Outgoing).count()
+                        + self.graph.edges_directed(n, Direction::Incoming).count()
+                });
+                entity.importance_score + (degree as f32 * 0.1) >= min
+            })
+            .count()
     }
 
     /// New petgraph-specific methods
@@ -1967,6 +2052,90 @@ mod tests {
         assert_eq!(related[1], "banana");
         assert_eq!(related[2], "mango");
         assert_eq!(related[3], "zebra");
+    }
+
+    /// `hub -> s0..s{n}` plus `s{i} -> leaf{i}` and a cycle `s0 -> hub`.
+    fn hub_graph(spokes: usize) -> SimpleEntityGraph {
+        let mut graph = SimpleEntityGraph::new();
+        let rel = |from: &str, to: &str| EntityRelationship {
+            from_entity: from.to_string(),
+            to_entity: to.to_string(),
+            relation_type: RelationType::RelatedTo,
+            context: format!("{from}->{to}"),
+        };
+        graph.add_or_update_entity("hub".into(), EntityType::Concept, Utc::now(), "");
+        for i in 0..spokes {
+            for name in [format!("s{i}"), format!("leaf{i}")] {
+                graph.add_or_update_entity(name, EntityType::Concept, Utc::now(), "");
+            }
+            graph.add_relationship(rel("hub", &format!("s{i}")));
+            graph.add_relationship(rel(&format!("s{i}"), &format!("leaf{i}")));
+        }
+        graph.add_relationship(rel("s0", "hub"));
+        graph
+    }
+
+    #[test]
+    fn bounded_network_matches_full_network_when_limits_are_loose() {
+        let graph = hub_graph(5);
+        let full = graph.get_entity_network("hub", 2);
+        let bounded = graph.get_entity_network_bounded("hub", 2, usize::MAX, usize::MAX);
+
+        assert_eq!(
+            bounded.entities.keys().collect::<Vec<_>>(),
+            full.entities.keys().collect::<Vec<_>>()
+        );
+        let key = |r: &EntityRelationship| (r.from_entity.clone(), r.to_entity.clone());
+        let mut a: Vec<_> = full.relationships.iter().map(key).collect();
+        let mut b: Vec<_> = bounded.relationships.iter().map(key).collect();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b);
+        // Direction is kept: the cycle edge points back at the hub.
+        assert!(b.contains(&("s0".into(), "hub".into())));
+    }
+
+    #[test]
+    fn bounded_network_keeps_the_closest_entities_and_honours_limits() {
+        let graph = hub_graph(10);
+        let network = graph.get_entity_network_bounded("hub", 2, 4, 3);
+
+        assert_eq!(network.entities.len(), 4);
+        assert!(network.entities.contains_key("hub"));
+        // Breadth-first: direct neighbours fill the budget before any leaf.
+        assert!(network.entities.keys().all(|k| !k.starts_with("leaf")));
+        assert_eq!(network.relationships.len(), 3);
+        for r in &network.relationships {
+            assert!(network.entities.contains_key(&r.from_entity));
+            assert!(network.entities.contains_key(&r.to_entity));
+        }
+
+        assert!(
+            graph
+                .get_entity_network_bounded("missing", 2, 10, 10)
+                .entities
+                .is_empty()
+        );
+        assert!(
+            graph
+                .get_entity_network_bounded("hub", 2, 0, 10)
+                .entities
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn importance_count_matches_the_full_analysis() {
+        let graph = hub_graph(6);
+        let full = graph.analyze_entity_importance();
+        for min in [0.0, 0.5, 1.05, 1.2, 10.0] {
+            let expected = full.iter().filter(|e| e.importance_score >= min).count();
+            assert_eq!(
+                graph.count_entities_with_importance_at_least(min),
+                expected,
+                "min {min}"
+            );
+        }
     }
 
     #[test]
