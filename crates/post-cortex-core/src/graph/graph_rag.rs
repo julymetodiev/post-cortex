@@ -62,6 +62,11 @@ pub struct GraphRagConfig {
     /// Cache TTL in seconds (default: 300 = 5 minutes)
     pub cache_ttl_secs: u64,
 
+    /// Maximum number of cached relation lookups (default: 1024). When
+    /// full, expired entries are dropped first, then the cache is cleared.
+    #[serde(default = "default_max_cache_entries")]
+    pub max_cache_entries: usize,
+
     /// Relation types priority (higher index = lower priority)
     pub relation_priority: Vec<RelationType>,
 }
@@ -75,6 +80,7 @@ impl Default for GraphRagConfig {
             min_graph_size: 5,
             timeout_ms: 100,
             cache_ttl_secs: 300,
+            max_cache_entries: default_max_cache_entries(),
             relation_priority: vec![
                 RelationType::CausedBy,   // Most useful for debugging
                 RelationType::DependsOn,  // Architectural dependency
@@ -85,6 +91,42 @@ impl Default for GraphRagConfig {
             ],
         }
     }
+}
+
+fn default_max_cache_entries() -> usize {
+    1024
+}
+
+/// Identity of the graph a cached lookup was computed against.
+///
+/// Graphs are per session (and copy-on-write), so the address alone could
+/// be reused by a different graph after the original is dropped; node and
+/// edge counts make such a collision require an identically sized graph,
+/// and the TTL bounds staleness in that remaining case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct GraphIdentity {
+    addr: usize,
+    node_count: usize,
+    edge_count: usize,
+}
+
+impl GraphIdentity {
+    fn of(graph: &SimpleEntityGraph) -> Self {
+        let stats = graph.get_graph_stats();
+        Self {
+            addr: std::ptr::from_ref(graph) as usize,
+            node_count: stats.node_count,
+            edge_count: stats.edge_count,
+        }
+    }
+}
+
+/// Cache key: (graph, start entity, traversal depth).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct RelationCacheKey {
+    graph: GraphIdentity,
+    entity: String,
+    max_depth: usize,
 }
 
 /// Cached relation data with expiry
@@ -138,8 +180,10 @@ pub struct GlobalGraphInsights {
 /// Graph-RAG enricher that adds graph context to search results
 pub struct GraphRagEnricher {
     config: GraphRagConfig,
-    /// Cache: entity_name -> (relations, cached_at)
-    relation_cache: Arc<DashMap<String, CachedRelations>>,
+    /// Cache: (graph identity, entity_name, depth) -> (relations, cached_at).
+    /// Keyed by graph so lookups for different sessions never mix; bounded
+    /// by `GraphRagConfig::max_cache_entries`.
+    relation_cache: Arc<DashMap<RelationCacheKey, CachedRelations>>,
 }
 
 impl GraphRagEnricher {
@@ -203,8 +247,14 @@ impl GraphRagEnricher {
         start_entity: &str,
         max_depth: usize,
     ) -> Vec<RelationInfo> {
+        let key = RelationCacheKey {
+            graph: GraphIdentity::of(graph),
+            entity: start_entity.to_string(),
+            max_depth,
+        };
+
         // Check cache first
-        if let Some(cached) = self.get_cached_relations(start_entity) {
+        if let Some(cached) = self.get_cached_relations(&key) {
             return cached;
         }
 
@@ -232,7 +282,7 @@ impl GraphRagEnricher {
         results.truncate(self.config.max_relations_per_entity);
 
         // Cache the results
-        self.cache_relations(start_entity, results.clone());
+        self.cache_relations(key, results.clone());
 
         results
     }
@@ -251,26 +301,25 @@ impl GraphRagEnricher {
             return;
         }
 
-        // Get direct relations from graph
-        let relations = graph.get_entity_relationships(entity);
-
-        for (target, rel_type, context) in relations {
-            if visited.contains(&target) {
+        // Direct relations from the graph, borrowed (O(degree))
+        for rel in graph.relationships_of(entity) {
+            let target = if rel.from == entity { rel.to } else { rel.from };
+            if visited.contains(target) {
                 continue; // Cycle detected, skip
             }
 
             results.push(RelationInfo {
-                target_entity: target.clone(),
-                relation_type: rel_type.clone(),
-                context: context.clone(),
+                target_entity: target.to_string(),
+                relation_type: rel.relation_type.clone(),
+                context: rel.context.to_string(),
                 depth: current_depth,
             });
 
             // Mark as visited and recurse
-            visited.insert(target.clone());
+            visited.insert(target.to_string());
             self.traverse_relations(
                 graph,
-                &target,
+                target,
                 current_depth + 1,
                 max_depth,
                 visited,
@@ -280,8 +329,8 @@ impl GraphRagEnricher {
     }
 
     /// Get cached relations if not expired
-    fn get_cached_relations(&self, entity: &str) -> Option<Vec<RelationInfo>> {
-        let cached = self.relation_cache.get(entity)?;
+    fn get_cached_relations(&self, key: &RelationCacheKey) -> Option<Vec<RelationInfo>> {
+        let cached = self.relation_cache.get(key)?;
         let ttl = Duration::from_secs(self.config.cache_ttl_secs);
 
         if cached.cached_at.elapsed() < ttl {
@@ -289,15 +338,26 @@ impl GraphRagEnricher {
         } else {
             // Expired, remove from cache
             drop(cached);
-            self.relation_cache.remove(entity);
+            self.relation_cache.remove(key);
             None
         }
     }
 
-    /// Cache relations for an entity
-    fn cache_relations(&self, entity: &str, relations: Vec<RelationInfo>) {
+    /// Cache relations for a lookup, keeping the cache within
+    /// `max_cache_entries` (expired entries go first, then everything).
+    fn cache_relations(&self, key: RelationCacheKey, relations: Vec<RelationInfo>) {
+        let max = self.config.max_cache_entries;
+        if max == 0 {
+            return;
+        }
+        if self.relation_cache.len() >= max && !self.relation_cache.contains_key(&key) {
+            self.cleanup_cache();
+            if self.relation_cache.len() >= max {
+                self.relation_cache.clear();
+            }
+        }
         self.relation_cache.insert(
-            entity.to_string(),
+            key,
             CachedRelations {
                 relations,
                 cached_at: Instant::now(),
@@ -688,7 +748,7 @@ impl GraphRagEnricher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context_update::EntityType;
+    use crate::core::context_update::{EntityRelationship, EntityType};
 
     fn create_test_graph() -> SimpleEntityGraph {
         let mut graph = SimpleEntityGraph::new();
@@ -726,7 +786,6 @@ mod tests {
         graph.add_or_update_entity("user".to_string(), EntityType::Concept, now, "User entity");
 
         // Add relationships
-        use crate::core::context_update::EntityRelationship;
 
         graph.add_relationship(EntityRelationship {
             from_entity: "payment".to_string(),
@@ -807,7 +866,6 @@ mod tests {
             graph.add_or_update_entity(name.to_string(), EntityType::Concept, now, "Test entity");
         }
 
-        use crate::core::context_update::EntityRelationship;
         graph.add_relationship(EntityRelationship {
             from_entity: "a".to_string(),
             to_entity: "b".to_string(),
@@ -850,6 +908,51 @@ mod tests {
         let (valid, total) = enricher.cache_stats();
         assert!(valid > 0);
         assert_eq!(valid, total);
+    }
+
+    #[test]
+    fn test_cache_is_per_graph_and_depth() {
+        let enricher = GraphRagEnricher::with_defaults();
+        let graph = create_test_graph();
+        let mut other = SimpleEntityGraph::new();
+        other.add_relationship(EntityRelationship {
+            from_entity: "payment".to_string(),
+            to_entity: "elsewhere".to_string(),
+            relation_type: RelationType::RelatedTo,
+            context: String::new(),
+        });
+
+        let in_graph = enricher.find_related_with_depth(&graph, "payment", 2);
+        let in_other = enricher.find_related_with_depth(&other, "payment", 2);
+        assert_eq!(in_other.len(), 1);
+        assert_eq!(in_other[0].target_entity, "elsewhere");
+        assert!(in_graph.iter().all(|r| r.target_entity != "elsewhere"));
+
+        // A shallower lookup is not served the deeper cached result.
+        let shallow = enricher.find_related_with_depth(&graph, "payment", 1);
+        assert!(shallow.iter().all(|r| r.depth == 1));
+        assert_eq!(enricher.cache_stats().1, 3);
+    }
+
+    #[test]
+    fn test_cache_is_bounded() {
+        let enricher = GraphRagEnricher::new(GraphRagConfig {
+            max_cache_entries: 4,
+            ..GraphRagConfig::default()
+        });
+        let graph = create_test_graph();
+        for depth in 0..20 {
+            enricher.find_related_with_depth(&graph, "payment", depth);
+            assert!(enricher.cache_stats().1 <= 4);
+        }
+    }
+
+    #[test]
+    fn test_config_without_max_cache_entries_deserializes() {
+        let mut v = serde_json::to_value(GraphRagConfig::default()).unwrap();
+        v.as_object_mut().unwrap().remove("max_cache_entries");
+        let cfg: GraphRagConfig = serde_json::from_value(v).unwrap();
+        assert_eq!(cfg.max_cache_entries, 1024);
     }
 
     #[test]
