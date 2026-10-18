@@ -194,12 +194,14 @@ impl RealRocksDBStorage {
             db_path.display()
         );
 
-        Ok(Self {
+        let storage = Self {
             db,
             data_dir,
             vector_dimension,
             session_locks: Arc::new(SessionLocks::new()),
-        })
+        };
+        storage.ensure_source_file_index().await?;
+        Ok(storage)
     }
 
     /// Get database statistics
