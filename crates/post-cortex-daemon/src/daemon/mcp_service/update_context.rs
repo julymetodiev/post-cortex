@@ -114,7 +114,7 @@ pub(super) async fn handle(
             .collect();
 
         match post_cortex_mcp::bulk_update_conversation_context(items, uuid).await {
-            Ok(result) => Ok(CallToolResult::success(vec![Content::text(result.message)])),
+            Ok(result) => Ok(super::mcp_result_to_call_result(result)),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     } else {
@@ -177,7 +177,7 @@ pub(super) async fn handle(
         )
         .await
         {
-            Ok(result) => Ok(CallToolResult::success(vec![Content::text(result.message)])),
+            Ok(result) => Ok(super::mcp_result_to_call_result(result)),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }

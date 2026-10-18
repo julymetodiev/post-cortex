@@ -10,7 +10,7 @@ use crate::daemon::validate::{
 use post_cortex_memory::ConversationMemorySystem;
 use rmcp::{
     handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content, ErrorData as McpError},
+    model::{CallToolResult, ErrorData as McpError},
 };
 use std::sync::Arc;
 
@@ -65,12 +65,12 @@ pub(super) async fn handle(
             })?;
 
             match post_cortex_mcp::create_workspace(name.clone(), description.clone()).await {
-                Ok(result) => Ok(CallToolResult::success(vec![Content::text(result.message)])),
+                Ok(result) => Ok(super::mcp_result_to_call_result(result)),
                 Err(e) => Err(McpError::internal_error(e.to_string(), None)),
             }
         }
         "list" => match post_cortex_mcp::list_workspaces().await {
-            Ok(result) => Ok(CallToolResult::success(vec![Content::text(result.message)])),
+            Ok(result) => Ok(super::mcp_result_to_call_result(result)),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         },
         "get" => {
@@ -89,7 +89,7 @@ pub(super) async fn handle(
             let uuid = validate_workspace_id(workspace_id).map_err(|e| e.to_mcp_error())?;
 
             match post_cortex_mcp::get_workspace(uuid).await {
-                Ok(result) => Ok(CallToolResult::success(vec![Content::text(result.message)])),
+                Ok(result) => Ok(super::mcp_result_to_call_result(result)),
                 Err(e) => Err(McpError::internal_error(e.to_string(), None)),
             }
         }
@@ -109,7 +109,7 @@ pub(super) async fn handle(
             let uuid = validate_workspace_id(workspace_id).map_err(|e| e.to_mcp_error())?;
 
             match post_cortex_mcp::delete_workspace(uuid).await {
-                Ok(result) => Ok(CallToolResult::success(vec![Content::text(result.message)])),
+                Ok(result) => Ok(super::mcp_result_to_call_result(result)),
                 Err(e) => Err(McpError::internal_error(e.to_string(), None)),
             }
         }
@@ -144,7 +144,7 @@ pub(super) async fn handle(
             validate_session_role(&role).map_err(|e| e.to_mcp_error())?;
 
             match post_cortex_mcp::add_session_to_workspace(ws_uuid, sess_uuid, role).await {
-                Ok(result) => Ok(CallToolResult::success(vec![Content::text(result.message)])),
+                Ok(result) => Ok(super::mcp_result_to_call_result(result)),
                 Err(e) => Err(McpError::internal_error(e.to_string(), None)),
             }
         }
@@ -176,7 +176,7 @@ pub(super) async fn handle(
             let sess_uuid = validate_session_id(session_id).map_err(|e| e.to_mcp_error())?;
 
             match post_cortex_mcp::remove_session_from_workspace(ws_uuid, sess_uuid).await {
-                Ok(result) => Ok(CallToolResult::success(vec![Content::text(result.message)])),
+                Ok(result) => Ok(super::mcp_result_to_call_result(result)),
                 Err(e) => Err(McpError::internal_error(e.to_string(), None)),
             }
         }

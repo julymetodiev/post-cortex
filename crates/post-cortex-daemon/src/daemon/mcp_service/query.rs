@@ -8,7 +8,7 @@ use crate::daemon::validate::validate_session_id;
 use post_cortex_memory::ConversationMemorySystem;
 use rmcp::{
     handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content, ErrorData as McpError},
+    model::{CallToolResult, ErrorData as McpError},
 };
 use std::sync::Arc;
 
@@ -155,16 +155,7 @@ pub(super) async fn handle(
             )
             .await
             {
-                Ok(result) => {
-                    let mut contents = vec![Content::text(result.message)];
-                    if let Some(data) = result.data {
-                        contents.push(Content::text(format!(
-                            "\n\nResults:\n{}",
-                            serde_json::to_string(&data).unwrap_or_default()
-                        )));
-                    }
-                    Ok(CallToolResult::success(contents))
-                }
+                Ok(result) => Ok(super::mcp_result_to_call_result(result)),
                 Err(e) => Err(McpError::internal_error(e.to_string(), None)),
             }
         }

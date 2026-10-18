@@ -70,7 +70,7 @@ pub(super) async fn handle(
             }
         }
         "list" => match post_cortex_mcp::list_sessions().await {
-            Ok(result) => Ok(CallToolResult::success(vec![Content::text(result.message)])),
+            Ok(result) => Ok(super::mcp_result_to_call_result(result)),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         },
         "load" => {

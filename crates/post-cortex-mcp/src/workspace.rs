@@ -90,7 +90,7 @@ pub async fn get_workspace(workspace_id: Uuid) -> Result<MCPToolResult> {
                     "workspace_id": workspace.id.to_string(),
                     "name": workspace.name,
                     "description": workspace.description,
-                    "created_at": workspace.created_at,
+                    "created_at": chrono::DateTime::<chrono::Utc>::from(workspace.created_at).to_rfc3339(),
                     "sessions": session_details,
                     "session_count": workspace.session_ids.len()
                 })),
@@ -118,7 +118,7 @@ pub async fn list_workspaces() -> Result<MCPToolResult> {
                 "name": ws.name,
                 "description": ws.description,
                 "session_count": ws.session_ids.len(),
-                "created_at": ws.created_at
+                "created_at": chrono::DateTime::<chrono::Utc>::from(ws.created_at).to_rfc3339()
             })
         })
         .collect();

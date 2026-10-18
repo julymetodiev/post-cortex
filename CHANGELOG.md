@@ -40,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **MCP `manage_workspace`, `session` `list`, and `update_conversation_context`
+  returned only the summary line** ("Found 5 workspaces") and dropped the result
+  data. They now go through the same `mcp_result_to_call_result` as the other
+  tools, so the `Results:` JSON follows the message.
+- Workspace `created_at` is an RFC 3339 string instead of a
+  `{secs_since_epoch, nanos_since_epoch}` object.
 - **A failed session load could wipe the session.** Any load error (bad JSON,
   timeout) was treated as "not found", so the session was re-created empty and
   saved over the stored one. Only a real not-found creates a session now.
