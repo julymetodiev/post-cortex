@@ -26,6 +26,7 @@ use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_core::workspace::SessionRole;
 
 use super::RealRocksDBStorage;
+use super::core::scan_prefix;
 use super::types::{SessionCheckpoint, StoredWorkspace};
 
 impl RealRocksDBStorage {
@@ -156,10 +157,7 @@ impl RealRocksDBStorage {
 
         tokio::task::spawn_blocking(move || -> Result<Vec<SessionCheckpoint>> {
             let mut checkpoints = Vec::new();
-            let iter = db.iterator(rocksdb::IteratorMode::From(
-                b"checkpoint:",
-                rocksdb::Direction::Forward,
-            ));
+            let iter = scan_prefix(&db, b"checkpoint:");
 
             for item in iter {
                 let (key, value) = item?;
@@ -277,10 +275,7 @@ impl RealRocksDBStorage {
 
             // Use iterator with seek - prefix_iterator doesn't work correctly
             // when prefix_extractor size (16 bytes) doesn't match our prefix (8 bytes "session:")
-            let iter = db.iterator(rocksdb::IteratorMode::From(
-                b"session:",
-                rocksdb::Direction::Forward,
-            ));
+            let iter = scan_prefix(&db, b"session:");
             for item in iter {
                 let (key, _) = item?;
                 let key_str = String::from_utf8_lossy(&key);
@@ -324,10 +319,7 @@ impl RealRocksDBStorage {
             // Delete all updates for this session
             // Key format: "session:{session_id}:update:{update_id}"
             let update_prefix = format!("session:{}:update:", session_id);
-            let iter = db.iterator(rocksdb::IteratorMode::From(
-                update_prefix.as_bytes(),
-                rocksdb::Direction::Forward,
-            ));
+            let iter = scan_prefix(&db, update_prefix.as_bytes());
             let mut keys_to_delete = Vec::new();
 
             for item in iter {
@@ -376,10 +368,7 @@ impl RealRocksDBStorage {
 
         tokio::task::spawn_blocking(move || -> Result<Vec<ContextUpdate>> {
             let mut updates = Vec::new();
-            let iter = db.iterator(rocksdb::IteratorMode::From(
-                update_prefix.as_bytes(),
-                rocksdb::Direction::Forward,
-            ));
+            let iter = scan_prefix(&db, update_prefix.as_bytes());
 
             for item in iter {
                 let (key, value) = item?;

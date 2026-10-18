@@ -103,9 +103,10 @@ impl ConversationMemorySystem {
         }
 
         // Default: use RocksDB
-        let storage = RealRocksDBStorage::new(&config.data_directory)
-            .await
-            .map_err(|e| format!("Failed to initialize storage: {e}"))?;
+        let storage =
+            RealRocksDBStorage::new_with_dimension(&config.data_directory, config.vector_dimension)
+                .await
+                .map_err(|e| format!("Failed to initialize storage: {e}"))?;
 
         Self::new_with_rocksdb(storage, config).await
     }

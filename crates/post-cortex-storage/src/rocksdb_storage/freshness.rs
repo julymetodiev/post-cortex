@@ -24,6 +24,7 @@ use crate::traits::FreshnessStorage;
 use post_cortex_proto::pb::SourceReference;
 
 use super::RealRocksDBStorage;
+use super::core::scan_prefix;
 
 #[async_trait]
 impl FreshnessStorage for RealRocksDBStorage {
@@ -100,10 +101,7 @@ impl FreshnessStorage for RealRocksDBStorage {
 
         tokio::task::spawn_blocking(move || -> Result<u32> {
             let mut count = 0;
-            let iter = db.iterator(rocksdb::IteratorMode::From(
-                b"source_ref:",
-                rocksdb::Direction::Forward,
-            ));
+            let iter = scan_prefix(&db, b"source_ref:");
 
             let mut keys_to_delete = Vec::new();
 
@@ -143,10 +141,7 @@ impl FreshnessStorage for RealRocksDBStorage {
         tokio::task::spawn_blocking(
             move || -> Result<Vec<post_cortex_proto::pb::SourceReference>> {
                 let mut matches = Vec::new();
-                let iter = db.iterator(rocksdb::IteratorMode::From(
-                    b"source_ref:",
-                    rocksdb::Direction::Forward,
-                ));
+                let iter = scan_prefix(&db, b"source_ref:");
 
                 for item in iter {
                     let (key, value) = item?;
@@ -322,10 +317,7 @@ impl FreshnessStorage for RealRocksDBStorage {
                     ];
 
                     for prefix in &prefixes {
-                        let iter = db.iterator(rocksdb::IteratorMode::From(
-                            prefix.as_bytes(),
-                            rocksdb::Direction::Forward,
-                        ));
+                        let iter = scan_prefix(&db, prefix.as_bytes());
 
                         for item in iter {
                             let (key, _) = item?;
@@ -346,10 +338,7 @@ impl FreshnessStorage for RealRocksDBStorage {
                 let mut cascade_count = 0u32;
 
                 // Direct: invalidate entries for the changed symbol's file
-                let source_iter = db.iterator(rocksdb::IteratorMode::From(
-                    b"source_ref:",
-                    rocksdb::Direction::Forward,
-                ));
+                let source_iter = scan_prefix(&db, b"source_ref:");
                 let mut keys_to_delete = Vec::new();
 
                 for item in source_iter {

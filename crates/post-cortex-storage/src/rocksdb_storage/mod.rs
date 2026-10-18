@@ -20,8 +20,6 @@ use rocksdb::DB;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use post_cortex_embeddings::VectorDB;
-
 mod core;
 mod freshness;
 mod graph;
@@ -40,14 +38,18 @@ pub use types::{
 
 /// Real RocksDB storage implementation for high performance.
 ///
-/// Uses a hybrid approach:
-/// - RocksDB for persistent storage on disk
-/// - In-memory VectorDB with HNSW index for O(log n) vector search
+/// All records share one key space (key families are documented on the
+/// module that owns them). Vector search is served by the memory layer's
+/// own in-memory index; this backend only persists embeddings, and its
+/// [`VectorStorage`](crate::traits::VectorStorage) search methods scan the
+/// persisted rows.
 #[derive(Clone)]
 pub struct RealRocksDBStorage {
     pub(super) db: Arc<DB>,
     #[allow(dead_code)]
     pub(super) data_dir: PathBuf,
-    /// In-memory HNSW index for fast vector search
-    pub(super) vector_index: Arc<VectorDB>,
+    /// Required embedding length; `None` accepts any non-empty vector.
+    pub(super) vector_dimension: Option<usize>,
+    /// Serialises read-modify-write of a session's update index.
+    pub(super) session_locks: Arc<core::SessionLocks>,
 }

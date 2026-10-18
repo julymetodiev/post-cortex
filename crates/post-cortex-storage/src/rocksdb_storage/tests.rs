@@ -274,21 +274,25 @@ async fn test_rocksdb_graph_storage_shortest_path() {
     assert!(no_path.is_none());
 }
 
+fn vector_metadata(id: &str, source: &str, content_type: &str) -> VectorMetadata {
+    VectorMetadata {
+        id: id.to_string(),
+        text: format!("text for {id}"),
+        source: source.to_string(),
+        content_type: content_type.to_string(),
+        timestamp: Utc::now(),
+        metadata: HashMap::new(),
+    }
+}
+
 #[tokio::test]
 async fn test_rocksdb_embedding_dimension_validation() {
     let temp_dir = tempdir().expect("Failed to create temp directory");
-    let storage = RealRocksDBStorage::new(temp_dir.path())
+    let storage = RealRocksDBStorage::new_with_dimension(temp_dir.path(), EMBEDDING_DIMENSION)
         .await
         .expect("Failed to create RocksDB storage");
 
-    let metadata = VectorMetadata {
-        id: "test-id".to_string(),
-        text: "test text".to_string(),
-        source: Uuid::new_v4().to_string(),
-        content_type: "qa".to_string(),
-        timestamp: Utc::now(),
-        metadata: HashMap::new(),
-    };
+    let metadata = vector_metadata("test-id", &Uuid::new_v4().to_string(), "qa");
 
     // Valid dimension (384)
     let valid_vector = vec![0.1f32; EMBEDDING_DIMENSION];
@@ -305,4 +309,102 @@ async fn test_rocksdb_embedding_dimension_validation() {
             .to_string()
             .contains("Invalid embedding dimension")
     );
+}
+
+/// The default Model2Vec model emits 256-dim vectors; they used to be
+/// rejected by a hard-coded 384 check, so nothing was ever persisted.
+#[tokio::test]
+async fn test_rocksdb_accepts_configured_dimension() {
+    let temp_dir = tempdir().unwrap();
+    let source = Uuid::new_v4().to_string();
+
+    let storage = RealRocksDBStorage::new_with_dimension(temp_dir.path(), 256)
+        .await
+        .unwrap();
+    storage
+        .add_vector(vec![0.5; 256], vector_metadata("a", &source, "qa"))
+        .await
+        .expect("256-dim vector must be accepted when configured");
+    assert!(
+        storage
+            .add_vector(vec![0.5; 384], vector_metadata("b", &source, "qa"))
+            .await
+            .is_err()
+    );
+    drop(storage);
+
+    // `new` enforces nothing but non-emptiness (export/import/migrate).
+    let storage = RealRocksDBStorage::new(temp_dir.path()).await.unwrap();
+    storage
+        .add_vector(vec![0.5; 384], vector_metadata("b", &source, "qa"))
+        .await
+        .unwrap();
+    assert!(
+        storage
+            .add_vector(Vec::new(), vector_metadata("c", &source, "qa"))
+            .await
+            .is_err()
+    );
+    assert_eq!(storage.count_session_embeddings(&source).await, 2);
+}
+
+#[tokio::test]
+async fn test_rocksdb_vector_storage_without_resident_index() {
+    let temp_dir = tempdir().unwrap();
+    let s1 = Uuid::new_v4().to_string();
+    let s2 = Uuid::new_v4().to_string();
+
+    {
+        let storage = RealRocksDBStorage::new_with_dimension(temp_dir.path(), 3)
+            .await
+            .unwrap();
+        let ids = storage
+            .add_vectors_batch(vec![
+                (vec![1.0, 0.0, 0.0], vector_metadata("x", &s1, "qa")),
+                (vec![0.0, 1.0, 0.0], vector_metadata("y", &s1, "decision")),
+                (vec![0.9, 0.1, 0.0], vector_metadata("entity:z", &s2, "qa")),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(ids, vec!["x", "y", "entity:z"]);
+    }
+
+    // Reopen: everything is served from the persisted rows.
+    let storage = RealRocksDBStorage::new_with_dimension(temp_dir.path(), 3)
+        .await
+        .unwrap();
+    assert_eq!(storage.total_count().await, 3);
+    assert!(storage.has_session_embeddings(&s1).await);
+    assert_eq!(storage.count_session_embeddings(&s1).await, 2);
+    assert!(!storage.has_session_embeddings("nope").await);
+
+    let top = storage.search(&[1.0, 0.0, 0.0], 2).await.unwrap();
+    let top_ids: Vec<&str> = top.iter().map(|m| m.metadata.id.as_str()).collect();
+    assert_eq!(top_ids, vec!["x", "entity:z"]);
+    assert!(top[0].similarity >= top[1].similarity);
+
+    let in_s1 = storage
+        .search_in_session(&[0.0, 1.0, 0.0], 5, &s1)
+        .await
+        .unwrap();
+    assert_eq!(in_s1.len(), 2);
+    assert_eq!(in_s1[0].metadata.id, "y");
+
+    let by_type = storage
+        .search_by_content_type(&[1.0, 0.0, 0.0], 5, "decision")
+        .await
+        .unwrap();
+    assert_eq!(by_type.len(), 1);
+    assert_eq!(by_type[0].metadata.id, "y");
+
+    // Removal by content id: indexed row, then a row without index entry.
+    assert!(storage.remove_vector("entity:z").await.unwrap());
+    assert!(!storage.remove_vector("entity:z").await.unwrap());
+    storage
+        .db
+        .delete(b"embedding_cid:x")
+        .expect("drop index entry to simulate a pre-index row");
+    assert!(storage.remove_vector("x").await.unwrap());
+    assert_eq!(storage.total_count().await, 1);
+    assert_eq!(storage.get_all_vectors().await.unwrap().len(), 1);
 }
