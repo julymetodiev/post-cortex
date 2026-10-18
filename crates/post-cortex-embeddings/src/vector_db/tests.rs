@@ -434,6 +434,27 @@ fn max_vectors_is_enforced() {
     assert_eq!(db.len(), 3);
 }
 
+#[test]
+fn quantization_is_off_by_default() {
+    let config = VectorDbConfig::default();
+    assert!(!config.enable_quantization);
+    let mut quantized = config.clone();
+    quantized.dimension = 4;
+    quantized.enable_quantization = true;
+    let mut plain = config;
+    plain.dimension = 4;
+
+    let q = VectorDB::new(quantized).unwrap();
+    let p = VectorDB::new(plain).unwrap();
+    q.add_vector(vec![0.1; 4], meta("a", "s", "qa")).unwrap();
+    p.add_vector(vec![0.1; 4], meta("a", "s", "qa")).unwrap();
+    assert_eq!(
+        q.get_stats().memory_usage_bytes - p.get_stats().memory_usage_bytes,
+        4,
+        "the option still stores one byte per dimension"
+    );
+}
+
 /// Sanity benchmark, not run by default:
 /// `cargo test -p post-cortex-embeddings --release --lib bench_ -- --ignored --nocapture`
 #[test]

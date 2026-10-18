@@ -103,7 +103,8 @@ impl Default for VectorDbConfig {
             ef_construction: 200,
             ef_search: 50,
             num_layers: 4,
-            enable_quantization: true,
+            // Off: the u8 copy is never read by search; keep it opt-in.
+            enable_quantization: false,
             quantization_buckets: 256,
             enable_hnsw_index: true,
             exact_search_threshold: 10_000,
