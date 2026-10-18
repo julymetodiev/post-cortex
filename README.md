@@ -54,7 +54,7 @@ post-cortex-proto ──► post-cortex-core ──► post-cortex-embeddings
 ## Installation
 
 ```bash
-# Cargo (any platform with Rust 1.90+) — ships the pcx CLI from crates.io
+# Cargo (any platform with Rust 1.95+) — ships the pcx CLI from crates.io
 cargo install post-cortex-daemon --features "embeddings,surrealdb-storage"
 
 # Homebrew (macOS / Linux)

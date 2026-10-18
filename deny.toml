@@ -35,6 +35,15 @@ ignore = [
     "RUSTSEC-2025-0119", # number_prefix unmaintained
     "RUSTSEC-2024-0436", # paste unmaintained (transitive via candle / surrealdb)
     "RUSTSEC-2025-0134", # rustls-pemfile unmaintained (transitive via reqwest 0.13)
+    # quick-xml 0.39 via surrealdb-core -> object_store (S3/GCS backends we
+    # never configure); surrealdb 3.3.4 pins it. Re-check on the next surrealdb.
+    "RUSTSEC-2026-0195", # quick-xml NsReader namespace allocation
+    "RUSTSEC-2026-0194", # quick-xml duplicate-attribute quadratic check
+    # zip 7.4 via candle-core, only with the opt-in `bert` feature; affects
+    # archive extraction, which candle/post-cortex never call.
+    "RUSTSEC-2026-0367", # zip SUID/SGID bits on extract
+    "RUSTSEC-2026-0368", # zip symlink targets outside destination
+    "RUSTSEC-2026-0369", # zip permissions applied through symlinks
 ]
 
 # ---------------------------------------------------------------------------
@@ -76,6 +85,28 @@ exceptions = [
     { name = "surrealdb-types",        version = "*", allow = ["BUSL-1.1"] },
     { name = "surrealdb-types-derive", version = "*", allow = ["BUSL-1.1"] },
     { name = "surrealdb-protocol",     version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-catalog",      version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-cnf",          version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-collections",  version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-common",       version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-datastore",    version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-engine-api",   version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-engine-local", version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-expr",         version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-iam",          version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-idx",          version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-keyspace-macro", version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-kvs",          version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-kvs-any",      version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-kvs-mem",      version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-kvs-tikv",     version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-observe",      version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-parse-common", version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-rpc",          version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-runtime",      version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-sql",          version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-strand",       version = "*", allow = ["BUSL-1.1"] },
+    { name = "surrealdb-syn",          version = "*", allow = ["BUSL-1.1"] },
 ]
 
 # `surrealdb` declares `license = "non-standard"` and ships the BUSL-1.1
@@ -102,6 +133,140 @@ license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
 
 [[licenses.clarify]]
 name = "surrealdb-types-derive"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+# SurrealDB 3.3 split the engine into sub-crates that ship the same BUSL-1.1
+# LICENSE file but no `license` field.
+[[licenses.clarify]]
+name = "surrealdb-catalog"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-cnf"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-collections"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-common"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-datastore"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-engine-api"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-engine-local"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-expr"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-iam"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-idx"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-keyspace-macro"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-kvs"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-kvs-any"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-kvs-mem"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-kvs-tikv"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-observe"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-parse-common"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-rpc"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-runtime"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-sql"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-strand"
+version = "*"
+expression = "BUSL-1.1"
+license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]
+
+[[licenses.clarify]]
+name = "surrealdb-syn"
 version = "*"
 expression = "BUSL-1.1"
 license-files = [{ path = "LICENSE", hash = 0xbb1191d7 }]

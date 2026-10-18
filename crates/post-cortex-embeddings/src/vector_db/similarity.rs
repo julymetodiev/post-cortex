@@ -12,7 +12,7 @@
 
 //! Cosine-similarity kernels shared by the vector DB and its callers.
 //!
-//! The loops keep [`LANES`] independent accumulators so LLVM can vectorise
+//! The loops keep `LANES` independent accumulators so LLVM can vectorise
 //! them: a plain `iter().sum()` over `f32` is a single dependency chain the
 //! compiler may not reorder. When scoring many vectors against one query,
 //! compute the query norm once with [`l2_norm`] and call

@@ -43,4 +43,14 @@ ignore = [
     "RUSTSEC-2025-0119", # number_prefix (transitive via indicatif/hf-hub)
     "RUSTSEC-2024-0436", # paste (transitive via candle / surrealdb)
     "RUSTSEC-2025-0134", # rustls-pemfile (transitive via reqwest 0.13)
+
+    # quick-xml 0.39 via surrealdb-core -> object_store (S3/GCS backends we
+    # never configure); surrealdb 3.3.4 pins it. Re-check on the next surrealdb.
+    "RUSTSEC-2026-0195", # quick-xml NsReader namespace allocation
+    "RUSTSEC-2026-0194", # quick-xml duplicate-attribute quadratic check
+    # zip 7.4 via candle-core, only with the opt-in `bert` feature; affects
+    # archive extraction, which candle/post-cortex never call.
+    "RUSTSEC-2026-0367", # zip SUID/SGID bits on extract
+    "RUSTSEC-2026-0368", # zip symlink targets outside destination
+    "RUSTSEC-2026-0369", # zip permissions applied through symlinks
 ]

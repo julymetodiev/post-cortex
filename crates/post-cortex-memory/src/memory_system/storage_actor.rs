@@ -21,9 +21,9 @@ const MAX_CONCURRENT_REQUESTS: usize = 32;
 
 /// Storage actor: runs storage requests off the caller's task.
 ///
-/// Requests are handled concurrently (up to [`MAX_CONCURRENT_REQUESTS`]);
+/// Requests are handled concurrently (up to `MAX_CONCURRENT_REQUESTS`);
 /// writes that touch one session are ordered by the per-session writer in
-/// [`SessionPersister`], which also coalesces background session persists.
+/// `SessionPersister`, which also coalesces background session persists.
 pub struct StorageActor {
     receiver: Receiver<StorageMessage>,
     ctx: Arc<ActorContext>,
