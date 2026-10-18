@@ -242,8 +242,10 @@ impl ContentVectorizer {
         self.invalidate_cached(session_id);
 
         if let Some(storage) = &self.persistent_storage {
+            // Session-scoped: entity content ids (`entity:<name>`) repeat
+            // across sessions, and other sessions' copies must stay.
             storage
-                .remove_vector(content_id)
+                .remove_session_vector(&session_id.to_string(), content_id)
                 .await
                 .with_context(|| format!("Failed to delete persisted embedding {content_id}"))?;
         }

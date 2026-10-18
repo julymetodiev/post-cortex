@@ -108,6 +108,14 @@ impl VectorStorage for FakeStorage {
         Ok(rows.len() != before)
     }
 
+    async fn remove_session_vector(&self, session_id: &str, content_id: &str) -> Result<bool> {
+        Ok(self
+            .rows
+            .lock()
+            .remove(&(session_id.to_string(), content_id.to_string()))
+            .is_some())
+    }
+
     async fn has_session_embeddings(&self, session_id: &str) -> bool {
         self.count_session_embeddings(session_id).await > 0
     }
@@ -367,6 +375,9 @@ async fn remove_content_is_session_scoped_and_persists() {
         super::vectorizer::source_content_ids(&v.vector_db, "entity:shared", &b_sid).len(),
         1
     );
+    // ...and only a's persisted copy: b's must survive a restart.
+    assert!(!storage.has(a.id(), "entity:shared"));
+    assert!(storage.has(b.id(), "entity:shared"));
 }
 
 #[tokio::test]

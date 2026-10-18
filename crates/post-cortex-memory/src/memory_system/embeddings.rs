@@ -774,7 +774,12 @@ impl ConversationMemorySystem {
         // Vectorizer not initialised: nothing is in memory or cached yet,
         // but the persisted copy would be loaded at init.
         for content_id in content_ids {
-            if let Err(e) = self.vector_storage.remove_vector(content_id).await {
+            // Session-scoped: entity content ids repeat across sessions.
+            if let Err(e) = self
+                .vector_storage
+                .remove_session_vector(&session_id.to_string(), content_id)
+                .await
+            {
                 warn!(
                     "Failed to remove persisted embedding {} of session {}: {:#}",
                     content_id, session_id, e
@@ -1033,6 +1038,33 @@ mod tests {
 
         let persisted = wait_for_stored(&sys, sid, |s| !s.entity_graph.has_entity("Doomed")).await;
         assert!(persisted, "entity removal was not persisted");
+    }
+
+    #[tokio::test]
+    async fn delete_entity_keeps_other_sessions_embedding_of_the_same_name() {
+        let (sys, _dir) = system("delent_scope").await;
+        let a = sys.create_session(None, None).await.unwrap();
+        let b = sys.create_session(None, None).await.unwrap();
+        for sid in [a, b] {
+            let arc = sys.get_session(sid).await.unwrap();
+            let mut session = (**arc.load()).clone();
+            Arc::make_mut(&mut session.entity_graph).add_or_update_entity(
+                "Rust".into(),
+                EntityType::Technology,
+                chrono::Utc::now(),
+                "",
+            );
+            arc.store(Arc::new(session));
+            persist_embedding(&sys, sid, "entity:Rust").await;
+        }
+
+        assert!(sys.delete_entity(a, "Rust").await.unwrap());
+        assert_eq!(persisted_count(&sys, a).await, 0);
+        assert_eq!(
+            persisted_count(&sys, b).await,
+            1,
+            "another session's entity:Rust must survive"
+        );
     }
 
     #[tokio::test]
