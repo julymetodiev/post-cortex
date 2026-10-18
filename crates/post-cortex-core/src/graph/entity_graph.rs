@@ -130,6 +130,59 @@ impl<'de> serde::Deserialize<'de> for EdgeData {
     }
 }
 
+/// Borrowed view of one directed relationship edge in a [`SimpleEntityGraph`].
+///
+/// Returned by the O(degree) lookups [`SimpleEntityGraph::relationships_of`]
+/// and [`SimpleEntityGraph::relation_between`]; nothing is cloned until
+/// [`RelationRef::to_relationship`] is called.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelationRef<'a> {
+    /// Source entity name
+    pub from: &'a str,
+    /// Target entity name
+    pub to: &'a str,
+    /// Kind of relationship
+    pub relation_type: &'a RelationType,
+    /// Free-text context stored on the edge
+    pub context: &'a str,
+}
+
+impl RelationRef<'_> {
+    /// Owned `EntityRelationship` copy of this edge.
+    pub fn to_relationship(&self) -> EntityRelationship {
+        EntityRelationship {
+            from_entity: self.from.to_string(),
+            to_entity: self.to.to_string(),
+            relation_type: self.relation_type.clone(),
+            context: self.context.to_string(),
+        }
+    }
+}
+
+/// Order entity data by importance (desc), ties by name (asc). NaN-safe.
+fn by_importance_desc(a: &&EntityData, b: &&EntityData) -> std::cmp::Ordering {
+    b.importance_score
+        .total_cmp(&a.importance_score)
+        .then_with(|| a.name.cmp(&b.name))
+}
+
+/// The `limit` smallest elements of `items` under `cmp`, sorted.
+/// O(n + k log k) instead of a full O(n log n) sort.
+fn top_k_by<T, F>(mut items: Vec<T>, limit: usize, mut cmp: F) -> Vec<T>
+where
+    F: FnMut(&T, &T) -> std::cmp::Ordering,
+{
+    if limit == 0 {
+        return Vec::new();
+    }
+    if items.len() > limit {
+        items.select_nth_unstable_by(limit - 1, &mut cmp);
+        items.truncate(limit);
+    }
+    items.sort_by(cmp);
+    items
+}
+
 /// Enhanced entity graph using petgraph for efficient relationship operations
 #[derive(Clone, Debug, Serialize)]
 pub struct SimpleEntityGraph {
@@ -153,8 +206,8 @@ pub struct SimpleEntityGraph {
     node_to_entity: HashMap<NodeIndex, String>,
 }
 
-// Intermediate structure for serializing graph data with entity names instead of indices
-#[derive(Serialize, Deserialize)]
+// Intermediate structure for deserializing graph data with entity names instead of indices
+#[derive(Deserialize)]
 struct SerializableGraphData {
     /// Sorted list of entity names (nodes) for deterministic deserialization
     nodes: Vec<String>,
@@ -171,28 +224,35 @@ mod petgraph_serde {
     where
         S: Serializer,
     {
+        // Same shape as `SerializableGraphData`, but borrowed (no clones).
+        #[derive(Serialize)]
+        struct SerializableGraphDataRef<'a> {
+            nodes: Vec<&'a String>,
+            edges: Vec<(&'a String, &'a String, &'a EdgeData)>,
+        }
+
         // Extract all nodes (entity names) in sorted order for determinism
-        let mut nodes: Vec<String> = graph.node_weights().cloned().collect();
+        let mut nodes: Vec<&String> = graph.node_weights().collect();
         nodes.sort(); // CRITICAL: sorted for deterministic NodeIndex mapping
 
         // Extract edges using entity names instead of NodeIndex (includes context)
-        let mut edges: Vec<(String, String, EdgeData)> = graph
+        let mut edges: Vec<(&String, &String, &EdgeData)> = graph
             .edge_references()
-            .map(|edge| {
-                let from_entity = graph.node_weight(edge.source()).unwrap().clone();
-                let to_entity = graph.node_weight(edge.target()).unwrap().clone();
-                (from_entity, to_entity, edge.weight().clone())
+            .filter_map(|edge| {
+                let from_entity = graph.node_weight(edge.source())?;
+                let to_entity = graph.node_weight(edge.target())?;
+                Some((from_entity, to_entity, edge.weight()))
             })
             .collect();
 
         // Sort edges for determinism (by source, then target, then relation type)
         edges.sort_by(|a, b| {
-            a.0.cmp(&b.0)
-                .then_with(|| a.1.cmp(&b.1))
+            a.0.cmp(b.0)
+                .then_with(|| a.1.cmp(b.1))
                 .then_with(|| a.2.relation_type.cmp(&b.2.relation_type))
         });
 
-        let data = SerializableGraphData { nodes, edges };
+        let data = SerializableGraphDataRef { nodes, edges };
         data.serialize(serializer)
     }
 
@@ -487,11 +547,12 @@ impl SimpleEntityGraph {
             );
         }
 
-        // Merge entity mention lists
+        // Merge entity mention lists (HashSet dedupe: O(m) per entity, not O(m²))
         for (name, mentions) in &other.entity_mentions {
             let entry = self.entity_mentions.entry(name.clone()).or_default();
+            let mut seen: HashSet<uuid::Uuid> = entry.iter().copied().collect();
             for id in mentions {
-                if !entry.contains(id) {
+                if seen.insert(*id) {
                     entry.push(*id);
                 }
             }
@@ -621,18 +682,20 @@ impl SimpleEntityGraph {
             .collect()
     }
 
-    /// Get most important entities - unchanged from original
+    /// Get the `limit` most important entities (highest score first, ties
+    /// by name). Top-k selection; NaN scores never panic.
     pub fn get_most_important_entities(&self, limit: usize) -> Vec<&EntityData> {
-        let mut entities: Vec<&EntityData> = self.entities.values().collect();
-        entities.sort_by(|a, b| b.importance_score.partial_cmp(&a.importance_score).unwrap());
-        entities.into_iter().take(limit).collect()
+        top_k_by(self.entities.values().collect(), limit, by_importance_desc)
     }
 
-    /// Get recently mentioned entities - unchanged from original
+    /// Get the `limit` most recently mentioned entities (newest first, ties
+    /// by name). Top-k selection.
     pub fn get_recently_mentioned_entities(&self, limit: usize) -> Vec<&EntityData> {
-        let mut entities: Vec<&EntityData> = self.entities.values().collect();
-        entities.sort_by(|a, b| b.last_mentioned.cmp(&a.last_mentioned));
-        entities.into_iter().take(limit).collect()
+        top_k_by(self.entities.values().collect(), limit, |a, b| {
+            b.last_mentioned
+                .cmp(&a.last_mentioned)
+                .then_with(|| a.name.cmp(&b.name))
+        })
     }
 
     /// Search entities by name or description (case-insensitive)
@@ -965,8 +1028,8 @@ impl SimpleEntityGraph {
             analyses.push(entity_analysis);
         }
 
-        // Sort by enhanced importance score
-        analyses.sort_by(|a, b| b.importance_score.partial_cmp(&a.importance_score).unwrap());
+        // Sort by enhanced importance score (stable, NaN-safe)
+        analyses.sort_by(|a, b| b.importance_score.total_cmp(&a.importance_score));
         analyses
     }
 
@@ -1061,6 +1124,64 @@ impl SimpleEntityGraph {
     /// Get all entities as a vector (convenience method for migration)
     pub fn get_all_entities(&self) -> Vec<EntityData> {
         self.entities.values().cloned().collect()
+    }
+
+    /// Number of relationship edges (O(1)).
+    pub fn edge_count(&self) -> usize {
+        self.graph.edge_count()
+    }
+
+    fn relation_ref<'a>(
+        &'a self,
+        edge: petgraph::graph::EdgeReference<'a, EdgeData>,
+    ) -> Option<RelationRef<'a>> {
+        let weight = edge.weight();
+        Some(RelationRef {
+            from: self.graph.node_weight(edge.source())?,
+            to: self.graph.node_weight(edge.target())?,
+            relation_type: &weight.relation_type,
+            context: &weight.context,
+        })
+    }
+
+    /// All relationships touching `entity` (outgoing first, then incoming),
+    /// borrowed. O(degree) via the node index; exact (case-sensitive) name
+    /// match. A self-loop is reported once.
+    pub fn relationships_of(&self, entity: &str) -> Vec<RelationRef<'_>> {
+        let Some(&node) = self.entity_to_node.get(entity) else {
+            return Vec::new();
+        };
+        let outgoing = self.graph.edges_directed(node, Direction::Outgoing);
+        let incoming = self
+            .graph
+            .edges_directed(node, Direction::Incoming)
+            .filter(|edge| edge.source() != node);
+        outgoing
+            .chain(incoming)
+            .filter_map(|edge| self.relation_ref(edge))
+            .collect()
+    }
+
+    /// Relationships directly connecting `a` and `b` in either direction
+    /// (`a -> b` edges first, then `b -> a`), borrowed. O(degree(a)).
+    pub fn relation_between(&self, a: &str, b: &str) -> Vec<RelationRef<'_>> {
+        let (Some(&na), Some(&nb)) = (self.entity_to_node.get(a), self.entity_to_node.get(b))
+        else {
+            return Vec::new();
+        };
+        let mut found: Vec<RelationRef<'_>> = self
+            .graph
+            .edges_connecting(na, nb)
+            .filter_map(|edge| self.relation_ref(edge))
+            .collect();
+        if na != nb {
+            found.extend(
+                self.graph
+                    .edges_connecting(nb, na)
+                    .filter_map(|edge| self.relation_ref(edge)),
+            );
+        }
+        found
     }
 }
 
@@ -1914,5 +2035,96 @@ mod tests {
                 "Analysis should be sorted by importance descending"
             );
         }
+    }
+
+    #[test]
+    fn test_relationships_of_and_relation_between() {
+        let mut graph = create_test_graph();
+        graph.add_relationship(EntityRelationship {
+            from_entity: "performance".to_string(),
+            to_entity: "rust".to_string(),
+            relation_type: RelationType::LeadsTo,
+            context: "loop back".to_string(),
+        });
+        graph.add_relationship(EntityRelationship {
+            from_entity: "rust".to_string(),
+            to_entity: "rust".to_string(),
+            relation_type: RelationType::RelatedTo,
+            context: "self".to_string(),
+        });
+        assert_eq!(graph.edge_count(), 4);
+
+        let rels = graph.relationships_of("rust");
+        // rust->petgraph, rust->rust (once), performance->rust
+        assert_eq!(rels.len(), 3);
+        assert!(rels.iter().any(|r| r.from == "rust" && r.to == "petgraph"));
+        assert!(
+            rels.iter()
+                .any(|r| r.from == "performance" && r.to == "rust")
+        );
+        assert_eq!(rels.iter().filter(|r| r.from == r.to).count(), 1);
+        assert!(graph.relationships_of("missing").is_empty());
+
+        let between = graph.relation_between("petgraph", "rust");
+        assert_eq!(between.len(), 1);
+        assert_eq!(between[0].from, "rust");
+        assert_eq!(*between[0].relation_type, RelationType::Implements);
+        assert_eq!(between[0].context, "Rust implements petgraph");
+        assert_eq!(
+            between[0].to_relationship().to_entity,
+            "petgraph".to_string()
+        );
+        assert!(graph.relation_between("rust", "performance").len() == 1);
+        assert!(graph.relation_between("rust", "nope").is_empty());
+    }
+
+    #[test]
+    fn test_importance_ordering_is_nan_safe_and_top_k() {
+        let mut graph = SimpleEntityGraph::new();
+        let now = Utc::now();
+        for (i, name) in ["a", "b", "c", "d", "e"].iter().enumerate() {
+            graph.add_or_update_entity(name.to_string(), EntityType::Concept, now, "");
+            graph.entities.get_mut(*name).unwrap().importance_score = i as f32;
+        }
+        graph.entities.get_mut("c").unwrap().importance_score = f32::NAN;
+
+        // Must not panic (release profile is panic = "abort").
+        let analysis = graph.analyze_entity_importance();
+        assert_eq!(analysis.len(), 5);
+
+        let top: Vec<&str> = graph
+            .get_most_important_entities(2)
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        // NaN sorts as the largest value under total_cmp.
+        assert_eq!(top, vec!["c", "e"]);
+
+        let all: Vec<&str> = graph
+            .get_most_important_entities(100)
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        assert_eq!(all, vec!["c", "e", "d", "b", "a"]);
+        assert!(graph.get_most_important_entities(0).is_empty());
+        assert_eq!(graph.get_recently_mentioned_entities(3).len(), 3);
+    }
+
+    #[test]
+    fn test_merge_from_dedupes_mentions() {
+        let mut a = SimpleEntityGraph::new();
+        let mut b = SimpleEntityGraph::new();
+        let now = Utc::now();
+        let shared = uuid::Uuid::new_v4();
+        let only_b = uuid::Uuid::new_v4();
+        a.add_or_update_entity("x".to_string(), EntityType::Concept, now, "");
+        b.add_or_update_entity("x".to_string(), EntityType::Concept, now, "");
+        a.mention_entity("x", shared, now);
+        b.mention_entity("x", shared, now);
+        b.mention_entity("x", only_b, now);
+        b.mention_entity("x", only_b, now);
+
+        a.merge_from(&b);
+        assert_eq!(a.entity_mentions["x"], vec![shared, only_b]);
     }
 }
