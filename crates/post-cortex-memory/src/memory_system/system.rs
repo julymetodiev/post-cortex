@@ -8,7 +8,6 @@ use tokio::sync::OnceCell;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
-use crate::performance::PerformanceMonitor;
 use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_core::workspace::WorkspaceManager;
 use post_cortex_storage::rocksdb_storage::RealRocksDBStorage;
@@ -45,8 +44,6 @@ pub struct ConversationMemorySystem {
     pub vector_storage: Arc<dyn post_cortex_storage::traits::VectorStorage>,
     /// System configuration
     pub config: SystemConfig,
-    /// Performance metrics monitor
-    pub performance_monitor: Arc<PerformanceMonitor>,
     /// Circuit breaker for fault tolerance
     pub circuit_breaker: Arc<CircuitBreaker>,
     /// Global system metrics
@@ -141,16 +138,10 @@ impl ConversationMemorySystem {
         vector_storage: Arc<dyn post_cortex_storage::traits::VectorStorage>,
         config: SystemConfig,
     ) -> Result<Self, String> {
-        let performance_monitor = Arc::new(PerformanceMonitor::new(None));
-
         // Create storage actor with trait object
-        let storage_actor = StorageActor::spawn(storage, Arc::clone(&performance_monitor)).await?;
+        let storage_actor = StorageActor::spawn(storage).await?;
 
-        let session_manager = SessionManager::new(
-            config.cache_capacity,
-            storage_actor.clone(),
-            Arc::clone(&performance_monitor),
-        )?;
+        let session_manager = SessionManager::new(config.cache_capacity, storage_actor.clone())?;
 
         let context_processor = IncrementalContextProcessor {
             contexts_processed: Arc::new(AtomicU64::new(0)),
@@ -268,7 +259,6 @@ impl ConversationMemorySystem {
             storage_actor,
             vector_storage,
             config,
-            performance_monitor,
             circuit_breaker,
             system_metrics,
             #[cfg(feature = "embeddings")]
@@ -286,7 +276,6 @@ impl ConversationMemorySystem {
         name: Option<String>,
         description: Option<String>,
     ) -> Result<Uuid, String> {
-        let _timer = self.performance_monitor.start_timer("create_session");
         self.system_metrics
             .total_requests
             .fetch_add(1, Ordering::Relaxed);
@@ -351,8 +340,6 @@ impl ConversationMemorySystem {
         &self,
         session_id: Uuid,
     ) -> Result<Arc<ArcSwap<ActiveSession>>, String> {
-        let _timer = self.performance_monitor.start_timer("get_session");
-
         if let Some(session_arc) = self.session_manager.sessions.get(&session_id) {
             // Update access time
             let now = SystemTime::now()
@@ -527,8 +514,6 @@ impl ConversationMemorySystem {
 
     /// List all sessions
     pub async fn list_sessions(&self) -> Result<Vec<Uuid>, String> {
-        let _timer = self.performance_monitor.start_timer("list_sessions");
-
         // Get sessions from storage via actor
         match self.storage_actor.list_sessions().await {
             Ok(session_ids) => {
@@ -649,9 +634,6 @@ impl ConversationMemorySystem {
         metadata: Option<serde_json::Value>,
     ) -> Result<String, String> {
         debug!("add_incremental_update START for session {}", session_id);
-        let _timer = self
-            .performance_monitor
-            .start_timer("add_incremental_update");
         self.system_metrics
             .total_requests
             .fetch_add(1, Ordering::Relaxed);
@@ -881,9 +863,6 @@ impl ConversationMemorySystem {
 
     /// Get conversation context
     pub async fn get_conversation_context(&self, session_id: Uuid) -> Result<String, String> {
-        let _timer = self
-            .performance_monitor
-            .start_timer("get_conversation_context");
         self.system_metrics
             .total_requests
             .fetch_add(1, Ordering::Relaxed);
@@ -958,7 +937,6 @@ impl ConversationMemorySystem {
 
     /// Get system health - all atomic reads
     pub fn get_system_health(&self) -> SystemHealth {
-        let _perf_snapshot = self.performance_monitor.get_snapshot();
         let cache_stats = self.session_manager.sessions.get_stats();
         let circuit_breaker_stats = self.circuit_breaker.get_stats();
 
@@ -1000,9 +978,6 @@ impl ConversationMemorySystem {
     /// Cleanup expired sessions - background task
     /// Also enforces memory limits on active_sessions DashMap
     pub async fn cleanup_expired_sessions(&self) {
-        let _timer = self
-            .performance_monitor
-            .start_timer("cleanup_expired_sessions");
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("System time before UNIX epoch")

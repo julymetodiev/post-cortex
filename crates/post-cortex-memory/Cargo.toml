@@ -43,10 +43,8 @@ regex.workspace = true
 
 # Lock-free concurrency
 dashmap.workspace = true
-crossbeam-channel.workspace = true
 crossbeam-queue.workspace = true
 arc-swap.workspace = true
-atomic_float.workspace = true
 parking_lot.workspace = true
 rayon.workspace = true
 num_cpus.workspace = true

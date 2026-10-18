@@ -35,8 +35,6 @@ pub mod error;
 /// JSONPath subset parser and executor for the `select` parameter.
 pub mod jsonpath;
 pub mod memory_system;
-/// Runtime performance monitoring: operation timers, cache trackers, and health snapshots.
-pub mod performance;
 pub mod pipeline;
 pub mod query_cache;
 pub mod scoring;
