@@ -895,6 +895,74 @@ mod tests {
         assert_eq!(imported.format_version, EXPORT_FORMAT_VERSION);
     }
 
+    /// Sessions store their updates as rows, not in the blob; an export
+    /// must still carry every update, and an import must restore them.
+    #[tokio::test]
+    async fn test_export_import_keeps_row_backed_updates() {
+        use post_cortex_core::core::context_update::{UpdateContent, UpdateType};
+
+        let temp_dir = tempdir().unwrap();
+        let source = RealRocksDBStorage::new(temp_dir.path().join("src"))
+            .await
+            .unwrap();
+
+        let updates: Vec<ContextUpdate> = (0..3)
+            .map(|i| ContextUpdate {
+                id: Uuid::new_v4(),
+                timestamp: chrono::Utc::now(),
+                update_type: UpdateType::DecisionMade,
+                content: UpdateContent {
+                    title: format!("decision {i}"),
+                    description: String::new(),
+                    details: vec![],
+                    examples: vec![],
+                    implications: vec![],
+                },
+                related_code: None,
+                parent_update: None,
+                user_marked_important: false,
+                creates_entities: vec![],
+                creates_relationships: vec![],
+                references_entities: vec![],
+                typed_entities: vec![],
+            })
+            .collect();
+        let mut session = ActiveSession::new(Uuid::new_v4(), Some("s".into()), None);
+        session.set_incremental_updates(updates.clone());
+        source.save_session(&session).await.unwrap();
+
+        let export = source.export_full(&ExportOptions::default()).await.unwrap();
+        let exported = &export.sessions[0];
+        assert_eq!(exported.session.incremental_updates.len(), 3);
+        assert_eq!(exported.updates.len(), 3);
+
+        let path = temp_dir.path().join("export.json");
+        write_export_file(&export, &path, &ExportOptions::default()).unwrap();
+        let data = read_export_file(&path).unwrap();
+        assert_eq!(data.sessions[0].session.incremental_updates.len(), 3);
+
+        let target = RealRocksDBStorage::new(temp_dir.path().join("dst"))
+            .await
+            .unwrap();
+        let result = target
+            .import_data(data, &ImportOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(result.sessions_imported, 1);
+
+        let restored = target.load_session(session.id()).await.unwrap();
+        let ids: Vec<Uuid> = restored.incremental_updates.iter().map(|u| u.id).collect();
+        assert_eq!(ids, updates.iter().map(|u| u.id).collect::<Vec<_>>());
+        assert_eq!(
+            target
+                .load_session_updates(session.id())
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+
     #[tokio::test]
     async fn test_compressed_export() {
         let temp_dir = tempdir().expect("Failed to create temp directory");

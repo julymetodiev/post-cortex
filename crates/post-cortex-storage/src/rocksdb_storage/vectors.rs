@@ -289,7 +289,7 @@ impl RealRocksDBStorage {
 fn session_of_key(key: &str) -> &[u8] {
     let rest = &key[EMBEDDING_PREFIX.len()..];
     let end = rest.find(':').unwrap_or(rest.len());
-    rest[..end].as_bytes()
+    &rest.as_bytes()[..end]
 }
 
 #[async_trait]

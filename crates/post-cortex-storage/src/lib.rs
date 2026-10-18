@@ -38,7 +38,7 @@ pub mod export_import;
 pub mod rocksdb_storage;
 pub mod traits;
 
-pub use error::{Error as StorageError, Result as StorageResult};
+pub use error::{Error as StorageError, Result as StorageResult, is_not_found};
 
 #[cfg(feature = "surrealdb-storage")]
 pub mod surrealdb_storage;
@@ -50,7 +50,8 @@ pub use export_import::{
 };
 pub use rocksdb_storage::{RealRocksDBStorage, SessionCheckpoint};
 pub use traits::{
-    GraphStorage, Storage, StorageBackend, StorageBackendType, StorageConfig, VectorStorage,
+    GraphStorage, SessionSummary, Storage, StorageBackend, StorageBackendType, StorageConfig,
+    VectorStorage,
 };
 
 #[cfg(feature = "surrealdb-storage")]

@@ -29,6 +29,8 @@ mod vectors;
 mod workspaces;
 
 #[cfg(test)]
+mod session_tests;
+#[cfg(test)]
 mod tests;
 
 pub use types::{
