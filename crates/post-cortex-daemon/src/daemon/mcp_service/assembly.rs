@@ -1,12 +1,12 @@
 // Copyright (c) 2025, 2026 Julius ML
 // MIT License
 
-//! Tool 7: assemble_context — graph-aware retrieval blending semantic search,
-//! entity-graph traversal and impact analysis.
+//! Tool 7: assemble_context — graph-aware retrieval: query-term matching over
+//! recent updates, entity-graph traversal and impact analysis.
 
+use crate::daemon::assembly_scope;
 use crate::daemon::coerce::{CoercionError, coerce_and_validate};
 use crate::daemon::validate::validate_session_id;
-use post_cortex_core::graph::entity_graph::SimpleEntityGraph;
 use post_cortex_mcp::MCPToolResult;
 use post_cortex_memory::ConversationMemorySystem;
 use post_cortex_memory::context_assembly;
@@ -80,18 +80,18 @@ pub(super) async fn handle(
             })?;
 
         let mut all_updates = Vec::new();
-        let mut merged_graph = SimpleEntityGraph::new();
+        let mut graphs = Vec::new();
 
         for (ws_session_id, _role) in workspace.get_all_sessions() {
             if let Ok(session_arc) = memory_system.get_session(ws_session_id).await {
                 let session = session_arc.load();
-                all_updates.extend(session.hot_context.iter().iter().cloned());
-                all_updates.extend(session.warm_context.iter().map(|c| c.update.clone()));
-                merged_graph.merge_from(&session.entity_graph);
+                assembly_scope::session_updates(&session, &mut all_updates);
+                graphs.push((ws_session_id, Arc::clone(&session.entity_graph)));
             }
         }
 
-        (all_updates, merged_graph)
+        let merged = assembly_scope::WORKSPACE_GRAPHS.merged(ws_uuid, graphs);
+        (all_updates, merged)
     } else {
         let sid_raw = req.session_id.as_ref().unwrap();
         let session_id = validate_session_id(sid_raw).map_err(|e| e.to_mcp_error())?;
@@ -101,14 +101,9 @@ pub(super) async fn handle(
             .await
             .map_err(|e| McpError::internal_error(format!("Session not found: {}", e), None))?;
         let session = session_arc.load();
-        let updates: Vec<_> = session
-            .hot_context
-            .iter()
-            .iter()
-            .chain(session.warm_context.iter().map(|c| &c.update))
-            .cloned()
-            .collect();
-        (updates, (*session.entity_graph).clone())
+        let mut updates = Vec::new();
+        assembly_scope::session_updates(&session, &mut updates);
+        (updates, Arc::clone(&session.entity_graph))
     };
 
     let assembled = context_assembly::assemble_context(&req.query, &graph, &updates, token_budget);

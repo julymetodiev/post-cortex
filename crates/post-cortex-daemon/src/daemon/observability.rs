@@ -89,8 +89,7 @@ impl<S: tracing::Subscriber> Filter<S> for RmcpResumeNoiseFilter {
         let msg = capture.0;
         // Suppress only the specific resume-session + channel-closed combo.
         // Every other rmcp transport error stays visible.
-        let noisy =
-            msg.contains("resume session") && msg.contains("Channel closed");
+        let noisy = msg.contains("resume session") && msg.contains("Channel closed");
         !noisy
     }
 }

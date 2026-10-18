@@ -165,14 +165,16 @@ pub(super) async fn handle(
             // "no filter" and falls back to a global search. For workspace scope
             // that's wrong — an empty workspace must return zero results.
             if session_ids.is_empty() {
-                return Ok(mcp_result_to_call_result(apply_select(MCPToolResult::success(
-                    format!("Found 0 results (workspace {} has no sessions)", ws_uuid),
-                    Some(serde_json::json!({
-                        "results": [],
-                        "workspace_id": ws_uuid.to_string(),
-                        "note": "workspace has no sessions",
-                    })),
-                ))?));
+                return Ok(mcp_result_to_call_result(apply_select(
+                    MCPToolResult::success(
+                        format!("Found 0 results (workspace {} has no sessions)", ws_uuid),
+                        Some(serde_json::json!({
+                            "results": [],
+                            "workspace_id": ws_uuid.to_string(),
+                            "note": "workspace has no sessions",
+                        })),
+                    ),
+                )?));
             }
 
             let date_range = parse_date_range(req.date_from.clone(), req.date_to.clone())?;

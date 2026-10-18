@@ -133,7 +133,7 @@ pub(super) async fn handle_update_context(
     _server: &Arc<DaemonServer>,
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    use post_cortex_core::core::context_update::CodeReference;
+    use crate::daemon::validate::validate_code_reference;
     use post_cortex_mcp::{EntityItem, RelationItem, update_conversation_context};
 
     let interaction_type = arguments["interaction_type"]
@@ -164,9 +164,8 @@ pub(super) async fn handle_update_context(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
-    let code_reference: Option<CodeReference> = arguments
-        .get("code_reference")
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    let code_reference = validate_code_reference(arguments.get("code_reference"), "code_reference")
+        .map_err(|e| e.to_string())?;
 
     let session_id = parse_uuid_arg(arguments, "session_id")?;
 

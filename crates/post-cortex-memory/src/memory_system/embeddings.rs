@@ -254,8 +254,6 @@ impl ConversationMemorySystem {
     /// Vectorize a session's content (requires embeddings feature)
     #[cfg(feature = "embeddings")]
     pub async fn vectorize_session(&self, session_id: Uuid) -> Result<usize, String> {
-        let _timer = self.performance_monitor.start_timer("vectorize_session");
-
         // Lazy-initialize vectorizer if needed
         let vectorizer = self.ensure_vectorizer_initialized().await?;
 
@@ -501,10 +499,6 @@ impl ConversationMemorySystem {
         date_range: Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
         recency_bias: Option<f32>,
     ) -> Result<Vec<crate::content_vectorizer::SemanticSearchResult>, String> {
-        let _timer = self
-            .performance_monitor
-            .start_timer("semantic_search_global");
-
         // Lazy-initialize vectorizer if needed
         let vectorizer = self.ensure_vectorizer_initialized().await?;
 
@@ -533,10 +527,6 @@ impl ConversationMemorySystem {
         date_range: Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
         recency_bias: Option<f32>,
     ) -> Result<Vec<crate::content_vectorizer::SemanticSearchResult>, String> {
-        let _timer = self
-            .performance_monitor
-            .start_timer("semantic_search_session");
-
         // Lazy-initialize vectorizer if needed
         let vectorizer = self.ensure_vectorizer_initialized().await?;
 
@@ -586,8 +576,6 @@ impl ConversationMemorySystem {
         topic: &str,
         limit: Option<usize>,
     ) -> Result<Vec<crate::content_vectorizer::SemanticSearchResult>, String> {
-        let _timer = self.performance_monitor.start_timer("find_related_content");
-
         // Lazy-initialize vectorizer if needed
         let vectorizer = self.ensure_vectorizer_initialized().await?;
 
@@ -629,10 +617,6 @@ impl ConversationMemorySystem {
         date_range: Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
         recency_bias: Option<f32>,
     ) -> Result<Vec<crate::content_vectorizer::SemanticSearchResult>, String> {
-        let _timer = self
-            .performance_monitor
-            .start_timer("semantic_search_multisession");
-
         // Lazy-initialize vectorizer if needed
         let vectorizer = self.ensure_vectorizer_initialized().await?;
 

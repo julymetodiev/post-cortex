@@ -20,9 +20,11 @@ prost-types.workspace = true
 # types still pay no extra cost — tonic's `prost` feature is the
 # critical one, and the transport modules compile away when unused.
 tonic.workspace = true
+# Runtime codec referenced by the generated clients/servers.
+tonic-prost.workspace = true
 
 [build-dependencies]
-tonic-build.workspace = true
+tonic-prost-build.workspace = true
 
 [lints]
 workspace = true

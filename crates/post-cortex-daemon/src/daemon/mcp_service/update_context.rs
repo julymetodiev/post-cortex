@@ -4,7 +4,9 @@
 //! Tool 2: update_conversation_context — single or bulk updates with dry-run.
 
 use crate::daemon::coerce::{CoercionError, coerce_and_validate};
-use crate::daemon::validate::{validate_interaction_type, validate_session_id};
+use crate::daemon::validate::{
+    validate_code_reference, validate_interaction_type, validate_session_id,
+};
 use post_cortex_memory::ConversationMemorySystem;
 use rmcp::{
     handler::server::wrapper::Parameters,
@@ -49,6 +51,20 @@ pub(super) async fn handle(
 
     // Handle dry_run mode for bulk updates
     if let Some(ref updates) = req.updates {
+        // Malformed code references are rejected up front (they used to be
+        // silently dropped), in both dry-run and real mode.
+        let code_refs = updates
+            .iter()
+            .enumerate()
+            .map(|(i, u)| {
+                validate_code_reference(
+                    u.code_reference.as_ref(),
+                    &format!("updates[{}].code_reference", i),
+                )
+                .map_err(|e| e.to_mcp_error())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
         if req.dry_run.unwrap_or(false) {
             for (i, update) in updates.iter().enumerate() {
                 validate_interaction_type(&update.interaction_type).map_err(|e| {
@@ -87,15 +103,13 @@ pub(super) async fn handle(
 
         let items: Vec<post_cortex_mcp::ContextUpdateItem> = updates
             .iter()
-            .map(|u| post_cortex_mcp::ContextUpdateItem {
+            .zip(code_refs)
+            .map(|(u, code_reference)| post_cortex_mcp::ContextUpdateItem {
                 interaction_type: u.interaction_type.clone(),
                 content: u.content.clone(),
                 entities: u.entities.clone(),
                 relations: u.relations.clone(),
-                code_reference: u
-                    .code_reference
-                    .as_ref()
-                    .and_then(|v| serde_json::from_value(v.clone()).ok()),
+                code_reference,
             })
             .collect();
 
@@ -132,10 +146,8 @@ pub(super) async fn handle(
                 .to_mcp_error()
             })?;
 
-        let code_ref = req
-            .code_reference
-            .as_ref()
-            .and_then(|v| serde_json::from_value(v.clone()).ok());
+        let code_ref = validate_code_reference(req.code_reference.as_ref(), "code_reference")
+            .map_err(|e| e.to_mcp_error())?;
 
         // Handle dry_run mode for single updates
         if req.dry_run.unwrap_or(false) {

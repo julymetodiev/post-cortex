@@ -160,7 +160,7 @@ pub(super) async fn handle(
                     if let Some(data) = result.data {
                         contents.push(Content::text(format!(
                             "\n\nResults:\n{}",
-                            serde_json::to_string_pretty(&data).unwrap_or_default()
+                            serde_json::to_string(&data).unwrap_or_default()
                         )));
                     }
                     Ok(CallToolResult::success(contents))

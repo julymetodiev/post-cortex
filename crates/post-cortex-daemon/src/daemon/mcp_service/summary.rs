@@ -97,7 +97,7 @@ pub(super) async fn handle(
                 if let Some(data) = result.data {
                     result_parts.push(format!(
                         "\n\nStructured Data:\n{}",
-                        serde_json::to_string_pretty(&data).unwrap_or_default()
+                        serde_json::to_string(&data).unwrap_or_default()
                     ));
                 }
             }

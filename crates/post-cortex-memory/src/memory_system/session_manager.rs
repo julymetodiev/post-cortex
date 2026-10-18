@@ -7,7 +7,6 @@ use dashmap::DashMap;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use crate::performance::PerformanceMonitor;
 use post_cortex_core::core::cache::SessionCache;
 use post_cortex_core::session::active_session::ActiveSession;
 
@@ -21,9 +20,6 @@ pub struct SessionManager {
 
     /// Storage communication
     storage_actor: StorageActorHandle,
-
-    /// Performance monitoring
-    performance_monitor: Arc<PerformanceMonitor>,
 
     /// Total number of sessions created
     pub session_count: Arc<AtomicUsize>,
@@ -39,17 +35,12 @@ pub struct SessionManager {
 
 impl SessionManager {
     /// Construct a new session manager wired to the given storage actor.
-    pub fn new(
-        cache_capacity: usize,
-        storage_actor: StorageActorHandle,
-        performance_monitor: Arc<PerformanceMonitor>,
-    ) -> Result<Self, String> {
+    pub fn new(cache_capacity: usize, storage_actor: StorageActorHandle) -> Result<Self, String> {
         let sessions = SessionCache::new(cache_capacity, "session_cache".to_string())
             .map_err(|e| format!("Failed to create session cache: {e}"))?;
         Ok(Self {
             sessions,
             storage_actor,
-            performance_monitor,
             session_count: Arc::new(AtomicUsize::new(0)),
             total_session_operations: Arc::new(AtomicU64::new(0)),
             session_cache_hits: Arc::new(AtomicU64::new(0)),
@@ -63,9 +54,6 @@ impl SessionManager {
         &self,
         session_id: Uuid,
     ) -> Result<Arc<ArcSwap<ActiveSession>>, String> {
-        let _timer = self
-            .performance_monitor
-            .start_timer("get_or_create_session");
         self.total_session_operations
             .fetch_add(1, Ordering::Relaxed);
 

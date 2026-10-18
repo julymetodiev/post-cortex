@@ -126,9 +126,7 @@ pub fn parse(input: &str) -> Result<JsonPath, ParseError> {
                         message: "expected field name after '.'".into(),
                     });
                 }
-                let field_name = std::str::from_utf8(&bytes[start..pos])
-                    .unwrap()
-                    .to_string();
+                let field_name = std::str::from_utf8(&bytes[start..pos]).unwrap().to_string();
                 // Check for forbidden function call: field followed by '('
                 if pos < len && bytes[pos] == b'(' {
                     return Err(ParseError {
@@ -225,10 +223,7 @@ fn expect_byte(
     } else {
         Err(ParseError {
             byte_offset: *pos,
-            message: format!(
-                "expected '{}' after '{}'",
-                expected as char, context
-            ),
+            message: format!("expected '{}' after '{}'", expected as char, context),
         })
     }
 }
@@ -257,16 +252,12 @@ fn parse_bracket_content(offset: usize, content: &str) -> Result<PathSegment, Pa
         let start = if parts[0].trim().is_empty() {
             None
         } else {
-            Some(
-                parse_int(offset, parts[0].trim())?,
-            )
+            Some(parse_int(offset, parts[0].trim())?)
         };
         let end = if parts[1].trim().is_empty() {
             None
         } else {
-            Some(
-                parse_int(offset, parts[1].trim())?,
-            )
+            Some(parse_int(offset, parts[1].trim())?)
         };
         return Ok(PathSegment::Slice { start, end });
     }
@@ -302,7 +293,8 @@ fn parse_int(offset: usize, s: &str) -> Result<isize, ParseError> {
 ///
 /// Returns the matched value. If nothing matches, returns `Value::Null`.
 pub fn execute(path: &JsonPath, root: &Value) -> Value {
-    let mut current = vec![root.clone()];
+    // Walk by reference; only the final matches are cloned.
+    let mut current: Vec<&Value> = vec![root];
 
     for segment in &path.segments {
         let mut next = Vec::new();
@@ -310,23 +302,25 @@ pub fn execute(path: &JsonPath, root: &Value) -> Value {
             match segment {
                 PathSegment::Field(name) => {
                     if let Some(child) = val.get(name) {
-                        next.push(child.clone());
+                        next.push(child);
                     }
                 }
                 PathSegment::Index(idx) => {
-                    if let Some(v) = index_value(&val, *idx) {
+                    if let Some(v) = index_value(val, *idx) {
                         next.push(v);
                     }
                 }
                 PathSegment::Slice { start, end } => {
-                    next.extend(slice_value(&val, *start, *end));
+                    next.extend(slice_value(val, *start, *end));
                 }
-                PathSegment::Wildcard => {
-                    next.extend(wildcard_value(&val));
-                }
+                PathSegment::Wildcard => match val {
+                    Value::Array(arr) => next.extend(arr),
+                    Value::Object(map) => next.extend(map.values()),
+                    _ => {}
+                },
                 PathSegment::Union(indices) => {
                     for &idx in indices {
-                        if let Some(v) = index_value(&val, idx) {
+                        if let Some(v) = index_value(val, idx) {
                             next.push(v);
                         }
                     }
@@ -336,10 +330,10 @@ pub fn execute(path: &JsonPath, root: &Value) -> Value {
         current = next;
     }
 
-    match current.len() {
-        0 => Value::Null,
-        1 => current.into_iter().next().unwrap(),
-        _ => Value::Array(current),
+    match current.as_slice() {
+        [] => Value::Null,
+        [single] => (*single).clone(),
+        many => Value::Array(many.iter().map(|v| (*v).clone()).collect()),
     }
 }
 
@@ -375,15 +369,15 @@ pub fn apply_select(
 // Executor helpers
 // ---------------------------------------------------------------------------
 
-fn index_value(val: &Value, idx: isize) -> Option<Value> {
+fn index_value(val: &Value, idx: isize) -> Option<&Value> {
     match val {
         Value::Array(arr) => {
             if idx >= 0 {
-                arr.get(idx as usize).cloned()
+                arr.get(idx as usize)
             } else {
-                let from_end = (-idx) as usize;
+                let from_end = idx.unsigned_abs();
                 if from_end <= arr.len() {
-                    arr.get(arr.len() - from_end).cloned()
+                    arr.get(arr.len() - from_end)
                 } else {
                     None
                 }
@@ -393,7 +387,7 @@ fn index_value(val: &Value, idx: isize) -> Option<Value> {
     }
 }
 
-fn slice_value(val: &Value, start: Option<isize>, end: Option<isize>) -> Vec<Value> {
+fn slice_value(val: &Value, start: Option<isize>, end: Option<isize>) -> &[Value] {
     match val {
         Value::Array(arr) => {
             let len = arr.len() as isize;
@@ -401,21 +395,9 @@ fn slice_value(val: &Value, start: Option<isize>, end: Option<isize>) -> Vec<Val
             let s = if s < 0 { (len + s).max(0) } else { s } as usize;
             let e = end.unwrap_or(len);
             let e = if e < 0 { (len + e).max(0) } else { e.min(len) } as usize;
-            if s >= e {
-                Vec::new()
-            } else {
-                arr[s..e].to_vec()
-            }
+            if s >= e { &[] } else { &arr[s..e] }
         }
-        _ => Vec::new(),
-    }
-}
-
-fn wildcard_value(val: &Value) -> Vec<Value> {
-    match val {
-        Value::Array(arr) => arr.clone(),
-        Value::Object(map) => map.values().cloned().collect(),
-        _ => Vec::new(),
+        _ => &[],
     }
 }
 
@@ -439,7 +421,10 @@ mod tests {
     #[test]
     fn parse_field() {
         let p = parse("$.formatted_text").unwrap();
-        assert_eq!(p.segments, vec![PathSegment::Field("formatted_text".into())]);
+        assert_eq!(
+            p.segments,
+            vec![PathSegment::Field("formatted_text".into())]
+        );
     }
 
     #[test]
@@ -676,9 +661,8 @@ mod tests {
     #[test]
     fn select_map_empty_match_gives_null() {
         let resp = sample_response();
-        let map = std::collections::HashMap::from([
-            ("missing".into(), "$.nonexistent_field".into()),
-        ]);
+        let map =
+            std::collections::HashMap::from([("missing".into(), "$.nonexistent_field".into())]);
         let v = apply_select(&resp, None, Some(&map)).unwrap();
         assert_eq!(v["missing"], Value::Null);
     }

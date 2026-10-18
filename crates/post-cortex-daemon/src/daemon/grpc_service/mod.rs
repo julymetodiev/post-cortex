@@ -725,8 +725,7 @@ impl PostCortex for PcxGrpcService {
         {
             match self.memory.get_vectorization_stats() {
                 Ok(stats) => {
-                    let text =
-                        serde_json::to_string_pretty(&stats).unwrap_or_else(|_| "{}".to_string());
+                    let text = serde_json::to_string(&stats).unwrap_or_else(|_| "{}".to_string());
                     Ok(Response::new(TextResponse { text }))
                 }
                 Err(e) => {
@@ -783,8 +782,7 @@ impl PostCortex for PcxGrpcService {
         };
 
         let summary = SummaryGenerator::generate_structured_summary_filtered(&session, &options);
-        let text =
-            serde_json::to_string_pretty(&summary).unwrap_or_else(|_| format!("{summary:?}"));
+        let text = serde_json::to_string(&summary).unwrap_or_else(|_| format!("{summary:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -806,8 +804,7 @@ impl PostCortex for PcxGrpcService {
 
         use post_cortex_core::summary::SummaryGenerator;
         let decisions = SummaryGenerator::extract_decision_timeline(&session);
-        let text =
-            serde_json::to_string_pretty(&decisions).unwrap_or_else(|_| format!("{decisions:?}"));
+        let text = serde_json::to_string(&decisions).unwrap_or_else(|_| format!("{decisions:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -832,8 +829,7 @@ impl PostCortex for PcxGrpcService {
             &session,
             req.limit.map(|v| v as usize).unwrap_or(5),
         );
-        let text =
-            serde_json::to_string_pretty(&insights).unwrap_or_else(|_| format!("{insights:?}"));
+        let text = serde_json::to_string(&insights).unwrap_or_else(|_| format!("{insights:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -860,8 +856,7 @@ impl PostCortex for PcxGrpcService {
         if let Some(limit) = req.limit {
             analysis.truncate(limit as usize);
         }
-        let text =
-            serde_json::to_string_pretty(&analysis).unwrap_or_else(|_| format!("{analysis:?}"));
+        let text = serde_json::to_string(&analysis).unwrap_or_else(|_| format!("{analysis:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -892,8 +887,7 @@ impl PostCortex for PcxGrpcService {
                 }
             }
         };
-        let text =
-            serde_json::to_string_pretty(&network).unwrap_or_else(|_| format!("{network:?}"));
+        let text = serde_json::to_string(&network).unwrap_or_else(|_| format!("{network:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -915,7 +909,7 @@ impl PostCortex for PcxGrpcService {
 
         use post_cortex_core::summary::SummaryGenerator;
         let stats = SummaryGenerator::calculate_session_stats(&session);
-        let text = serde_json::to_string_pretty(&stats).unwrap_or_else(|_| format!("{stats:?}"));
+        let text = serde_json::to_string(&stats).unwrap_or_else(|_| format!("{stats:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -938,7 +932,7 @@ impl PostCortex for PcxGrpcService {
             req.token_budget as usize
         };
 
-        use post_cortex_core::graph::entity_graph::SimpleEntityGraph;
+        use crate::daemon::assembly_scope;
         use post_cortex_memory::context_assembly;
 
         // Resolve scope: workspace_id takes precedence over session_id
@@ -957,15 +951,14 @@ impl PostCortex for PcxGrpcService {
                 .ok_or_else(|| Status::not_found(format!("Workspace {workspace_id} not found")))?;
 
             let mut all_updates = Vec::new();
-            let mut merged_graph = SimpleEntityGraph::new();
+            let mut graphs = Vec::new();
 
             for (ws_session_id, _role) in workspace.get_all_sessions() {
                 match self.memory.get_session(ws_session_id).await {
                     Ok(session_arc) => {
                         let session = session_arc.load();
-                        all_updates.extend(session.hot_context.iter().iter().cloned());
-                        all_updates.extend(session.warm_context.iter().map(|c| c.update.clone()));
-                        merged_graph.merge_from(&session.entity_graph);
+                        assembly_scope::session_updates(&session, &mut all_updates);
+                        graphs.push((ws_session_id, Arc::clone(&session.entity_graph)));
                     }
                     Err(e) => {
                         warn!(
@@ -976,9 +969,10 @@ impl PostCortex for PcxGrpcService {
                 }
             }
 
-            (all_updates, merged_graph)
+            let merged = assembly_scope::WORKSPACE_GRAPHS.merged(workspace_id, graphs);
+            (all_updates, merged)
         } else {
-            // Single-session (existing behaviour)
+            // Single-session: borrow the session's graph instead of cloning it
             let session_id = parse_uuid(&req.session_id)?;
             let session_arc = self
                 .memory
@@ -986,14 +980,9 @@ impl PostCortex for PcxGrpcService {
                 .await
                 .map_err(Status::not_found)?;
             let session = session_arc.load();
-            let updates: Vec<_> = session
-                .hot_context
-                .iter()
-                .iter()
-                .chain(session.warm_context.iter().map(|c| &c.update))
-                .cloned()
-                .collect();
-            (updates, (*session.entity_graph).clone())
+            let mut updates = Vec::new();
+            assembly_scope::session_updates(&session, &mut updates);
+            (updates, Arc::clone(&session.entity_graph))
         };
 
         let assembled =

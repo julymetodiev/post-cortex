@@ -205,7 +205,7 @@ pub enum ContextQuery {
         time_window_days: i64,
     },
 
-    /// Graph-aware retrieval combining semantic search and traversal.
+    /// Graph-aware retrieval: query entity matching plus graph traversal.
     AssembleContext {
         /// Natural-language query for relevance scoring.
         query: String,
@@ -239,14 +239,14 @@ pub enum ContextResponse {
     AllEntities(Vec<String>),
     /// Entity names discovered by relationship traversal.
     EntityRelationships(Vec<String>),
-    /// Serialized entity network graph.
-    EntityNetwork(String),
+    /// Entity network around a center entity.
+    EntityNetwork(post_cortex_core::graph::entity_graph::EntityNetwork),
     /// Serialized shortest path between two entities.
     ConnectionPath(String),
     /// Generic list of entity names.
     Entities(Vec<String>),
-    /// Human-readable entity importance analysis.
-    ImportanceAnalysis(String),
+    /// Per-entity importance analysis.
+    ImportanceAnalysis(Vec<post_cortex_core::graph::entity_graph::EntityAnalysis>),
     /// Serialized entity hierarchy tree.
     EntityHierarchy(String),
     /// Serialized entity cluster data.
@@ -347,8 +347,9 @@ pub async fn get_memory_system() -> Result<Arc<ConversationMemorySystem>> {
 
     #[cfg(feature = "embeddings")]
     {
+        // Model + dimension inherit `SystemConfig::default()` (model2vec),
+        // matching the daemon; BERT models need the opt-in `bert` feature.
         config.enable_embeddings = true;
-        config.embeddings_model_type = "MultilingualMiniLM".to_string();
         config.auto_vectorize_on_update = true;
         config.cross_session_search_enabled = true;
         info!("MCP-TOOLS: Embeddings enabled in config");

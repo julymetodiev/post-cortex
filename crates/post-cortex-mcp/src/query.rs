@@ -3,10 +3,12 @@
 use crate::{ContextQuery, ContextResponse, MCPToolResult, get_memory_system, parse_datetime};
 use anyhow::Result;
 use post_cortex_core::core::context_update::EntityType;
-use post_cortex_core::core::context_update::UpdateType;
+use post_cortex_core::core::context_update::{ContextUpdate, UpdateType};
+use post_cortex_core::core::structured_context::QuestionStatus;
 use post_cortex_core::core::timeout_utils::with_mcp_timeout;
 use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_memory::ConversationMemorySystem;
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use tracing::{debug, error};
 use uuid::Uuid;
@@ -295,6 +297,14 @@ pub async fn query_conversation_context(
     ))
 }
 
+/// Every update in the session, oldest first. `incremental_updates` is the
+/// complete log; the hot (last ~50) and warm tiers are subsets of it.
+fn all_updates(session: &ActiveSession) -> impl Iterator<Item = &ContextUpdate> {
+    // `Borrow` keeps this working whether the log stores `ContextUpdate` or
+    // `Arc<ContextUpdate>`.
+    session.incremental_updates.iter().map(Borrow::borrow)
+}
+
 /// Dispatch a [`ContextQuery`] against a loaded session and return a [`ContextResponse`].
 pub(crate) async fn query_context(
     session: &ActiveSession,
@@ -304,15 +314,10 @@ pub(crate) async fn query_context(
 
     match query {
         ContextQuery::GetRecentChanges { since } => {
-            let recent_updates: Vec<post_cortex_core::core::context_update::ContextUpdate> =
-                session
-                    .hot_context
-                    .iter()
-                    .iter()
-                    .chain(session.warm_context.iter().map(|c| &c.update))
-                    .filter(|u| u.timestamp >= since)
-                    .cloned()
-                    .collect();
+            let recent_updates: Vec<ContextUpdate> = all_updates(session)
+                .filter(|u| u.timestamp >= since)
+                .cloned()
+                .collect();
             Ok(ContextResponse::RecentChanges(recent_updates))
         }
         ContextQuery::FindCodeReferences { file_path } => {
@@ -380,10 +385,10 @@ pub(crate) async fn query_context(
             center_entity,
             max_depth,
         } => {
-            let _network = session
+            let network = session
                 .entity_graph
                 .get_entity_network(&center_entity, max_depth);
-            Ok(ContextResponse::EntityNetwork("Network data".to_string()))
+            Ok(ContextResponse::EntityNetwork(network))
         }
         ContextQuery::GetMostImportantEntities { limit } => {
             let entities = session.entity_graph.get_most_important_entities(limit);
@@ -398,10 +403,8 @@ pub(crate) async fn query_context(
             ))
         }
         ContextQuery::AnalyzeEntityImportance => {
-            let _analysis = session.entity_graph.analyze_entity_importance();
-            Ok(ContextResponse::ImportanceAnalysis(
-                "Analysis complete".to_string(),
-            ))
+            let analysis = session.entity_graph.analyze_entity_importance();
+            Ok(ContextResponse::ImportanceAnalysis(analysis))
         }
         ContextQuery::FindEntitiesByType { entity_type } => {
             let entities = session.entity_graph.get_entities_by_type(&entity_type);
@@ -410,44 +413,45 @@ pub(crate) async fn query_context(
             ))
         }
         ContextQuery::SearchUpdates { query } => {
-            let update_results: Vec<post_cortex_core::core::context_update::ContextUpdate> =
-                session
-                    .hot_context
-                    .iter()
-                    .iter()
-                    .chain(session.warm_context.iter().map(|c| &c.update))
-                    .filter(|u| {
-                        u.content
-                            .title
-                            .to_lowercase()
-                            .contains(&query.to_lowercase())
-                            || u.content
-                                .description
-                                .to_lowercase()
-                                .contains(&query.to_lowercase())
-                    })
-                    .cloned()
-                    .collect();
+            let query = query.to_lowercase();
+            let update_results: Vec<ContextUpdate> = all_updates(session)
+                .filter(|u| {
+                    u.content.title.to_lowercase().contains(&query)
+                        || u.content.description.to_lowercase().contains(&query)
+                })
+                .cloned()
+                .collect();
             Ok(ContextResponse::SearchResults(update_results))
         }
-        ContextQuery::GetDecisions { since: _ } => {
-            let decisions: Vec<post_cortex_core::core::context_update::ContextUpdate> = session
-                .hot_context
-                .iter()
-                .into_iter()
+        ContextQuery::GetDecisions { since } => {
+            let decisions: Vec<ContextUpdate> = all_updates(session)
                 .filter(|u| matches!(u.update_type, UpdateType::DecisionMade))
+                .filter(|u| since.is_none_or(|s| u.timestamp >= s))
+                .cloned()
                 .collect();
             Ok(ContextResponse::Decisions(decisions))
         }
-        ContextQuery::GetOpenQuestions => Ok(ContextResponse::OpenQuestions(vec![
-            "No open questions".to_string(),
-        ])),
-        ContextQuery::GetChangeHistory { file_path: _ } => {
-            let changes: Vec<post_cortex_core::core::context_update::ContextUpdate> = session
-                .hot_context
+        ContextQuery::GetOpenQuestions => {
+            let questions = session
+                .current_state
+                .open_questions
                 .iter()
-                .into_iter()
+                .filter(|q| matches!(q.status, QuestionStatus::Open | QuestionStatus::InProgress))
+                .map(|q| q.question.clone())
+                .collect();
+            Ok(ContextResponse::OpenQuestions(questions))
+        }
+        ContextQuery::GetChangeHistory { file_path } => {
+            let changes: Vec<ContextUpdate> = all_updates(session)
                 .filter(|u| matches!(u.update_type, UpdateType::CodeChanged))
+                .filter(|u| {
+                    file_path.as_deref().is_none_or(|path| {
+                        u.related_code
+                            .as_ref()
+                            .is_some_and(|code| code.file_path == path)
+                    })
+                })
+                .cloned()
                 .collect();
             Ok(ContextResponse::ChangeHistory(changes))
         }
@@ -457,13 +461,10 @@ pub(crate) async fn query_context(
         } => {
             use post_cortex_memory::context_assembly;
 
-            let updates: Vec<_> = session
-                .hot_context
-                .iter()
-                .iter()
-                .chain(session.warm_context.iter().map(|c| &c.update))
-                .cloned()
-                .collect();
+            // `hot_context.iter()` is already an owned snapshot; extend it
+            // with the warm tier instead of cloning it a second time.
+            let mut updates = session.hot_context.iter();
+            updates.extend(session.warm_context.iter().map(|c| c.update.clone()));
 
             let assembled = context_assembly::assemble_context(
                 &query,
@@ -477,5 +478,130 @@ pub(crate) async fn query_context(
         _ => Ok(ContextResponse::Entities(vec![
             "Not implemented".to_string(),
         ])),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use post_cortex_core::core::context_update::{EntityRelationship, RelationType, UpdateContent};
+    use post_cortex_core::core::structured_context::{QuestionItem, StructuredContext};
+    use std::sync::Arc;
+
+    fn update(update_type: UpdateType, title: &str) -> ContextUpdate {
+        ContextUpdate {
+            id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            update_type,
+            content: UpdateContent {
+                title: title.to_string(),
+                description: String::new(),
+                details: vec![],
+                examples: vec![],
+                implications: vec![],
+            },
+            related_code: None,
+            parent_update: None,
+            user_marked_important: false,
+            creates_entities: vec![],
+            creates_relationships: vec![],
+            references_entities: vec![],
+            typed_entities: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn decisions_cover_the_full_log_not_just_hot_context() {
+        let mut session = ActiveSession::new(Uuid::new_v4(), None, None);
+        // More than the 50-entry hot tier.
+        for i in 0..60 {
+            session
+                .add_incremental_update_fast(update(UpdateType::DecisionMade, &format!("d{i}")))
+                .await
+                .unwrap();
+        }
+        session
+            .add_incremental_update_fast(update(UpdateType::CodeChanged, "c"))
+            .await
+            .unwrap();
+
+        match query_context(&session, ContextQuery::GetDecisions { since: None })
+            .await
+            .unwrap()
+        {
+            ContextResponse::Decisions(d) => assert_eq!(d.len(), 60),
+            other => panic!("unexpected response: {other:?}"),
+        }
+        match query_context(&session, ContextQuery::SearchUpdates { query: "D0".into() })
+            .await
+            .unwrap()
+        {
+            // Case-insensitive; "d0" is the oldest update, long out of hot.
+            ContextResponse::SearchResults(r) => assert_eq!(r.len(), 1),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn open_questions_come_from_structured_state() {
+        let mut session = ActiveSession::new(Uuid::new_v4(), None, None);
+        let mut state = StructuredContext::default();
+        state.open_questions = vec![
+            QuestionItem {
+                question: "open?".into(),
+                ..Default::default()
+            },
+            QuestionItem {
+                question: "done".into(),
+                status: QuestionStatus::Answered,
+                ..Default::default()
+            },
+        ];
+        session.current_state = Arc::new(state);
+
+        match query_context(&session, ContextQuery::GetOpenQuestions)
+            .await
+            .unwrap()
+        {
+            ContextResponse::OpenQuestions(q) => assert_eq!(q, vec!["open?".to_string()]),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn network_and_importance_return_real_data() {
+        let mut session = ActiveSession::new(Uuid::new_v4(), None, None);
+        Arc::make_mut(&mut session.entity_graph).add_relationship(EntityRelationship {
+            from_entity: "a".into(),
+            to_entity: "b".into(),
+            relation_type: RelationType::RelatedTo,
+            context: String::new(),
+        });
+
+        match query_context(
+            &session,
+            ContextQuery::GetEntityNetwork {
+                center_entity: "a".into(),
+                max_depth: 2,
+            },
+        )
+        .await
+        .unwrap()
+        {
+            ContextResponse::EntityNetwork(n) => {
+                assert_eq!(n.center, "a");
+                assert!(n.entities.contains_key("b"));
+                assert_eq!(n.relationships.len(), 1);
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+
+        match query_context(&session, ContextQuery::AnalyzeEntityImportance)
+            .await
+            .unwrap()
+        {
+            ContextResponse::ImportanceAnalysis(a) => assert_eq!(a.len(), 2),
+            other => panic!("unexpected response: {other:?}"),
+        }
     }
 }

@@ -8,7 +8,6 @@ use tokio::time::timeout;
 use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
-use crate::performance::PerformanceMonitor;
 use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_proto::pb::{CascadeInvalidateReport, FreshnessEntry, SourceReference, SymbolId};
 
@@ -18,7 +17,6 @@ use super::config::OperationType;
 pub struct StorageActor {
     storage: Arc<dyn post_cortex_storage::traits::GraphStorage>,
     receiver: UnboundedReceiver<StorageMessage>,
-    performance_monitor: Arc<PerformanceMonitor>,
     /// Per-session locks for background persists. Ensures `PersistSessionAndUpdate`
     /// writes for the same session are serialized even though each runs in its
     /// own spawned task, preventing out-of-order session-blob writes.
@@ -660,14 +658,12 @@ impl StorageActor {
     /// Spawn the storage actor on a new tokio task and return a handle for sending messages.
     pub async fn spawn(
         storage: Arc<dyn post_cortex_storage::traits::GraphStorage>,
-        performance_monitor: Arc<PerformanceMonitor>,
     ) -> Result<StorageActorHandle, String> {
         let (sender, receiver) = unbounded_channel();
 
         let actor = Self {
             storage,
             receiver,
-            performance_monitor,
             persist_locks: Arc::new(DashMap::new()),
         };
 
@@ -708,8 +704,6 @@ impl StorageActor {
             "StorageActor: handling message {:?}",
             std::mem::discriminant(&message)
         );
-        let _timer = self.performance_monitor.start_timer("storage_operation");
-
         match message {
             StorageMessage::LoadSession {
                 session_id,

@@ -10,7 +10,7 @@
 //! 4. get_structured_summary        — summary with optional sections
 //! 5. query_conversation_context    — flexible queries
 //! 6. manage_workspace              — workspace operations
-//! 7. assemble_context              — graph-aware retrieval (semantic + traversal + impact)
+//! 7. assemble_context              — graph-aware retrieval (entity match + traversal + impact)
 //! 8. manage_entity                 — delete entities / context updates from a session
 //! 9. admin                         — daemon health, vectorization, checkpoints
 //!
@@ -75,7 +75,7 @@ pub(crate) fn mcp_result_to_call_result(result: MCPToolResult) -> CallToolResult
     if let Some(data) = result.data {
         contents.push(Content::text(format!(
             "\n\nResults:\n{}",
-            serde_json::to_string_pretty(&data).unwrap_or_default()
+            serde_json::to_string(&data).unwrap_or_default()
         )));
     }
     CallToolResult::success(contents)
@@ -226,7 +226,7 @@ impl PostCortexService {
     }
 
     #[tool(
-        description = "Graph-aware context assembly: blends semantic search with entity-graph traversal and impact analysis. Returns ranked items, entity neighbourhood, dependency impact, and an LLM-ready formatted block. Scope: session or workspace.",
+        description = "Graph-aware context assembly (no embeddings): finds graph entities named in the query, expands them one hop through the entity graph, runs impact analysis, and ranks recent session updates by entity matches and recency. For embedding-based similarity use semantic_search. Returns ranked items, entity neighbourhood, dependency impact, and an LLM-ready formatted block. Scope: session or workspace.",
         input_schema = rmcp::handler::server::common::schema_for_type::<AssembleContextRequest>()
     )]
     async fn assemble_context(
