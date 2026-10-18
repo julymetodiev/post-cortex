@@ -594,14 +594,19 @@ impl ConversationMemorySystem {
         Ok(())
     }
 
-    /// Vectorize the latest update for a session **now** (no spawn).
+    /// Vectorize one update of a session **now** (no spawn).
     ///
     /// Equivalent body of [`Self::spawn_background_vectorization`] without
     /// the surrounding `tokio::spawn` — lets the
     /// [`crate::pipeline::EmbeddingQueue`] worker run vectorization from
     /// inside its own task while the write path stays in single-digit ms.
+    /// Takes the update id: the queue may run after later writes landed.
     #[cfg(feature = "embeddings")]
-    pub async fn vectorize_latest_update_now(&self, session_id: Uuid) -> Result<usize, String> {
+    pub async fn vectorize_update_now(
+        &self,
+        session_id: Uuid,
+        update_id: Uuid,
+    ) -> Result<usize, String> {
         if !self.config.enable_embeddings || !self.config.auto_vectorize_on_update {
             return Ok(0);
         }
@@ -610,7 +615,7 @@ impl ConversationMemorySystem {
             Some(arc) => arc,
             None => {
                 debug!(
-                    "vectorize_latest_update_now: session {} not cached, skipping",
+                    "vectorize_update_now: session {} not cached, skipping",
                     session_id
                 );
                 return Ok(0);
@@ -623,7 +628,7 @@ impl ConversationMemorySystem {
             .map_err(|e| format!("vectorizer init: {e}"))?;
 
         let session = session_arc.load();
-        match vectorizer.vectorize_latest_update(&session).await {
+        match vectorizer.vectorize_update(&session, update_id).await {
             Ok(count) if count > 0 => {
                 let _ = vectorizer.invalidate_session_cache(session_id).await;
                 self.storage_actor
@@ -631,7 +636,7 @@ impl ConversationMemorySystem {
                 Ok(count)
             }
             Ok(_) => Ok(0),
-            Err(e) => Err(format!("vectorize_latest_update: {e}")),
+            Err(e) => Err(format!("vectorize_update: {e}")),
         }
     }
 
@@ -822,6 +827,8 @@ impl ConversationMemorySystem {
                 // Background entity graph update (non-blocking, non-critical)
                 let session_arc_bg = Arc::clone(&session_arc);
                 let storage_actor_bg = self.storage_actor.clone();
+                #[cfg(feature = "embeddings")]
+                let vectorize_id = context_update.id;
                 let update_for_graph = context_update;
                 tokio::spawn(async move {
                     let current = session_arc_bg.load();
@@ -848,8 +855,12 @@ impl ConversationMemorySystem {
                 });
 
                 #[cfg(feature = "embeddings")]
-                self.spawn_background_vectorization(session_id, Arc::clone(&session_arc))
-                    .await;
+                self.spawn_background_vectorization(
+                    session_id,
+                    Arc::clone(&session_arc),
+                    vectorize_id,
+                )
+                .await;
 
                 info!(
                     "Added incremental update to session {}: {} chars",

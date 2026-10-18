@@ -61,27 +61,50 @@ impl ContentVectorizer {
     /// Vectorize only the most recent update (incremental vectorization).
     /// Much more efficient than re-vectorizing the entire session.
     pub async fn vectorize_latest_update(&self, session: &ActiveSession) -> Result<usize> {
-        info!(
-            "vectorize_latest_update: session={}, hot_context_len={}",
-            session.id(),
-            session.hot_context.len()
-        );
-
-        let update = match session.hot_context.back() {
-            Some(u) => u,
+        match session.hot_context.back() {
+            Some(update) => self.vectorize_update(session, update.id).await,
             None => {
                 info!(
                     "vectorize_latest_update: no updates in hot_context for session {}",
                     session.id()
                 );
-                return Ok(0);
+                Ok(0)
             }
+        }
+    }
+
+    /// Vectorize one specific update. Background jobs must name the update
+    /// they were queued for: by the time a job runs, later writes may have
+    /// landed, and vectorizing "the latest" then embeds the newer update
+    /// twice and never the one that queued the job.
+    pub async fn vectorize_update(
+        &self,
+        session: &ActiveSession,
+        update_id: Uuid,
+    ) -> Result<usize> {
+        if session.vectorized_update_ids.contains(&update_id) {
+            debug!("vectorize_update: {} already vectorized", update_id);
+            return Ok(0);
+        }
+        let Some(update) = session
+            .hot_context
+            .iter()
+            .into_iter()
+            .rev()
+            .find(|u| u.id == update_id)
+        else {
+            info!(
+                "vectorize_update: update {} not in hot_context of session {} (evicted?)",
+                update_id,
+                session.id()
+            );
+            return Ok(0);
         };
 
         let raw_text = extract_text_from_update(&update);
         if !self.should_vectorize_text(&raw_text) {
             info!(
-                "vectorize_latest_update: text too short ({} chars) for session {}",
+                "vectorize_update: text too short ({} chars) for session {}",
                 raw_text.len(),
                 session.id()
             );
@@ -104,7 +127,7 @@ impl ContentVectorizer {
         let embedding = match embeddings.into_iter().next() {
             Some(e) => e,
             None => {
-                tracing::warn!("No embedding generated for latest update");
+                tracing::warn!("No embedding generated for update {}", update.id);
                 return Ok(0);
             }
         };
@@ -117,10 +140,7 @@ impl ContentVectorizer {
         );
 
         if self.add_and_persist(embedding, metadata).await {
-            debug!(
-                "Successfully vectorized and persisted latest update {}",
-                update.id
-            );
+            debug!("Successfully vectorized and persisted update {}", update.id);
             session.vectorized_update_ids.insert(update.id);
             Ok(1)
         } else {

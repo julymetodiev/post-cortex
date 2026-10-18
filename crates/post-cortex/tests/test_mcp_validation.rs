@@ -135,7 +135,14 @@ fn test_validate_scope_with_invalid_scope() -> Result<()> {
 
 #[test]
 fn test_validate_session_action_with_valid_actions() -> Result<()> {
-    let valid_actions = vec!["create", "list"];
+    let valid_actions = vec![
+        "create",
+        "list",
+        "load",
+        "search",
+        "update_metadata",
+        "delete",
+    ];
 
     for action in valid_actions {
         assert!(validate_session_action(action).is_ok());
@@ -147,7 +154,7 @@ fn test_validate_session_action_with_valid_actions() -> Result<()> {
 
 #[test]
 fn test_validate_session_action_with_invalid_action() -> Result<()> {
-    let invalid_action = "delete"; // Sessions don't have delete action
+    let invalid_action = "remove"; // the action is called "delete"
     let result = validate_session_action(invalid_action);
 
     assert!(result.is_err());
@@ -316,7 +323,7 @@ fn test_common_mistakes_have_helpful_hints() -> Result<()> {
     assert!(error2.hint.as_ref().unwrap().contains("create"));
 
     // Mistake 3: Invalid action
-    let result3 = validate_session_action("delete");
+    let result3 = validate_session_action("remove");
     assert!(result3.is_err());
     let error3 = result3.unwrap_err();
     assert!(

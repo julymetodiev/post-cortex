@@ -17,9 +17,9 @@ use crate::memory_system::ConversationMemorySystem;
 ///
 /// `session_id` is the canonical identifier; the worker re-derives the
 /// "latest update to vectorise" from the session's hot context (matching
-/// the legacy `spawn_background_vectorization` path). `entry_id` + `text`
-/// are kept for forward compatibility with per-entry vectorisation
-/// (`ContentVectorizer::vectorize_one`-style API, not yet implemented).
+/// the legacy `spawn_background_vectorization` path). `entry_id` names the
+/// update to vectorize (`ContentVectorizer::vectorize_update`); `text` is
+/// kept for observability.
 #[derive(Debug, Clone)]
 pub struct EmbeddingWorkItem {
     /// Session that owns the content.
@@ -41,7 +41,7 @@ impl EmbeddingQueue {
     /// return the sending handle.
     ///
     /// `system` gives the worker access to the canonical
-    /// [`ConversationMemorySystem::vectorize_latest_update_now`] helper.
+    /// [`ConversationMemorySystem::vectorize_update_now`] helper.
     /// When the `embeddings` feature is disabled the worker still runs
     /// but reports each item as a no-op so callers see deterministic
     /// backlog drain regardless of build features.
@@ -66,7 +66,10 @@ impl EmbeddingQueue {
 
                 #[cfg(feature = "embeddings")]
                 {
-                    match system.vectorize_latest_update_now(item.session_id).await {
+                    match system
+                        .vectorize_update_now(item.session_id, item.entry_id)
+                        .await
+                    {
                         Ok(0) => {
                             trace!(
                                 session_id = %item.session_id,

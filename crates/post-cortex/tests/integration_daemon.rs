@@ -29,6 +29,7 @@ async fn setup_test_app() -> (TestApp, TempDir) {
         surrealdb_password: Some("root".to_string()),
         surrealdb_namespace: "post_cortex".to_string(),
         surrealdb_database: "main".to_string(),
+        ..Default::default()
     };
 
     let server = DaemonServer::new(config).await.unwrap();
@@ -52,12 +53,10 @@ async fn start_real_daemon() -> (u16, TempDir) {
         port,
         grpc_port: 0,
         data_directory: temp_dir.path().to_str().unwrap().to_string(),
-        storage_backend: "surrealdb".to_string(),
-        surrealdb_endpoint: Some("ws://localhost:8000".to_string()),
-        surrealdb_username: Some("root".to_string()),
-        surrealdb_password: Some("root".to_string()),
-        surrealdb_namespace: "post_cortex".to_string(),
-        surrealdb_database: "main".to_string(),
+        // RocksDB on purpose: the only caller checks that the daemon holds
+        // the RocksDB lock on its data directory.
+        storage_backend: "rocksdb".to_string(),
+        ..Default::default()
     };
 
     let server = DaemonServer::new(config).await.unwrap();

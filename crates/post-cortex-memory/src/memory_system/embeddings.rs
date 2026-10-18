@@ -45,6 +45,7 @@ impl ConversationMemorySystem {
         &self,
         session_id: Uuid,
         session_arc: Arc<ArcSwap<ActiveSession>>,
+        update_id: Uuid,
     ) {
         if !self.config.enable_embeddings || !self.config.auto_vectorize_on_update {
             return;
@@ -61,7 +62,7 @@ impl ConversationMemorySystem {
         let storage_actor = self.storage_actor.clone();
         tokio::spawn(async move {
             let session = session_arc.load();
-            match vectorizer.vectorize_latest_update(&session).await {
+            match vectorizer.vectorize_update(&session, update_id).await {
                 Ok(count) if count > 0 => {
                     let _ = vectorizer.invalidate_session_cache(session_id).await;
                     storage_actor.persist_session_and_update_nowait((**session).clone(), vec![]);

@@ -187,6 +187,12 @@ async fn test_end_to_end_semantic_search_pipeline() -> Result<()> {
         .add_incremental_update(session_id, full_text, None)
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
+    // Control: the answer alone — what used to be vectorized when the
+    // question was dropped by the text-extraction bug.
+    system
+        .add_incremental_update(session_id, answer.to_string(), None)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
 
     // Wait for vectorization to complete
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -202,28 +208,36 @@ async fn test_end_to_end_semantic_search_pipeline() -> Result<()> {
     println!("Found {} results", results.len());
 
     if !results.is_empty() {
-        let top_result = &results[0];
-        println!(
-            "Top result similarity: {:.2}%",
-            top_result.similarity_score * 100.0
-        );
-        println!(
-            "Top result combined score: {:.2}%",
-            top_result.combined_score * 100.0
-        );
-        println!("Top result content type: {:?}", top_result.content_type);
+        let full = results
+            .iter()
+            .find(|r| r.text_content.contains("Q: "))
+            .expect("the question+answer update must be found");
+        let control = results.iter().find(|r| !r.text_content.contains("Q: "));
+        println!("Q+A similarity: {:.2}%", full.similarity_score * 100.0);
+        if let Some(c) = control {
+            println!("answer-only similarity: {:.2}%", c.similarity_score * 100.0);
+        }
 
-        // CRITICAL: Similarity should be HIGH (>70%) when searching with the exact question
-        // This was the bug - before fix it would be ~11% because only answer was vectorized
+        // The bug vectorized only the answer, so a question query scored the
+        // update no better than the answer alone. Absolute scores depend on
+        // the embedding model (BERT ~0.9, Potion ~0.6), so compare instead:
+        // the question must make the Q+A update clearly the better match.
         assert!(
-            top_result.similarity_score > 0.70,
-            "Semantic search should return high similarity (>70%) when searching with question that matches QA update. Got {:.2}%. This indicates the text extraction bug is not fixed!",
-            top_result.similarity_score * 100.0
+            results[0].text_content.contains("Q: "),
+            "question query must rank the Q+A update first; text extraction dropped the question"
         );
+        if let Some(c) = control {
+            assert!(
+                full.similarity_score > c.similarity_score + 0.05,
+                "Q+A ({:.2}%) must beat answer-only ({:.2}%) for the question query",
+                full.similarity_score * 100.0,
+                c.similarity_score * 100.0
+            );
+        }
 
         println!(
             "End-to-end test PASSED - similarity is {:.2}%",
-            top_result.similarity_score * 100.0
+            full.similarity_score * 100.0
         );
     } else {
         panic!("No results found! Vectorization or search failed.");
