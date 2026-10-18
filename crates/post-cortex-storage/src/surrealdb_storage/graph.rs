@@ -13,13 +13,16 @@
 //! [`GraphStorage`] trait implementation for [`SurrealDBStorage`] plus the
 //! private helpers used by `load_session` to rebuild derived structures
 //! (`StructuredContext`, `code_references`, `change_history`).
+//!
+//! Entity names are user data, so record ids are always bound as
+//! [`RecordId`] parameters, never spliced into SurrealQL.
 
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::Deserialize;
-use std::collections::{BTreeMap, HashMap};
-use surrealdb::types::SurrealValue;
-use tracing::{debug, info};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use surrealdb::types::{RecordId, SurrealValue};
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::traits::GraphStorage;
@@ -30,8 +33,127 @@ use post_cortex_core::core::structured_context::StructuredContext;
 use post_cortex_core::graph::entity_graph::EntityNetwork;
 use post_cortex_core::session::active_session::{ChangeRecord, CodeReference};
 
-use super::SurrealDBStorage;
 use super::records::EntityRecord;
+use super::{RELATION_TABLES, SurrealDBStorage, per_relation_table};
+
+/// Edge row as selected from a relation table. Endpoint names are optional
+/// because an edge can outlive its entity.
+#[derive(Deserialize, SurrealValue)]
+struct RelRecord {
+    #[serde(default)]
+    from_entity: Option<String>,
+    #[serde(default)]
+    to_entity: Option<String>,
+    #[serde(default)]
+    context: Option<String>,
+}
+
+impl SurrealDBStorage {
+    /// Record id of an entity node.
+    pub(super) fn entity_record_id(session_id: Uuid, name: &str) -> RecordId {
+        RecordId::new("entity", Self::entity_id(session_id, name))
+    }
+
+    /// Persisted form of an entity.
+    pub(super) fn entity_record(session_id: Uuid, entity: &EntityData) -> EntityRecord {
+        EntityRecord {
+            session_id: session_id.to_string(),
+            name: entity.name.clone(),
+            entity_type: format!("{:?}", entity.entity_type),
+            first_mentioned: entity.first_mentioned.to_rfc3339(),
+            last_mentioned: entity.last_mentioned.to_rfc3339(),
+            mention_count: entity.mention_count,
+            importance_score: entity.importance_score,
+            description: entity.description.clone(),
+        }
+    }
+
+    fn entity_from_record(r: EntityRecord) -> EntityData {
+        EntityData {
+            name: r.name,
+            entity_type: Self::parse_entity_type(&r.entity_type),
+            first_mentioned: Self::parse_datetime(&r.first_mentioned),
+            last_mentioned: Self::parse_datetime(&r.last_mentioned),
+            mention_count: r.mention_count,
+            importance_score: r.importance_score,
+            description: r.description,
+        }
+    }
+
+    /// Names of the entities directly connected to `entity_name` through
+    /// the given relation tables, in either direction, deduplicated.
+    async fn neighbours(
+        &self,
+        session_id: Uuid,
+        entity_name: &str,
+        tables: &[&str],
+    ) -> Result<Vec<String>> {
+        let query = tables
+            .iter()
+            .map(|table| {
+                format!(
+                    "SELECT VALUE out.name FROM {table} WHERE in = $e AND session_id = $session_id; \
+                     SELECT VALUE in.name FROM {table} WHERE out = $e AND session_id = $session_id;"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("e", Self::entity_record_id(session_id, entity_name)))
+            .bind(("session_id", session_id.to_string()))
+            .await?;
+
+        let mut seen = HashSet::new();
+        let mut related = Vec::new();
+        for index in 0..tables.len() * 2 {
+            let names: Vec<Option<String>> = response.take(index)?;
+            for name in names.into_iter().flatten() {
+                if seen.insert(name.clone()) {
+                    related.push(name);
+                }
+            }
+        }
+        related.sort();
+        Ok(related)
+    }
+
+    /// Entities of a session with the given names, in one query.
+    async fn entities_named(
+        &self,
+        session_id: Uuid,
+        names: Vec<String>,
+    ) -> Result<BTreeMap<String, EntityData>> {
+        let mut response = self
+            .db
+            .query("SELECT * FROM entity WHERE session_id = $session_id AND name IN $names")
+            .bind(("session_id", session_id.to_string()))
+            .bind(("names", names))
+            .await?;
+        let records: Vec<EntityRecord> = response.take(0)?;
+        Ok(records
+            .into_iter()
+            .map(|r| (r.name.clone(), Self::entity_from_record(r)))
+            .collect())
+    }
+}
+
+/// Undirected adjacency over relationships.
+fn adjacency(relationships: &[EntityRelationship]) -> HashMap<&str, Vec<&str>> {
+    let mut adjacency: HashMap<&str, Vec<&str>> = HashMap::new();
+    for rel in relationships {
+        adjacency
+            .entry(rel.from_entity.as_str())
+            .or_default()
+            .push(rel.to_entity.as_str());
+        adjacency
+            .entry(rel.to_entity.as_str())
+            .or_default()
+            .push(rel.from_entity.as_str());
+    }
+    adjacency
+}
 
 #[async_trait]
 impl GraphStorage for SurrealDBStorage {
@@ -41,55 +163,35 @@ impl GraphStorage for SurrealDBStorage {
             entity.name, session_id
         );
 
-        let entity_id = Self::entity_id(session_id, &entity.name);
-
-        let record = EntityRecord {
-            session_id: session_id.to_string(),
-            name: entity.name.clone(),
-            entity_type: format!("{:?}", entity.entity_type),
-            first_mentioned: entity.first_mentioned.to_rfc3339(),
-            last_mentioned: entity.last_mentioned.to_rfc3339(),
-            mention_count: entity.mention_count,
-            importance_score: entity.importance_score,
-            description: entity.description.clone(),
-        };
-
-        // Use query with backticks for IDs containing special chars (UUIDs have dashes)
-        let query = format!("UPSERT entity:`{}` CONTENT $content", entity_id);
-        self.db.query(query).bind(("content", record)).await?;
-
+        self.db
+            .query("UPSERT $rid CONTENT $content")
+            .bind(("rid", Self::entity_record_id(session_id, &entity.name)))
+            .bind(("content", Self::entity_record(session_id, entity)))
+            .await?
+            .check()?;
+        self.note_entity_written(session_id, entity).await;
         Ok(())
     }
 
     async fn get_entity(&self, session_id: Uuid, name: &str) -> Result<Option<EntityData>> {
         let entity_id = Self::entity_id(session_id, name);
-
         let record: Option<EntityRecord> = self.select_one("entity", &entity_id).await?;
-
-        Ok(record.map(|r| EntityData {
-            name: r.name,
-            entity_type: Self::parse_entity_type(&r.entity_type),
-            first_mentioned: Self::parse_datetime(&r.first_mentioned),
-            last_mentioned: Self::parse_datetime(&r.last_mentioned),
-            mention_count: r.mention_count,
-            importance_score: r.importance_score,
-            description: r.description,
-        }))
+        Ok(record.map(Self::entity_from_record))
     }
 
     async fn list_entities(&self, session_id: Uuid) -> Result<Vec<EntityData>> {
-        info!(
-            "SurrealDBStorage: Fetching entities for session {}...",
-            session_id
-        );
         let mut all_entities = Vec::new();
         let mut start = 0;
         let limit = 1000;
 
         loop {
+            // `name` breaks importance ties so pages never overlap or skip.
             let mut response = self
                 .db
-                .query("SELECT * FROM entity WHERE session_id = $session_id ORDER BY importance_score DESC LIMIT $limit START $start")
+                .query(
+                    "SELECT * FROM entity WHERE session_id = $session_id \
+                     ORDER BY importance_score DESC, name ASC LIMIT $limit START $start",
+                )
                 .bind(("session_id", session_id.to_string()))
                 .bind(("limit", limit))
                 .bind(("start", start))
@@ -97,70 +199,40 @@ impl GraphStorage for SurrealDBStorage {
 
             let records: Vec<EntityRecord> = response.take(0)?;
             let count = records.len();
-
-            if count == 0 {
-                break;
-            }
-
-            for r in records {
-                all_entities.push(EntityData {
-                    name: r.name,
-                    entity_type: Self::parse_entity_type(&r.entity_type),
-                    first_mentioned: Self::parse_datetime(&r.first_mentioned),
-                    last_mentioned: Self::parse_datetime(&r.last_mentioned),
-                    mention_count: r.mention_count,
-                    importance_score: r.importance_score,
-                    description: r.description,
-                });
-            }
-
-            if all_entities.len() % 1000 == 0 {
-                info!(
-                    "SurrealDBStorage: Loaded {} entities for session {}...",
-                    all_entities.len(),
-                    session_id
-                );
-            }
+            all_entities.extend(records.into_iter().map(Self::entity_from_record));
 
             if count < limit {
                 break;
             }
-
             start += count;
         }
 
+        debug!(
+            "SurrealDBStorage: Loaded {} entities for session {}",
+            all_entities.len(),
+            session_id
+        );
         Ok(all_entities)
     }
 
     async fn delete_entity(&self, session_id: Uuid, name: &str) -> Result<()> {
-        let entity_id = Self::entity_id(session_id, name);
-
         // Cascade: drop every edge that references this entity in any of
-        // the 8 relation tables. Without this, deleted entities leave
-        // orphan edges (in/out pointing at non-existent nodes), which is
-        // what `pcx-inspect.py junk` had to clean up separately.
-        let entity_thing = format!("entity:`{}`", entity_id);
-        for table in [
-            "required_by",
-            "leads_to",
-            "related_to",
-            "conflicts_with",
-            "depends_on",
-            "implements",
-            "caused_by",
-            "solves",
-        ] {
-            let query = format!(
-                "DELETE {} WHERE session_id = $session_id AND (in = {} OR out = {})",
-                table, entity_thing, entity_thing,
-            );
-            self.db
-                .query(query)
-                .bind(("session_id", session_id.to_string()))
-                .await?;
-        }
-
-        let _: Option<EntityRecord> = self.delete("entity", &entity_id).await?;
+        // the 8 relation tables, then the node, in one round trip. Without
+        // this, deleted entities leave orphan edges (in/out pointing at
+        // non-existent nodes).
+        let query = format!(
+            "{} DELETE $e;",
+            per_relation_table(
+                "DELETE {table} WHERE session_id = $session_id AND (in = $e OR out = $e);"
+            )
+        );
+        self.db
+            .query(query)
+            .bind(("e", Self::entity_record_id(session_id, name)))
+            .bind(("session_id", session_id.to_string()))
+            .await?
+            .check()?;
+        self.forget_graph_state(session_id).await;
         Ok(())
     }
 
@@ -174,8 +246,6 @@ impl GraphStorage for SurrealDBStorage {
             relationship.from_entity, relationship.to_entity, relationship.relation_type
         );
 
-        let from_id = Self::entity_id(session_id, &relationship.from_entity);
-        let to_id = Self::entity_id(session_id, &relationship.to_entity);
         let table = Self::relation_table_name(&relationship.relation_type);
         let rel_id = Self::relation_id(
             session_id,
@@ -184,19 +254,27 @@ impl GraphStorage for SurrealDBStorage {
             &relationship.relation_type,
         );
 
-        // Use UPSERT for the relationship table with deterministic ID
-        // Note: In SurrealDB, for graph edges, you can also UPSERT the edge table directly
-        let query = format!(
-            "UPSERT {}:`{}` SET in = entity:`{}`, out = entity:`{}`, context = $context, session_id = $session_id",
-            table, rel_id, from_id, to_id
-        );
-
+        // UPSERT with a deterministic id so re-creating an edge is idempotent.
         self.db
-            .query(query)
+            .query(
+                "UPSERT $rel SET in = $from, out = $to, context = $context, \
+                 session_id = $session_id",
+            )
+            .bind(("rel", RecordId::new(table, rel_id)))
+            .bind((
+                "from",
+                Self::entity_record_id(session_id, &relationship.from_entity),
+            ))
+            .bind((
+                "to",
+                Self::entity_record_id(session_id, &relationship.to_entity),
+            ))
             .bind(("context", relationship.context.clone()))
             .bind(("session_id", session_id.to_string()))
-            .await?;
-
+            .await?
+            .check()?;
+        self.note_relationship_written(session_id, relationship)
+            .await;
         Ok(())
     }
 
@@ -205,33 +283,8 @@ impl GraphStorage for SurrealDBStorage {
         session_id: Uuid,
         entity_name: &str,
     ) -> Result<Vec<String>> {
-        let entity_id = Self::entity_id(session_id, entity_name);
-
-        // Query all outgoing and incoming relations (backticks for IDs with special chars)
-        let query = format!(
-            r#"
-            SELECT array::distinct(array::flatten([
-                (SELECT VALUE out.name FROM entity:`{}`->*->entity WHERE session_id = $session_id),
-                (SELECT VALUE in.name FROM entity:`{}`<-*<-entity WHERE session_id = $session_id)
-            ])) AS related
-            "#,
-            entity_id, entity_id
-        );
-
-        let mut response = self
-            .db
-            .query(query)
-            .bind(("session_id", session_id.to_string()))
-            .await?;
-
-        #[derive(Deserialize, SurrealValue)]
-        struct RelatedResult {
-            related: Vec<String>,
-        }
-
-        let results: Option<RelatedResult> = response.take(0)?;
-
-        Ok(results.map(|r| r.related).unwrap_or_default())
+        let tables: Vec<&str> = RELATION_TABLES.iter().map(|(t, _)| *t).collect();
+        self.neighbours(session_id, entity_name, &tables).await
     }
 
     async fn find_related_by_type(
@@ -240,167 +293,86 @@ impl GraphStorage for SurrealDBStorage {
         entity_name: &str,
         relation_type: &RelationType,
     ) -> Result<Vec<String>> {
-        let entity_id = Self::entity_id(session_id, entity_name);
         let table = Self::relation_table_name(relation_type);
-
-        let query = format!(
-            r#"
-            SELECT array::distinct(array::flatten([
-                (SELECT VALUE out.name FROM entity:`{}`->{table}->entity WHERE session_id = $session_id),
-                (SELECT VALUE in.name FROM entity:`{}`<-{table}<-entity WHERE session_id = $session_id)
-            ])) AS related
-            "#,
-            entity_id, entity_id
-        );
-
-        let mut response = self
-            .db
-            .query(query)
-            .bind(("session_id", session_id.to_string()))
-            .await?;
-
-        #[derive(Deserialize, SurrealValue)]
-        struct RelatedResult {
-            related: Vec<String>,
-        }
-
-        let results: Option<RelatedResult> = response.take(0)?;
-
-        Ok(results.map(|r| r.related).unwrap_or_default())
+        self.neighbours(session_id, entity_name, &[table]).await
     }
 
+    /// Shortest undirected path (BFS over all of the session's edges, one
+    /// query), like the RocksDB backend.
     async fn find_shortest_path(
         &self,
         session_id: Uuid,
         from: &str,
         to: &str,
     ) -> Result<Option<Vec<String>>> {
-        let from_id = Self::entity_id(session_id, from);
-        let to_id = Self::entity_id(session_id, to);
+        if from == to {
+            return Ok(Some(vec![from.to_string()]));
+        }
+        let relationships = self.load_all_relationships(session_id).await?;
+        let adjacency = adjacency(&relationships);
 
-        // Use SurrealDB's graph traversal (backticks for IDs with special chars)
-        let query = format!(
-            r#"
-            SELECT VALUE array::flatten([
-                entity:`{}`.name,
-                (SELECT VALUE name FROM entity:`{}`->*..5->entity:`{}` WHERE session_id = $session_id),
-                entity:`{}`.name
-            ])
-            "#,
-            from_id, from_id, to_id, to_id
-        );
-
-        let mut response = self
-            .db
-            .query(query)
-            .bind(("session_id", session_id.to_string()))
-            .await?;
-
-        let path: Option<Vec<String>> = response.take(0)?;
-
-        Ok(path.filter(|p| !p.is_empty()))
+        let mut parent: HashMap<&str, &str> = HashMap::new();
+        let mut queue = VecDeque::from([from]);
+        let mut visited = HashSet::from([from]);
+        while let Some(current) = queue.pop_front() {
+            for &next in adjacency.get(current).into_iter().flatten() {
+                if !visited.insert(next) {
+                    continue;
+                }
+                parent.insert(next, current);
+                if next == to {
+                    let mut path = vec![to.to_string()];
+                    let mut node = to;
+                    while let Some(&prev) = parent.get(node) {
+                        path.push(prev.to_string());
+                        node = prev;
+                    }
+                    path.reverse();
+                    return Ok(Some(path));
+                }
+                queue.push_back(next);
+            }
+        }
+        Ok(None)
     }
 
+    /// Entities within `max_depth` undirected hops of `center` plus the
+    /// edges among them (two queries).
     async fn get_entity_network(
         &self,
         session_id: Uuid,
         center: &str,
         max_depth: usize,
     ) -> Result<EntityNetwork> {
-        let entity_id = Self::entity_id(session_id, center);
+        let all_relationships = self.load_all_relationships(session_id).await?;
+        let adjacency = adjacency(&all_relationships);
 
-        // Get entities within max_depth hops (backticks for IDs with special chars)
-        let entity_query = format!(
-            r#"
-            SELECT name, entity_type, first_mentioned, last_mentioned,
-                   mention_count, importance_score, description
-            FROM entity:`{}`<->*..{}->entity WHERE session_id = $session_id
-            "#,
-            entity_id, max_depth
-        );
-
-        let mut response = self
-            .db
-            .query(entity_query)
-            .bind(("session_id", session_id.to_string()))
-            .await?;
-
-        let entity_records: Vec<EntityRecord> = response.take(0)?;
-
-        let mut entities: BTreeMap<String, EntityData> = entity_records
-            .into_iter()
-            .map(|r| {
-                (
-                    r.name.clone(),
-                    EntityData {
-                        name: r.name,
-                        entity_type: Self::parse_entity_type(&r.entity_type),
-                        first_mentioned: Self::parse_datetime(&r.first_mentioned),
-                        last_mentioned: Self::parse_datetime(&r.last_mentioned),
-                        mention_count: r.mention_count,
-                        importance_score: r.importance_score,
-                        description: r.description,
-                    },
-                )
-            })
-            .collect();
-
-        // Add center entity if not already included
-        if let Some(center_entity) = self.get_entity(session_id, center).await? {
-            entities.insert(center.to_string(), center_entity);
-        }
-
-        // Get relationships (simplified - just get direct connections from center)
-        let mut relationships = Vec::new();
-
-        // Query each relation type
-        for (table, rel_type) in [
-            ("required_by", RelationType::RequiredBy),
-            ("leads_to", RelationType::LeadsTo),
-            ("related_to", RelationType::RelatedTo),
-            ("conflicts_with", RelationType::ConflictsWith),
-            ("depends_on", RelationType::DependsOn),
-            ("implements", RelationType::Implements),
-            ("caused_by", RelationType::CausedBy),
-            ("solves", RelationType::Solves),
-        ] {
-            let rel_query = format!(
-                r#"
-                SELECT in.name AS from_entity, out.name AS to_entity, context
-                FROM {}
-                WHERE session_id = $session_id
-                "#,
-                table
-            );
-
-            let mut rel_response = self
-                .db
-                .query(rel_query)
-                .bind(("session_id", session_id.to_string()))
-                .await?;
-
-            #[derive(Deserialize, SurrealValue)]
-            struct RelRecord {
-                from_entity: String,
-                to_entity: String,
-                context: String,
-            }
-
-            let rel_records: Vec<RelRecord> = rel_response.take(0).unwrap_or_default();
-
-            for record in rel_records {
-                if entities.contains_key(&record.from_entity)
-                    && entities.contains_key(&record.to_entity)
-                {
-                    relationships.push(EntityRelationship {
-                        from_entity: record.from_entity,
-                        to_entity: record.to_entity,
-                        relation_type: rel_type.clone(),
-                        context: record.context,
-                    });
+        let mut visited: HashSet<&str> = HashSet::from([center]);
+        let mut frontier = vec![center];
+        for _ in 0..max_depth {
+            let mut next = Vec::new();
+            for node in &frontier {
+                for &neighbour in adjacency.get(node).into_iter().flatten() {
+                    if visited.insert(neighbour) {
+                        next.push(neighbour);
+                    }
                 }
             }
+            if next.is_empty() {
+                break;
+            }
+            frontier = next;
         }
+
+        let names: Vec<String> = visited.iter().map(|s| s.to_string()).collect();
+        let entities = self.entities_named(session_id, names).await?;
+        let relationships = all_relationships
+            .iter()
+            .filter(|r| {
+                entities.contains_key(&r.from_entity) && entities.contains_key(&r.to_entity)
+            })
+            .cloned()
+            .collect();
 
         Ok(EntityNetwork {
             center: center.to_string(),
@@ -415,102 +387,33 @@ impl GraphStorage for SurrealDBStorage {
 // ============================================================================
 
 impl SurrealDBStorage {
-    /// Load all relationships for a session from native graph
+    /// Load all relationships for a session from the relation tables, in
+    /// one round trip (one statement per table).
     pub(super) async fn load_all_relationships(
         &self,
         session_id: Uuid,
     ) -> Result<Vec<EntityRelationship>> {
-        info!(
-            "SurrealDBStorage: Fetching relationships for session {}...",
-            session_id
+        let query = per_relation_table(
+            "SELECT in.name AS from_entity, out.name AS to_entity, context \
+             FROM {table} WHERE session_id = $session_id;",
         );
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("session_id", session_id.to_string()))
+            .await?;
+
         let mut all_relationships = Vec::new();
-
-        // Query each relation type table
-        let relation_tables = [
-            ("required_by", RelationType::RequiredBy),
-            ("leads_to", RelationType::LeadsTo),
-            ("related_to", RelationType::RelatedTo),
-            ("conflicts_with", RelationType::ConflictsWith),
-            ("depends_on", RelationType::DependsOn),
-            ("implements", RelationType::Implements),
-            ("caused_by", RelationType::CausedBy),
-            ("solves", RelationType::Solves),
-        ];
-
-        for (table, rel_type) in relation_tables {
-            debug!(
-                "SurrealDBStorage: Processing relationship table '{}'...",
-                table
-            );
-            let mut start = 0;
-            let limit = 1000;
-
-            loop {
-                let query = format!(
-                    r#"
-                    SELECT
-                        in.name AS from_entity,
-                        out.name AS to_entity,
-                        context
-                    FROM {}
-                    WHERE session_id = $session_id
-                    LIMIT $limit START $start
-                    "#,
-                    table
-                );
-
-                let mut response = self
-                    .db
-                    .query(query)
-                    .bind(("session_id", session_id.to_string()))
-                    .bind(("limit", limit))
-                    .bind(("start", start))
-                    .await?;
-
-                #[derive(Deserialize, SurrealValue)]
-                struct RelRecord {
-                    from_entity: String,
-                    to_entity: String,
-                    context: String,
-                }
-
-                let records: Vec<RelRecord> = response.take(0).unwrap_or_default();
-                let count = records.len();
-
-                if count == 0 {
-                    break;
-                }
-
-                if count > 0 {
-                    info!(
-                        "SurrealDBStorage: Loaded {} relationships from '{}' (start: {})...",
-                        count, table, start
-                    );
-                }
-
-                for record in records {
-                    all_relationships.push(EntityRelationship {
-                        from_entity: record.from_entity,
-                        to_entity: record.to_entity,
-                        relation_type: rel_type.clone(),
-                        context: record.context,
-                    });
-                }
-
-                if !all_relationships.is_empty() && all_relationships.len() % 1000 == 0 {
-                    debug!(
-                        "SurrealDBStorage: Loaded {} relationships...",
-                        all_relationships.len()
-                    );
-                }
-
-                if count < limit {
-                    break;
-                }
-
-                start += count;
-            }
+        for (index, (_, rel_type)) in RELATION_TABLES.iter().enumerate() {
+            let records: Vec<RelRecord> = response.take(index)?;
+            all_relationships.extend(records.into_iter().filter_map(|r| {
+                Some(EntityRelationship {
+                    from_entity: r.from_entity?,
+                    to_entity: r.to_entity?,
+                    relation_type: rel_type.clone(),
+                    context: r.context.unwrap_or_default(),
+                })
+            }));
         }
 
         debug!(
@@ -518,7 +421,6 @@ impl SurrealDBStorage {
             all_relationships.len(),
             session_id
         );
-
         Ok(all_relationships)
     }
 

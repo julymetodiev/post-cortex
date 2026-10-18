@@ -122,6 +122,7 @@ impl SurrealDBStorage {
             db: Arc::new(db),
             namespace,
             database,
+            persisted: Default::default(),
         };
 
         // Initialize schema with the requested HNSW dimension.

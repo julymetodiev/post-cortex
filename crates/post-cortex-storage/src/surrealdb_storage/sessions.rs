@@ -15,45 +15,309 @@
 //! Covers session lifecycle, context-update batches, checkpoints, workspaces,
 //! and stats — every method that the in-memory layer reaches for during
 //! ordinary read/write traffic.
+//!
+//! The `context_update` table is the source of truth for a session's
+//! updates; the `session` row holds metadata only. Writes send only what
+//! differs from [`PersistedState`], i.e. from what this process last read
+//! or wrote for the session, in one multi-statement query with bound
+//! parameters.
 
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use tracing::{debug, info};
+use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+use surrealdb::types::{RecordId, SurrealValue};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
+use crate::error::session_not_found;
 use crate::rocksdb_storage::{SessionCheckpoint, StoredWorkspace};
-use crate::traits::{GraphStorage, Storage};
-use post_cortex_core::core::context_update::ContextUpdate;
+use crate::traits::{GraphStorage, SessionSummary, Storage};
+use post_cortex_core::core::context_update::{ContextUpdate, EntityData, EntityRelationship};
 use post_cortex_core::graph::entity_graph::SimpleEntityGraph;
 use post_cortex_core::session::active_session::{ActiveSession, UserPreferences};
 use post_cortex_core::workspace::SessionRole;
 
-use super::SurrealDBStorage;
 use super::records::{
     CheckpointRecord, ContextUpdateRecord, EntityRecord, SessionRecord, WorkspaceRecord,
-    WorkspaceSessionRecord,
+    WorkspaceSessionRecord, deserialize_surreal_option,
 };
+use super::{SurrealDBStorage, per_relation_table};
 
-#[async_trait]
-impl Storage for SurrealDBStorage {
-    async fn save_session(&self, session: &ActiveSession) -> Result<()> {
-        debug!(
-            "SurrealDBStorage: Saving session with ID: {} (normalized, batched)",
-            session.id()
-        );
+/// Sessions tracked in [`PersistedStates`] before the map is reset; a reset
+/// only costs one full write per session afterwards.
+const MAX_TRACKED_SESSIONS: usize = 4096;
 
+/// What this process knows to be stored for one session.
+#[derive(Default)]
+pub(crate) struct PersistedState {
+    /// Updates the session contained at the last load/save (their rows
+    /// exist). Only these are ever deleted when they leave the session, so
+    /// a save of an unrelated or freshly created snapshot never removes
+    /// rows it did not know about.
+    update_ids: HashSet<Uuid>,
+    /// Fingerprint per entity name as last written or read.
+    entities: HashMap<String, u64>,
+    /// Fingerprint per relation record key as last written or read.
+    relations: HashMap<String, u64>,
+}
+
+/// Per-session [`PersistedState`]; the mutex also serialises saves of a
+/// session.
+pub(crate) type PersistedStates = DashMap<Uuid, Arc<tokio::sync::Mutex<Option<PersistedState>>>>;
+
+fn entity_fingerprint(entity: &EntityData) -> u64 {
+    let mut h = DefaultHasher::new();
+    entity.name.hash(&mut h);
+    entity.entity_type.hash(&mut h);
+    entity.first_mentioned.hash(&mut h);
+    entity.last_mentioned.hash(&mut h);
+    entity.mention_count.hash(&mut h);
+    entity.importance_score.to_bits().hash(&mut h);
+    entity.description.hash(&mut h);
+    h.finish()
+}
+
+fn relation_fingerprint(rel: &EntityRelationship) -> u64 {
+    let mut h = DefaultHasher::new();
+    rel.from_entity.hash(&mut h);
+    rel.to_entity.hash(&mut h);
+    rel.relation_type.hash(&mut h);
+    rel.context.hash(&mut h);
+    h.finish()
+}
+
+/// Entity row for the batched upsert.
+#[derive(Serialize, SurrealValue)]
+struct KeyedEntity {
+    key: String,
+    record: EntityRecord,
+}
+
+/// Relation row for the batched upsert.
+#[derive(Serialize, SurrealValue)]
+struct RelationRow {
+    table: String,
+    key: String,
+    from_key: String,
+    to_key: String,
+    context: String,
+}
+
+/// Workspace membership row for the batched upsert.
+#[derive(Serialize, SurrealValue)]
+struct KeyedMembership {
+    key: String,
+    record: WorkspaceSessionRecord,
+}
+
+/// Session listing row.
+#[derive(Deserialize, SurrealValue)]
+struct SessionSummaryRow {
+    session_id: String,
+    #[serde(default, deserialize_with = "deserialize_surreal_option")]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_surreal_option")]
+    description: Option<String>,
+    created_at: String,
+    last_updated: String,
+}
+
+#[derive(Deserialize, SurrealValue)]
+struct UpdateCountRow {
+    session_id: String,
+    n: i64,
+}
+
+fn update_record(session_id: Uuid, update: &ContextUpdate) -> Result<ContextUpdateRecord> {
+    Ok(ContextUpdateRecord {
+        update_id: update.id.to_string(),
+        session_id: session_id.to_string(),
+        timestamp: update.timestamp.to_rfc3339(),
+        update_type: format!("{:?}", update.update_type),
+        update_data: serde_json::to_value(update)?,
+    })
+}
+
+fn parse_rfc3339(s: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now())
+}
+
+/// Statement indices of the persist query.
+const STMT_SESSION: usize = 0;
+const STMT_UPDATES: usize = 1;
+const STMT_REMOVED: usize = 2;
+const STMT_ENTITIES: usize = 3;
+const STMT_RELATIONS: usize = 4;
+
+const PERSIST_QUERY: &str = "\
+    UPSERT $session_rid CONTENT $session_row; \
+    FOR $u IN $updates { UPSERT type::record('context_update', $u.update_id) CONTENT $u; }; \
+    FOR $id IN $removed { DELETE type::record('context_update', $id); }; \
+    FOR $e IN $entities { UPSERT type::record('entity', $e.key) CONTENT $e.record; }; \
+    FOR $r IN $relations { \
+        UPSERT type::record($r.table, $r.key) SET \
+            in = type::record('entity', $r.from_key), \
+            out = type::record('entity', $r.to_key), \
+            context = $r.context, session_id = $session_id; \
+    };";
+
+impl SurrealDBStorage {
+    fn persisted_slot(&self, session_id: Uuid) -> Arc<tokio::sync::Mutex<Option<PersistedState>>> {
+        if self.persisted.len() >= MAX_TRACKED_SESSIONS && !self.persisted.contains_key(&session_id)
+        {
+            self.persisted.clear();
+        }
+        self.persisted.entry(session_id).or_default().clone()
+    }
+
+    /// Record that an entity was written outside a session save.
+    pub(super) async fn note_entity_written(&self, session_id: Uuid, entity: &EntityData) {
+        if let Some(slot) = self.persisted.get(&session_id).map(|s| s.clone())
+            && let Some(state) = slot.lock().await.as_mut()
+        {
+            state
+                .entities
+                .insert(entity.name.clone(), entity_fingerprint(entity));
+        }
+    }
+
+    /// Record that a relationship was written outside a session save.
+    pub(super) async fn note_relationship_written(
+        &self,
+        session_id: Uuid,
+        rel: &EntityRelationship,
+    ) {
+        if let Some(slot) = self.persisted.get(&session_id).map(|s| s.clone())
+            && let Some(state) = slot.lock().await.as_mut()
+        {
+            let key = Self::relation_id(
+                session_id,
+                &rel.from_entity,
+                &rel.to_entity,
+                &rel.relation_type,
+            );
+            state.relations.insert(key, relation_fingerprint(rel));
+        }
+    }
+
+    /// Forget what is known about a session's stored graph, so the next
+    /// save writes all of it.
+    pub(super) async fn forget_graph_state(&self, session_id: Uuid) {
+        if let Some(slot) = self.persisted.get(&session_id).map(|s| s.clone())
+            && let Some(state) = slot.lock().await.as_mut()
+        {
+            state.entities.clear();
+            state.relations.clear();
+        }
+    }
+
+    /// Ids of the session's stored update rows.
+    async fn stored_update_ids(&self, session_id: Uuid) -> Result<HashSet<Uuid>> {
+        let mut response = self
+            .db
+            .query("SELECT VALUE update_id FROM context_update WHERE session_id = $session_id")
+            .bind(("session_id", session_id.to_string()))
+            .await?;
+        let ids: Vec<String> = response.take(0)?;
+        Ok(ids.iter().filter_map(|s| Uuid::parse_str(s).ok()).collect())
+    }
+
+    /// Write `session` (metadata row), the `explicit` updates, session
+    /// updates without a row, and changed entities/edges (all of them when
+    /// `full_graph`); delete rows of updates that left the session since
+    /// the last load/save.
+    async fn persist(
+        &self,
+        session: &ActiveSession,
+        explicit: Vec<ContextUpdate>,
+        full_graph: bool,
+    ) -> Result<()> {
         let session_id = session.id();
-        let all_updates: Vec<ContextUpdate> = session.hot_context.iter();
-        let entities = session.entity_graph.get_all_entities();
-        let relationships = session.entity_graph.get_all_relationships();
-        let total_updates = all_updates.len() as u32;
+        let slot = self.persisted_slot(session_id);
+        let mut guard = slot.lock().await;
 
-        // Build session metadata JSON for the transaction
+        let previous = guard.take();
+        let (known_ids, known_entities, known_relations, trusted) = match previous {
+            Some(state) => (state.update_ids, state.entities, state.relations, true),
+            None => (
+                self.stored_update_ids(session_id).await?,
+                HashMap::new(),
+                HashMap::new(),
+                false,
+            ),
+        };
+
+        // Updates.
+        let current_ids: HashSet<Uuid> = session.incremental_updates.iter().map(|u| u.id).collect();
+        let explicit_ids: HashSet<Uuid> = explicit.iter().map(|u| u.id).collect();
+        let mut updates = Vec::with_capacity(explicit.len());
+        for update in &explicit {
+            updates.push(update_record(session_id, update)?);
+        }
+        for update in session.incremental_updates.iter() {
+            if !known_ids.contains(&update.id) && !explicit_ids.contains(&update.id) {
+                updates.push(update_record(session_id, update)?);
+            }
+        }
+        // Without trusted knowledge (first save in this process) nothing is
+        // deleted: the rows may belong to updates this snapshot never saw.
+        let removed: Vec<String> = if trusted {
+            known_ids
+                .difference(&current_ids)
+                .map(Uuid::to_string)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // Graph.
+        let graph = &session.entity_graph;
+        let mut entity_fps = HashMap::with_capacity(graph.entities.len());
+        let mut entities = Vec::new();
+        for (name, entity) in &graph.entities {
+            let fp = entity_fingerprint(entity);
+            if full_graph || known_entities.get(name) != Some(&fp) {
+                entities.push(KeyedEntity {
+                    key: Self::entity_id(session_id, name),
+                    record: Self::entity_record(session_id, entity),
+                });
+            }
+            entity_fps.insert(name.clone(), fp);
+        }
+        let mut relation_fps = HashMap::new();
+        let mut relations = Vec::new();
+        for rel in graph.get_all_relationships() {
+            let key = Self::relation_id(
+                session_id,
+                &rel.from_entity,
+                &rel.to_entity,
+                &rel.relation_type,
+            );
+            let fp = relation_fingerprint(&rel);
+            if full_graph || known_relations.get(&key) != Some(&fp) {
+                relations.push(RelationRow {
+                    table: Self::relation_table_name(&rel.relation_type).to_string(),
+                    key: key.clone(),
+                    from_key: Self::entity_id(session_id, &rel.from_entity),
+                    to_key: Self::entity_id(session_id, &rel.to_entity),
+                    context: rel.context,
+                });
+            }
+            relation_fps.insert(key, fp);
+        }
+
         let record = SessionRecord {
             session_id: session_id.to_string(),
-            name: session.name().clone(),
-            description: session.description().clone(),
+            name: session.name(),
+            description: session.description(),
             created_at: session.created_at().to_rfc3339(),
             last_updated: Utc::now().to_rfc3339(),
             user_preferences: serde_json::to_value(session.user_preferences())?,
@@ -62,102 +326,122 @@ impl Storage for SurrealDBStorage {
                 .iter()
                 .map(|id| id.to_string())
                 .collect(),
-            total_updates,
+            total_updates: session.incremental_updates.len() as u32,
         };
 
-        // Build a single batched SurrealQL transaction
-        let mut query_parts: Vec<String> =
-            Vec::with_capacity(1 + all_updates.len() + entities.len() + relationships.len());
-
-        // 1. Session metadata upsert
-        let session_json = serde_json::to_string(&record)?;
-        query_parts.push(format!(
-            "UPSERT session:`{}` CONTENT {};",
-            session_id, session_json
-        ));
-
-        // 2. Context updates
-        for update in &all_updates {
-            let update_record = ContextUpdateRecord {
-                update_id: update.id.to_string(),
-                session_id: session_id.to_string(),
-                timestamp: update.timestamp.to_rfc3339(),
-                update_type: format!("{:?}", update.update_type),
-                update_data: serde_json::to_value(update)?,
-            };
-            let record_json = serde_json::to_string(&update_record)?;
-            query_parts.push(format!(
-                "UPSERT context_update:`{}` CONTENT {};",
-                update.id, record_json
-            ));
-        }
-
-        // 3. Entities
-        for entity in &entities {
-            let entity_id = Self::entity_id(session_id, &entity.name);
-            let entity_record = EntityRecord {
-                session_id: session_id.to_string(),
-                name: entity.name.clone(),
-                entity_type: format!("{:?}", entity.entity_type),
-                first_mentioned: entity.first_mentioned.to_rfc3339(),
-                last_mentioned: entity.last_mentioned.to_rfc3339(),
-                mention_count: entity.mention_count,
-                importance_score: entity.importance_score,
-                description: entity.description.clone(),
-            };
-            let record_json = serde_json::to_string(&entity_record)?;
-            query_parts.push(format!(
-                "UPSERT entity:`{}` CONTENT {};",
-                entity_id, record_json
-            ));
-        }
-
-        // 4. Relationships
-        for rel in &relationships {
-            let from_id = Self::entity_id(session_id, &rel.from_entity);
-            let to_id = Self::entity_id(session_id, &rel.to_entity);
-            let table = Self::relation_table_name(&rel.relation_type);
-            let rel_id = Self::relation_id(
-                session_id,
-                &rel.from_entity,
-                &rel.to_entity,
-                &rel.relation_type,
-            );
-            let context_json = serde_json::to_string(&rel.context)?;
-            query_parts.push(format!(
-                "UPSERT {}:`{}` SET in = entity:`{}`, out = entity:`{}`, context = {}, session_id = '{}';",
-                table, rel_id, from_id, to_id, context_json, session_id
-            ));
-        }
-
-        // Execute all statements in a single multi-statement query (1 network round-trip)
-        // No BEGIN/COMMIT — each statement runs in its own implicit transaction,
-        // so individual failures don't cascade.
-        let full_query = query_parts.join(" ");
-
-        debug!(
-            "SurrealDBStorage: Executing batched query - {} statements",
-            query_parts.len()
-        );
-
-        let response = self.db.query(&full_query).await?;
-        // Don't use response.check() — individual statement errors are non-fatal
-        // (matches original behavior where each upsert was independently try/catch'd)
-        if let Err(e) = response.check() {
-            debug!(
-                "SurrealDBStorage: Some statements had errors (non-fatal): {}",
-                e
-            );
-        }
-
-        debug!(
-            "SurrealDBStorage: Session saved (batched) - {} updates, {} entities, {} rels",
-            all_updates.len(),
+        let (n_updates, n_removed, n_entities, n_relations) = (
+            updates.len(),
+            removed.len(),
             entities.len(),
-            relationships.len()
+            relations.len(),
         );
+        let mut response = self
+            .db
+            .query(PERSIST_QUERY)
+            .bind((
+                "session_rid",
+                RecordId::new("session", session_id.to_string()),
+            ))
+            .bind(("session_row", record))
+            .bind(("updates", updates))
+            .bind(("removed", removed))
+            .bind(("entities", entities))
+            .bind(("relations", relations))
+            .bind(("session_id", session_id.to_string()))
+            .await?;
 
+        let errors = response.take_errors();
+        for (index, error) in &errors {
+            warn!(
+                "SurrealDBStorage: save of session {} - statement {} failed: {}",
+                session_id, index, error
+            );
+        }
+        if [STMT_SESSION, STMT_UPDATES, STMT_REMOVED]
+            .iter()
+            .any(|i| errors.contains_key(i))
+        {
+            // State stays unknown: the next save re-reads the stored rows.
+            return Err(anyhow::anyhow!(
+                "Failed to save session {}: {} statement(s) failed",
+                session_id,
+                errors.len()
+            ));
+        }
+        let graph_ok =
+            !errors.contains_key(&STMT_ENTITIES) && !errors.contains_key(&STMT_RELATIONS);
+        *guard = Some(PersistedState {
+            update_ids: current_ids,
+            entities: if graph_ok { entity_fps } else { HashMap::new() },
+            relations: if graph_ok {
+                relation_fps
+            } else {
+                HashMap::new()
+            },
+        });
+
+        debug!(
+            "SurrealDBStorage: Saved session {} - {} update rows written, {} removed, {} entities, {} edges",
+            session_id, n_updates, n_removed, n_entities, n_relations
+        );
         Ok(())
+    }
+
+    /// Remember what `load_session` returned as the stored state.
+    async fn remember_loaded(&self, session: &ActiveSession) {
+        let graph: &SimpleEntityGraph = &session.entity_graph;
+        let session_id = session.id();
+        let state = PersistedState {
+            update_ids: session.incremental_updates.iter().map(|u| u.id).collect(),
+            entities: graph
+                .entities
+                .iter()
+                .map(|(name, e)| (name.clone(), entity_fingerprint(e)))
+                .collect(),
+            relations: graph
+                .get_all_relationships()
+                .iter()
+                .map(|r| {
+                    (
+                        Self::relation_id(
+                            session_id,
+                            &r.from_entity,
+                            &r.to_entity,
+                            &r.relation_type,
+                        ),
+                        relation_fingerprint(r),
+                    )
+                })
+                .collect(),
+        };
+        *self.persisted_slot(session_id).lock().await = Some(state);
+    }
+}
+
+#[async_trait]
+impl Storage for SurrealDBStorage {
+    /// Full save: metadata, every update without a row, and the whole graph.
+    async fn save_session(&self, session: &ActiveSession) -> Result<()> {
+        self.persist(session, Vec::new(), true).await
+    }
+
+    /// Incremental save: metadata, `updates`, any other update without a
+    /// row, and only the entities/edges that changed since the last
+    /// load/save in this process.
+    async fn save_session_with_updates(
+        &self,
+        session: &ActiveSession,
+        session_id: Uuid,
+        updates: Vec<ContextUpdate>,
+    ) -> Result<()> {
+        if session.id() != session_id {
+            return Err(anyhow::anyhow!(
+                "Session id mismatch: blob {} vs updates for {}",
+                session.id(),
+                session_id
+            ));
+        }
+        self.persist(session, updates, false).await
     }
 
     async fn load_session(&self, session_id: Uuid) -> Result<ActiveSession> {
@@ -169,24 +453,24 @@ impl Storage for SurrealDBStorage {
         // Load session metadata
         let record = self.select_session_record(session_id).await?;
 
-        let r = record.ok_or_else(|| anyhow::anyhow!("Session not found"))?;
+        let r = record.ok_or_else(|| session_not_found(session_id))?;
 
         // Load ALL context updates from normalized table (source of truth!)
-        let all_updates = self
-            .load_session_updates(session_id)
-            .await
-            .unwrap_or_default();
-        debug!(
-            "SurrealDBStorage: Loaded {} updates from context_update table",
-            all_updates.len()
-        );
+        let all_updates = self.load_session_updates(session_id).await?;
 
         // Hot context = last 50 updates (same as HotContext::MAX_SIZE)
         let hot_context: Vec<ContextUpdate> =
             all_updates.iter().rev().take(50).rev().cloned().collect();
 
-        // Load entities from native graph table
-        let entities = self.list_entities(session_id).await.unwrap_or_default();
+        // Load entities from native graph table. The graph is derived data:
+        // a failure here degrades the session instead of hiding it.
+        let entities = self.list_entities(session_id).await.unwrap_or_else(|e| {
+            warn!(
+                "SurrealDBStorage: Loading entities of session {} failed: {:#}",
+                session_id, e
+            );
+            Vec::new()
+        });
         let mut entity_graph = SimpleEntityGraph::new();
         for entity in &entities {
             entity_graph.add_or_update_entity(
@@ -201,7 +485,13 @@ impl Storage for SurrealDBStorage {
         let relationships = self
             .load_all_relationships(session_id)
             .await
-            .unwrap_or_default();
+            .unwrap_or_else(|e| {
+                warn!(
+                    "SurrealDBStorage: Loading relationships of session {} failed: {:#}",
+                    session_id, e
+                );
+                Vec::new()
+            });
         for rel in relationships {
             entity_graph.add_relationship(rel);
         }
@@ -239,12 +529,8 @@ impl Storage for SurrealDBStorage {
             session_id,
             r.name,
             r.description,
-            DateTime::parse_from_rfc3339(&r.created_at)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()),
-            DateTime::parse_from_rfc3339(&r.last_updated)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()),
+            parse_rfc3339(&r.created_at),
+            parse_rfc3339(&r.last_updated),
             user_preferences,
             hot_context,
             Vec::new(), // warm_context - compressed from older updates if needed
@@ -256,10 +542,11 @@ impl Storage for SurrealDBStorage {
             entity_graph,
             vectorized_ids,
         );
+        self.remember_loaded(&session).await;
 
         debug!(
             "SurrealDBStorage: Session loaded (normalized) - {} updates, {} entities",
-            session.hot_context.len(),
+            session.incremental_updates.len(),
             entities.len()
         );
         Ok(session)
@@ -268,83 +555,41 @@ impl Storage for SurrealDBStorage {
     async fn delete_session(&self, session_id: Uuid) -> Result<()> {
         debug!("SurrealDBStorage: Deleting session with ID: {}", session_id);
 
-        // Delete session
         // Raw DELETE: a typed delete deserializes the removed row, and rows
         // with NULL name/description (see select_session_record) cannot be.
+        let query = format!(
+            "DELETE type::record('session', $id); \
+             DELETE context_update WHERE session_id = $session_id; \
+             DELETE entity WHERE session_id = $session_id; \
+             DELETE embedding WHERE session_id = $session_id; \
+             DELETE workspace_session WHERE session_id = $session_id; {}",
+            per_relation_table("DELETE {table} WHERE session_id = $session_id;")
+        );
         self.db
-            .query("DELETE type::record('session', $id)")
+            .query(query)
             .bind(("id", session_id.to_string()))
+            .bind(("session_id", session_id.to_string()))
             .await?
             .check()?;
-
-        // Delete all context updates for this session
-        self.db
-            .query("DELETE context_update WHERE session_id = $session_id")
-            .bind(("session_id", session_id.to_string()))
-            .await?;
-
-        // Delete all entities for this session
-        self.db
-            .query("DELETE entity WHERE session_id = $session_id")
-            .bind(("session_id", session_id.to_string()))
-            .await?;
-
-        // Delete all embeddings for this session
-        self.db
-            .query("DELETE embedding WHERE session_id = $session_id")
-            .bind(("session_id", session_id.to_string()))
-            .await?;
-
-        // Delete all relations for this session
-        for table in [
-            "required_by",
-            "leads_to",
-            "related_to",
-            "conflicts_with",
-            "depends_on",
-            "implements",
-            "caused_by",
-            "solves",
-        ] {
-            self.db
-                .query(format!("DELETE {} WHERE session_id = $session_id", table))
-                .bind(("session_id", session_id.to_string()))
-                .await?;
-        }
+        self.persisted.remove(&session_id);
 
         debug!("SurrealDBStorage: Session deleted successfully");
-
         Ok(())
     }
 
     async fn clear_session_entities(&self, session_id: Uuid) -> Result<()> {
-        debug!(
-            "SurrealDBStorage: Clearing all entities and relationships for session {}",
-            session_id
+        let query = format!(
+            "DELETE entity WHERE session_id = $session_id; {}",
+            per_relation_table("DELETE {table} WHERE session_id = $session_id;")
         );
-
         self.db
-            .query("DELETE entity WHERE session_id = $session_id")
+            .query(query)
             .bind(("session_id", session_id.to_string()))
-            .await?;
+            .await?
+            .check()?;
+        self.forget_graph_state(session_id).await;
 
-        for table in [
-            "required_by",
-            "leads_to",
-            "related_to",
-            "conflicts_with",
-            "depends_on",
-            "implements",
-            "caused_by",
-            "solves",
-        ] {
-            self.db
-                .query(format!("DELETE {} WHERE session_id = $session_id", table))
-                .bind(("session_id", session_id.to_string()))
-                .await?;
-        }
-
-        info!(
+        debug!(
             "SurrealDBStorage: Cleared entities and relationships for session {}",
             session_id
         );
@@ -372,6 +617,38 @@ impl Storage for SurrealDBStorage {
         Ok(sessions)
     }
 
+    /// Session rows plus per-session update counts, in one query.
+    async fn list_session_summaries(&self) -> Result<Vec<SessionSummary>> {
+        let mut response = self
+            .db
+            .query(
+                "SELECT session_id, (name ?? NONE) AS name, \
+                 (description ?? NONE) AS description, created_at, last_updated \
+                 FROM session; \
+                 SELECT session_id, count() AS n FROM context_update GROUP BY session_id;",
+            )
+            .await?;
+        let rows: Vec<SessionSummaryRow> = response.take(0)?;
+        let counts: Vec<UpdateCountRow> = response.take(1)?;
+        let counts: HashMap<String, i64> =
+            counts.into_iter().map(|c| (c.session_id, c.n)).collect();
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let id = Uuid::parse_str(&row.session_id).ok()?;
+                Some(SessionSummary {
+                    id,
+                    update_count: counts.get(&row.session_id).copied().unwrap_or(0).max(0) as usize,
+                    name: row.name,
+                    description: row.description,
+                    created_at: parse_rfc3339(&row.created_at),
+                    last_updated: parse_rfc3339(&row.last_updated),
+                })
+            })
+            .collect())
+    }
+
     async fn session_exists(&self, session_id: Uuid) -> Result<bool> {
         Ok(self.select_session_record(session_id).await?.is_some())
     }
@@ -385,44 +662,24 @@ impl Storage for SurrealDBStorage {
             return Ok(());
         }
 
-        debug!(
-            "SurrealDBStorage: Batch saving {} updates for session {} (single transaction)",
-            updates.len(),
-            session_id
-        );
-
-        // Build all upserts into a single transaction
-        let mut query_parts: Vec<String> = Vec::with_capacity(updates.len());
-
-        for update in &updates {
-            let record = ContextUpdateRecord {
-                update_id: update.id.to_string(),
-                session_id: session_id.to_string(),
-                timestamp: update.timestamp.to_rfc3339(),
-                update_type: format!("{:?}", update.update_type),
-                update_data: serde_json::to_value(update)?,
-            };
-            let record_json = serde_json::to_string(&record)?;
-            query_parts.push(format!(
-                "UPSERT context_update:`{}` CONTENT {};",
-                update.id, record_json
-            ));
-        }
-
-        let full_query = query_parts.join(" ");
-        let response = self.db.query(&full_query).await?;
-        if let Err(e) = response.check() {
-            debug!(
-                "SurrealDBStorage: Some batch_save statements had errors (non-fatal): {}",
-                e
-            );
-        }
+        let records = updates
+            .iter()
+            .map(|u| update_record(session_id, u))
+            .collect::<Result<Vec<_>>>()?;
+        let count = records.len();
+        self.db
+            .query(
+                "FOR $u IN $updates { \
+                 UPSERT type::record('context_update', $u.update_id) CONTENT $u; };",
+            )
+            .bind(("updates", records))
+            .await?
+            .check()?;
 
         debug!(
-            "SurrealDBStorage: Batch save completed - {} updates in 1 query",
-            updates.len()
+            "SurrealDBStorage: Batch saved {} updates for session {} in 1 query",
+            count, session_id
         );
-
         Ok(())
     }
 
@@ -431,19 +688,19 @@ impl Storage for SurrealDBStorage {
             "SurrealDBStorage: Loading updates for session {}",
             session_id
         );
-        info!(
-            "SurrealDBStorage: Fetching updates for session {}...",
-            session_id
-        );
 
         let mut updates = Vec::new();
         let mut start = 0;
         let limit = 1000;
 
         loop {
+            // `update_id` breaks timestamp ties so pages are stable.
             let mut response = self
                 .db
-                .query("SELECT * FROM context_update WHERE session_id = $session_id ORDER BY timestamp LIMIT $limit START $start")
+                .query(
+                    "SELECT * FROM context_update WHERE session_id = $session_id \
+                     ORDER BY timestamp ASC, update_id ASC LIMIT $limit START $start",
+                )
                 .bind(("session_id", session_id.to_string()))
                 .bind(("limit", limit))
                 .bind(("start", start))
@@ -452,23 +709,15 @@ impl Storage for SurrealDBStorage {
             let records: Vec<ContextUpdateRecord> = response.take(0)?;
             let count = records.len();
 
-            if count == 0 {
-                break;
-            }
-
             // Parse update_data JSON back to ContextUpdate
             for r in records {
-                if let Ok(update) = serde_json::from_value(r.update_data) {
-                    updates.push(update);
+                match serde_json::from_value(r.update_data) {
+                    Ok(update) => updates.push(update),
+                    Err(e) => warn!(
+                        "SurrealDBStorage: Skipping undecodable update {} of session {}: {}",
+                        r.update_id, session_id, e
+                    ),
                 }
-            }
-
-            if updates.len() % 1000 == 0 {
-                info!(
-                    "SurrealDBStorage: Loaded {} updates for session {}...",
-                    updates.len(),
-                    session_id
-                );
             }
 
             if count < limit {
@@ -529,9 +778,7 @@ impl Storage for SurrealDBStorage {
                 let checkpoint = SessionCheckpoint {
                     id: Uuid::parse_str(&r.checkpoint_id)?,
                     session_id: Uuid::parse_str(&r.session_id)?,
-                    created_at: DateTime::parse_from_rfc3339(&r.created_at)
-                        .map(|dt| dt.with_timezone(&Utc))
-                        .unwrap_or_else(|_| Utc::now()),
+                    created_at: parse_rfc3339(&r.created_at),
                     structured_context: serde_json::from_value(r.structured_context)?,
                     recent_updates: serde_json::from_value(r.recent_updates)?,
                     code_references: serde_json::from_value(r.code_references)?,
@@ -557,9 +804,7 @@ impl Storage for SurrealDBStorage {
                 Some(SessionCheckpoint {
                     id: Uuid::parse_str(&r.checkpoint_id).ok()?,
                     session_id: Uuid::parse_str(&r.session_id).ok()?,
-                    created_at: DateTime::parse_from_rfc3339(&r.created_at)
-                        .map(|dt| dt.with_timezone(&Utc))
-                        .unwrap_or_else(|_| Utc::now()),
+                    created_at: parse_rfc3339(&r.created_at),
                     structured_context: serde_json::from_value(r.structured_context).ok()?,
                     recent_updates: serde_json::from_value(r.recent_updates).ok()?,
                     code_references: serde_json::from_value(r.code_references).ok()?,
@@ -576,6 +821,7 @@ impl Storage for SurrealDBStorage {
         Ok(checkpoints)
     }
 
+    /// Workspace row and all memberships in one query.
     async fn save_workspace_metadata(
         &self,
         workspace_id: Uuid,
@@ -588,7 +834,7 @@ impl Storage for SurrealDBStorage {
             name, workspace_id
         );
 
-        let created_at = std::time::SystemTime::now()
+        let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
@@ -597,20 +843,32 @@ impl Storage for SurrealDBStorage {
             workspace_id: workspace_id.to_string(),
             name: name.to_string(),
             description: description.to_string(),
-            created_at,
+            created_at: now,
         };
+        let members: Vec<KeyedMembership> = session_ids
+            .iter()
+            .map(|session_id| KeyedMembership {
+                key: format!("{}_{}", workspace_id, session_id),
+                record: WorkspaceSessionRecord {
+                    workspace_id: workspace_id.to_string(),
+                    session_id: session_id.to_string(),
+                    role: format!("{:?}", SessionRole::Primary),
+                    added_at: now,
+                },
+            })
+            .collect();
 
-        let _: Option<WorkspaceRecord> = self
-            .db
-            .upsert(("workspace", workspace_id.to_string()))
-            .content(record)
-            .await?;
-
-        // Add session associations
-        for session_id in session_ids {
-            self.add_session_to_workspace(workspace_id, *session_id, SessionRole::Primary)
-                .await?;
-        }
+        self.db
+            .query(
+                "UPSERT type::record('workspace', $workspace_id) CONTENT $record; \
+                 FOR $m IN $members { \
+                 UPSERT type::record('workspace_session', $m.key) CONTENT $m.record; };",
+            )
+            .bind(("workspace_id", workspace_id.to_string()))
+            .bind(("record", record))
+            .bind(("members", members))
+            .await?
+            .check()?;
 
         debug!("SurrealDBStorage: Workspace saved successfully");
 
@@ -620,65 +878,64 @@ impl Storage for SurrealDBStorage {
     async fn delete_workspace(&self, workspace_id: Uuid) -> Result<()> {
         debug!("SurrealDBStorage: Deleting workspace {}", workspace_id);
 
-        // Delete workspace
-        let _: Option<WorkspaceRecord> = self
-            .db
-            .delete(("workspace", workspace_id.to_string()))
-            .await?;
-
-        // Delete all workspace-session associations
         self.db
-            .query("DELETE workspace_session WHERE workspace_id = $workspace_id")
+            .query(
+                "DELETE type::record('workspace', $workspace_id); \
+                 DELETE workspace_session WHERE workspace_id = $workspace_id;",
+            )
             .bind(("workspace_id", workspace_id.to_string()))
-            .await?;
+            .await?
+            .check()?;
 
         debug!("SurrealDBStorage: Workspace deleted successfully");
 
         Ok(())
     }
 
+    /// Workspaces and memberships in one query.
     async fn list_workspaces(&self) -> Result<Vec<StoredWorkspace>> {
         debug!("SurrealDBStorage: Listing workspaces");
 
-        let records: Vec<WorkspaceRecord> = self.select_all("workspace").await?;
+        let mut response = self
+            .db
+            .query("SELECT * FROM workspace; SELECT * FROM workspace_session;")
+            .await?;
+        let records: Vec<WorkspaceRecord> = response.take(0)?;
+        let memberships: Vec<WorkspaceSessionRecord> = response.take(1)?;
 
-        let mut workspaces = Vec::new();
-        for record in records {
-            if let Ok(workspace_id) = Uuid::parse_str(&record.workspace_id) {
-                // Get sessions for this workspace
-                let mut response = self
-                    .db
-                    .query("SELECT * FROM workspace_session WHERE workspace_id = $workspace_id")
-                    .bind(("workspace_id", record.workspace_id.clone()))
-                    .await?;
+        let mut sessions_by_workspace: HashMap<String, Vec<(Uuid, SessionRole)>> = HashMap::new();
+        for m in memberships {
+            let Ok(session_id) = Uuid::parse_str(&m.session_id) else {
+                continue;
+            };
+            let role = match m.role.as_str() {
+                "Primary" => SessionRole::Primary,
+                "Related" => SessionRole::Related,
+                "Dependency" => SessionRole::Dependency,
+                "Shared" => SessionRole::Shared,
+                _ => SessionRole::Primary,
+            };
+            sessions_by_workspace
+                .entry(m.workspace_id)
+                .or_default()
+                .push((session_id, role));
+        }
 
-                let session_records: Vec<WorkspaceSessionRecord> = response.take(0)?;
-
-                let sessions: Vec<(Uuid, SessionRole)> = session_records
-                    .into_iter()
-                    .filter_map(|s| {
-                        Uuid::parse_str(&s.session_id).ok().map(|id| {
-                            let role = match s.role.as_str() {
-                                "Primary" => SessionRole::Primary,
-                                "Related" => SessionRole::Related,
-                                "Dependency" => SessionRole::Dependency,
-                                "Shared" => SessionRole::Shared,
-                                _ => SessionRole::Primary,
-                            };
-                            (id, role)
-                        })
-                    })
-                    .collect();
-
-                workspaces.push(StoredWorkspace {
-                    id: workspace_id,
+        let workspaces: Vec<StoredWorkspace> = records
+            .into_iter()
+            .filter_map(|record| {
+                let id = Uuid::parse_str(&record.workspace_id).ok()?;
+                Some(StoredWorkspace {
+                    id,
+                    sessions: sessions_by_workspace
+                        .remove(&record.workspace_id)
+                        .unwrap_or_default(),
                     name: record.name,
                     description: record.description,
-                    sessions,
                     created_at: record.created_at,
-                });
-            }
-        }
+                })
+            })
+            .collect();
 
         debug!("SurrealDBStorage: Listed {} workspaces", workspaces.len());
 
