@@ -240,14 +240,41 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
         _ = tokio::signal::ctrl_c() => {
             info!("Received Ctrl+C, initiating shutdown");
         }
+        _ = terminate_signal() => {
+            info!("Received SIGTERM, initiating shutdown");
+        }
         _ = ct.cancelled() => {
             info!("Service cancelled");
         }
     }
 
     ct.cancel();
+    // Session persists run in the background; write them before exiting,
+    // or the last updates of every session would be lost with the process.
+    memory_system
+        .flush_all(std::time::Duration::from_secs(30))
+        .await;
     info!("Post-Cortex daemon stopped");
     Ok(())
+}
+
+/// Resolves on SIGTERM (what launchd, systemd and `kill` send); never on
+/// platforms without it.
+async fn terminate_signal() {
+    #[cfg(unix)]
+    {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut term) => {
+                term.recv().await;
+            }
+            Err(e) => {
+                warn!("Cannot listen for SIGTERM: {}", e);
+                std::future::pending::<()>().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    std::future::pending::<()>().await;
 }
 
 // ============================================================================
