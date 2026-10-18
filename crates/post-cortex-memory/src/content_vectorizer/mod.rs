@@ -28,3 +28,6 @@ pub mod vectorizer;
 
 pub use types::{ContentType, ContentVectorizerConfig, SearchOptions, SemanticSearchResult};
 pub use vectorizer::ContentVectorizer;
+
+#[cfg(test)]
+mod tests;
