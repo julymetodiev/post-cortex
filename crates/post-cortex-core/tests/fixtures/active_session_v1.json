@@ -1,0 +1,1051 @@
+{
+  "id": "00000000-0000-0000-0000-00000000abcd",
+  "name": "fixture",
+  "description": "desc",
+  "created_at": "2024-12-31T00:00:00Z",
+  "last_updated": "2026-10-18T12:27:45.365050Z",
+  "user_preferences": {
+    "auto_save_enabled": true,
+    "context_retention_days": 30,
+    "max_hot_context_size": 4,
+    "auto_summary_threshold": 3,
+    "important_keywords": [
+      "rust"
+    ]
+  },
+  "hot_context": [
+    {
+      "id": "00000000-0000-0000-0000-000000001003",
+      "timestamp": "2025-01-01T00:00:03Z",
+      "update_type": "DecisionMade",
+      "content": {
+        "title": "title 3",
+        "description": "description 3",
+        "details": [
+          "detail 3"
+        ],
+        "examples": [
+          "example 3"
+        ],
+        "implications": [
+          "implication 3"
+        ]
+      },
+      "related_code": null,
+      "parent_update": null,
+      "user_marked_important": true,
+      "creates_entities": [
+        "entity3"
+      ],
+      "creates_relationships": [
+        {
+          "from_entity": "entity3",
+          "to_entity": "hub",
+          "relation_type": "DependsOn",
+          "context": "ctx 3"
+        }
+      ],
+      "references_entities": [],
+      "typed_entities": [
+        {
+          "name": "typed3",
+          "entity_type": "Technology"
+        }
+      ]
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000001004",
+      "timestamp": "2025-01-01T00:00:04Z",
+      "update_type": "ConceptDefined",
+      "content": {
+        "title": "title 4",
+        "description": "description 4",
+        "details": [
+          "detail 4"
+        ],
+        "examples": [
+          "example 4"
+        ],
+        "implications": [
+          "implication 4"
+        ]
+      },
+      "related_code": {
+        "file_path": "src/file0.rs",
+        "start_line": 4,
+        "end_line": 7,
+        "code_snippet": "fn f4() {}",
+        "commit_hash": "abc",
+        "branch": null,
+        "change_description": "change 4"
+      },
+      "parent_update": null,
+      "user_marked_important": false,
+      "creates_entities": [
+        "entity4"
+      ],
+      "creates_relationships": [
+        {
+          "from_entity": "entity4",
+          "to_entity": "hub",
+          "relation_type": "DependsOn",
+          "context": "ctx 4"
+        }
+      ],
+      "references_entities": [],
+      "typed_entities": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000001005",
+      "timestamp": "2025-01-01T00:00:05Z",
+      "update_type": "RequirementAdded",
+      "content": {
+        "title": "title 5",
+        "description": "description 5",
+        "details": [
+          "detail 5"
+        ],
+        "examples": [
+          "example 5"
+        ],
+        "implications": [
+          "implication 5"
+        ]
+      },
+      "related_code": null,
+      "parent_update": null,
+      "user_marked_important": false,
+      "creates_entities": [
+        "entity5"
+      ],
+      "creates_relationships": [
+        {
+          "from_entity": "entity5",
+          "to_entity": "hub",
+          "relation_type": "DependsOn",
+          "context": "ctx 5"
+        }
+      ],
+      "references_entities": [],
+      "typed_entities": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000001006",
+      "timestamp": "2025-01-01T00:00:06Z",
+      "update_type": "QuestionAnswered",
+      "content": {
+        "title": "title 6",
+        "description": "description 6",
+        "details": [
+          "detail 6"
+        ],
+        "examples": [
+          "example 6"
+        ],
+        "implications": [
+          "implication 6"
+        ]
+      },
+      "related_code": {
+        "file_path": "src/file2.rs",
+        "start_line": 6,
+        "end_line": 9,
+        "code_snippet": "fn f6() {}",
+        "commit_hash": "abc",
+        "branch": null,
+        "change_description": "change 6"
+      },
+      "parent_update": null,
+      "user_marked_important": false,
+      "creates_entities": [
+        "entity6"
+      ],
+      "creates_relationships": [
+        {
+          "from_entity": "entity6",
+          "to_entity": "hub",
+          "relation_type": "DependsOn",
+          "context": "ctx 6"
+        }
+      ],
+      "references_entities": [],
+      "typed_entities": [
+        {
+          "name": "typed6",
+          "entity_type": "Technology"
+        }
+      ]
+    }
+  ],
+  "warm_context": [],
+  "cold_context": [
+    {
+      "summary_id": "9f9784c7-ac4c-4806-80da-e3170bf9b67c",
+      "created_at": "2026-10-18T12:27:45.364996Z",
+      "context_snapshot": {
+        "key_decisions": [
+          {
+            "description": "title 3",
+            "context": "description 3",
+            "alternatives": [
+              "detail 3"
+            ],
+            "confidence": 1.0,
+            "timestamp": "2025-01-01T00:00:03Z"
+          }
+        ],
+        "open_questions": [
+          {
+            "question": "title 0",
+            "context": "description 0",
+            "status": "Answered",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "last_updated": "2025-01-01T00:00:00Z"
+          }
+        ],
+        "key_concepts": [],
+        "technical_specifications": [],
+        "conversation_flow": [
+          {
+            "step_description": "Q&A: title 0",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "related_updates": [
+              "00000000-0000-0000-0000-000000001000"
+            ],
+            "outcome": "description 0"
+          },
+          {
+            "step_description": "Problem Solved: title 1",
+            "timestamp": "2025-01-01T00:00:01Z",
+            "related_updates": [
+              "00000000-0000-0000-0000-000000001001"
+            ],
+            "outcome": "description 1"
+          },
+          {
+            "step_description": "Code Change: title 2",
+            "timestamp": "2025-01-01T00:00:02Z",
+            "related_updates": [
+              "00000000-0000-0000-0000-000000001002"
+            ],
+            "outcome": "description 2"
+          },
+          {
+            "step_description": "Decision Made: title 3",
+            "timestamp": "2025-01-01T00:00:03Z",
+            "related_updates": [
+              "00000000-0000-0000-0000-000000001003"
+            ],
+            "outcome": "description 3"
+          }
+        ]
+      },
+      "referenced_updates": [
+        "00000000-0000-0000-0000-000000001000",
+        "00000000-0000-0000-0000-000000001001",
+        "00000000-0000-0000-0000-000000001002"
+      ],
+      "summary_quality": 1.0
+    },
+    {
+      "summary_id": "bb7b00c1-e6c7-4b95-a9cc-d4a8cf046b5c",
+      "created_at": "2026-10-18T12:27:45.365047Z",
+      "context_snapshot": {
+        "key_decisions": [
+          {
+            "description": "title 3",
+            "context": "description 3",
+            "alternatives": [
+              "detail 3"
+            ],
+            "confidence": 1.0,
+            "timestamp": "2025-01-01T00:00:03Z"
+          }
+        ],
+        "open_questions": [
+          {
+            "question": "title 0",
+            "context": "description 0",
+            "status": "Answered",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "last_updated": "2025-01-01T00:00:00Z"
+          },
+          {
+            "question": "title 6",
+            "context": "description 6",
+            "status": "Answered",
+            "timestamp": "2025-01-01T00:00:06Z",
+            "last_updated": "2025-01-01T00:00:06Z"
+          }
+        ],
+        "key_concepts": [
+          {
+            "name": "title 4",
+            "definition": "description 4",
+            "examples": [
+              "example 4"
+            ],
+            "related_concepts": [
+              "detail 4"
+            ],
+            "timestamp": "2025-01-01T00:00:04Z"
+          }
+        ],
+        "technical_specifications": [
+          {
+            "title": "title 5",
+            "description": "description 5",
+            "requirements": [
+              "detail 5"
+            ],
+            "constraints": [
+              "implication 5"
+            ],
+            "timestamp": "2025-01-01T00:00:05Z"
+          }
+        ],
+        "conversation_flow": [
+          {
+            "step_description": "Q&A: title 0",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "related_updates": [
+              "00000000-0000-0000-0000-000000001000"
+            ],
+            "outcome": "description 0"
+          },
+          {
+            "step_description": "Problem Solved: title 1",
+            "timestamp": "2025-01-01T00:00:01Z",
+            "related_updates": [
+              "00000000-0000-0000-0000-000000001001"
+            ],
+            "outcome": "description 1"
+          },
+          {
+            "step_description": "Code Change: title 2",
+            "timestamp": "2025-01-01T00:00:02Z",
+            "related_updates": [
+              "00000000-0000-0000-0000-000000001002"
+            ],
+            "outcome": "description 2"
+          },
+          {
+            "step_description": "Decision Made: title 3",
+            "timestamp": "2025-01-01T00:00:03Z",
+            "related_updates": [
+              "00000000-0000-0000-0000-000000001003"
+            ],
+            "outcome": "description 3"
+          },
+          {
+            "step_description": "Concept Defined: title 4",
+            "timestamp": "2025-01-01T00:00:04Z",
+            "related_updates": [
+              "00000000-0000-0000-0000-000000001004"
+            ],
+            "outcome": "description 4"
+          },
+          {
+            "step_description": "Requirement Added: title 5",
+            "timestamp": "2025-01-01T00:00:05Z",
+            "related_updates": [
+              "00000000-0000-0000-0000-000000001005"
+            ],
+            "outcome": "description 5"
+          },
+          {
+            "step_description": "Q&A: title 6",
+            "timestamp": "2025-01-01T00:00:06Z",
+            "related_updates": [
+              "00000000-0000-0000-0000-000000001006"
+            ],
+            "outcome": "description 6"
+          }
+        ]
+      },
+      "referenced_updates": [
+        "00000000-0000-0000-0000-000000001000",
+        "00000000-0000-0000-0000-000000001001",
+        "00000000-0000-0000-0000-000000001002",
+        "00000000-0000-0000-0000-000000001003",
+        "00000000-0000-0000-0000-000000001004",
+        "00000000-0000-0000-0000-000000001005"
+      ],
+      "summary_quality": 1.0
+    }
+  ],
+  "current_state": {
+    "key_decisions": [
+      {
+        "description": "title 3",
+        "context": "description 3",
+        "alternatives": [
+          "detail 3"
+        ],
+        "confidence": 1.0,
+        "timestamp": "2025-01-01T00:00:03Z"
+      }
+    ],
+    "open_questions": [
+      {
+        "question": "title 0",
+        "context": "description 0",
+        "status": "Answered",
+        "timestamp": "2025-01-01T00:00:00Z",
+        "last_updated": "2025-01-01T00:00:00Z"
+      },
+      {
+        "question": "title 6",
+        "context": "description 6",
+        "status": "Answered",
+        "timestamp": "2025-01-01T00:00:06Z",
+        "last_updated": "2025-01-01T00:00:06Z"
+      }
+    ],
+    "key_concepts": [
+      {
+        "name": "title 4",
+        "definition": "description 4",
+        "examples": [
+          "example 4"
+        ],
+        "related_concepts": [
+          "detail 4"
+        ],
+        "timestamp": "2025-01-01T00:00:04Z"
+      }
+    ],
+    "technical_specifications": [
+      {
+        "title": "title 5",
+        "description": "description 5",
+        "requirements": [
+          "detail 5"
+        ],
+        "constraints": [
+          "implication 5"
+        ],
+        "timestamp": "2025-01-01T00:00:05Z"
+      }
+    ],
+    "conversation_flow": [
+      {
+        "step_description": "Q&A: title 0",
+        "timestamp": "2025-01-01T00:00:00Z",
+        "related_updates": [
+          "00000000-0000-0000-0000-000000001000"
+        ],
+        "outcome": "description 0"
+      },
+      {
+        "step_description": "Problem Solved: title 1",
+        "timestamp": "2025-01-01T00:00:01Z",
+        "related_updates": [
+          "00000000-0000-0000-0000-000000001001"
+        ],
+        "outcome": "description 1"
+      },
+      {
+        "step_description": "Code Change: title 2",
+        "timestamp": "2025-01-01T00:00:02Z",
+        "related_updates": [
+          "00000000-0000-0000-0000-000000001002"
+        ],
+        "outcome": "description 2"
+      },
+      {
+        "step_description": "Decision Made: title 3",
+        "timestamp": "2025-01-01T00:00:03Z",
+        "related_updates": [
+          "00000000-0000-0000-0000-000000001003"
+        ],
+        "outcome": "description 3"
+      },
+      {
+        "step_description": "Concept Defined: title 4",
+        "timestamp": "2025-01-01T00:00:04Z",
+        "related_updates": [
+          "00000000-0000-0000-0000-000000001004"
+        ],
+        "outcome": "description 4"
+      },
+      {
+        "step_description": "Requirement Added: title 5",
+        "timestamp": "2025-01-01T00:00:05Z",
+        "related_updates": [
+          "00000000-0000-0000-0000-000000001005"
+        ],
+        "outcome": "description 5"
+      },
+      {
+        "step_description": "Q&A: title 6",
+        "timestamp": "2025-01-01T00:00:06Z",
+        "related_updates": [
+          "00000000-0000-0000-0000-000000001006"
+        ],
+        "outcome": "description 6"
+      }
+    ]
+  },
+  "incremental_updates": [
+    {
+      "id": "00000000-0000-0000-0000-000000001000",
+      "timestamp": "2025-01-01T00:00:00Z",
+      "update_type": "QuestionAnswered",
+      "content": {
+        "title": "title 0",
+        "description": "description 0",
+        "details": [
+          "detail 0"
+        ],
+        "examples": [
+          "example 0"
+        ],
+        "implications": [
+          "implication 0"
+        ]
+      },
+      "related_code": {
+        "file_path": "src/file0.rs",
+        "start_line": 0,
+        "end_line": 3,
+        "code_snippet": "fn f0() {}",
+        "commit_hash": "abc",
+        "branch": null,
+        "change_description": "change 0"
+      },
+      "parent_update": null,
+      "user_marked_important": false,
+      "creates_entities": [
+        "entity0"
+      ],
+      "creates_relationships": [
+        {
+          "from_entity": "entity0",
+          "to_entity": "hub",
+          "relation_type": "DependsOn",
+          "context": "ctx 0"
+        }
+      ],
+      "references_entities": [],
+      "typed_entities": [
+        {
+          "name": "typed0",
+          "entity_type": "Technology"
+        }
+      ]
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000001001",
+      "timestamp": "2025-01-01T00:00:01Z",
+      "update_type": "ProblemSolved",
+      "content": {
+        "title": "title 1",
+        "description": "description 1",
+        "details": [
+          "detail 1"
+        ],
+        "examples": [
+          "example 1"
+        ],
+        "implications": [
+          "implication 1"
+        ]
+      },
+      "related_code": null,
+      "parent_update": null,
+      "user_marked_important": false,
+      "creates_entities": [
+        "entity1"
+      ],
+      "creates_relationships": [
+        {
+          "from_entity": "entity1",
+          "to_entity": "hub",
+          "relation_type": "DependsOn",
+          "context": "ctx 1"
+        }
+      ],
+      "references_entities": [],
+      "typed_entities": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000001002",
+      "timestamp": "2025-01-01T00:00:02Z",
+      "update_type": "CodeChanged",
+      "content": {
+        "title": "title 2",
+        "description": "description 2",
+        "details": [
+          "detail 2"
+        ],
+        "examples": [
+          "example 2"
+        ],
+        "implications": [
+          "implication 2"
+        ]
+      },
+      "related_code": {
+        "file_path": "src/file2.rs",
+        "start_line": 2,
+        "end_line": 5,
+        "code_snippet": "fn f2() {}",
+        "commit_hash": "abc",
+        "branch": null,
+        "change_description": "change 2"
+      },
+      "parent_update": null,
+      "user_marked_important": false,
+      "creates_entities": [
+        "entity2"
+      ],
+      "creates_relationships": [
+        {
+          "from_entity": "entity2",
+          "to_entity": "hub",
+          "relation_type": "DependsOn",
+          "context": "ctx 2"
+        }
+      ],
+      "references_entities": [],
+      "typed_entities": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000001003",
+      "timestamp": "2025-01-01T00:00:03Z",
+      "update_type": "DecisionMade",
+      "content": {
+        "title": "title 3",
+        "description": "description 3",
+        "details": [
+          "detail 3"
+        ],
+        "examples": [
+          "example 3"
+        ],
+        "implications": [
+          "implication 3"
+        ]
+      },
+      "related_code": null,
+      "parent_update": null,
+      "user_marked_important": true,
+      "creates_entities": [
+        "entity3"
+      ],
+      "creates_relationships": [
+        {
+          "from_entity": "entity3",
+          "to_entity": "hub",
+          "relation_type": "DependsOn",
+          "context": "ctx 3"
+        }
+      ],
+      "references_entities": [],
+      "typed_entities": [
+        {
+          "name": "typed3",
+          "entity_type": "Technology"
+        }
+      ]
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000001004",
+      "timestamp": "2025-01-01T00:00:04Z",
+      "update_type": "ConceptDefined",
+      "content": {
+        "title": "title 4",
+        "description": "description 4",
+        "details": [
+          "detail 4"
+        ],
+        "examples": [
+          "example 4"
+        ],
+        "implications": [
+          "implication 4"
+        ]
+      },
+      "related_code": {
+        "file_path": "src/file0.rs",
+        "start_line": 4,
+        "end_line": 7,
+        "code_snippet": "fn f4() {}",
+        "commit_hash": "abc",
+        "branch": null,
+        "change_description": "change 4"
+      },
+      "parent_update": null,
+      "user_marked_important": false,
+      "creates_entities": [
+        "entity4"
+      ],
+      "creates_relationships": [
+        {
+          "from_entity": "entity4",
+          "to_entity": "hub",
+          "relation_type": "DependsOn",
+          "context": "ctx 4"
+        }
+      ],
+      "references_entities": [],
+      "typed_entities": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000001005",
+      "timestamp": "2025-01-01T00:00:05Z",
+      "update_type": "RequirementAdded",
+      "content": {
+        "title": "title 5",
+        "description": "description 5",
+        "details": [
+          "detail 5"
+        ],
+        "examples": [
+          "example 5"
+        ],
+        "implications": [
+          "implication 5"
+        ]
+      },
+      "related_code": null,
+      "parent_update": null,
+      "user_marked_important": false,
+      "creates_entities": [
+        "entity5"
+      ],
+      "creates_relationships": [
+        {
+          "from_entity": "entity5",
+          "to_entity": "hub",
+          "relation_type": "DependsOn",
+          "context": "ctx 5"
+        }
+      ],
+      "references_entities": [],
+      "typed_entities": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000001006",
+      "timestamp": "2025-01-01T00:00:06Z",
+      "update_type": "QuestionAnswered",
+      "content": {
+        "title": "title 6",
+        "description": "description 6",
+        "details": [
+          "detail 6"
+        ],
+        "examples": [
+          "example 6"
+        ],
+        "implications": [
+          "implication 6"
+        ]
+      },
+      "related_code": {
+        "file_path": "src/file2.rs",
+        "start_line": 6,
+        "end_line": 9,
+        "code_snippet": "fn f6() {}",
+        "commit_hash": "abc",
+        "branch": null,
+        "change_description": "change 6"
+      },
+      "parent_update": null,
+      "user_marked_important": false,
+      "creates_entities": [
+        "entity6"
+      ],
+      "creates_relationships": [
+        {
+          "from_entity": "entity6",
+          "to_entity": "hub",
+          "relation_type": "DependsOn",
+          "context": "ctx 6"
+        }
+      ],
+      "references_entities": [],
+      "typed_entities": [
+        {
+          "name": "typed6",
+          "entity_type": "Technology"
+        }
+      ]
+    }
+  ],
+  "code_references": {
+    "src/file0.rs": [
+      {
+        "file_path": "src/file0.rs",
+        "start_line": 0,
+        "end_line": 3,
+        "code_snippet": "fn f0() {}",
+        "commit_hash": "abc",
+        "branch": null,
+        "change_description": "change 0"
+      },
+      {
+        "file_path": "src/file0.rs",
+        "start_line": 4,
+        "end_line": 7,
+        "code_snippet": "fn f4() {}",
+        "commit_hash": "abc",
+        "branch": null,
+        "change_description": "change 4"
+      }
+    ],
+    "src/file2.rs": [
+      {
+        "file_path": "src/file2.rs",
+        "start_line": 2,
+        "end_line": 5,
+        "code_snippet": "fn f2() {}",
+        "commit_hash": "abc",
+        "branch": null,
+        "change_description": "change 2"
+      },
+      {
+        "file_path": "src/file2.rs",
+        "start_line": 6,
+        "end_line": 9,
+        "code_snippet": "fn f6() {}",
+        "commit_hash": "abc",
+        "branch": null,
+        "change_description": "change 6"
+      }
+    ]
+  },
+  "change_history": [
+    {
+      "id": "443fdcbf-9f67-4d87-8b6b-6449289f61e9",
+      "timestamp": "2025-01-01T00:00:00Z",
+      "change_type": "QuestionAnswered",
+      "description": "description 0",
+      "related_update_id": "00000000-0000-0000-0000-000000001000"
+    },
+    {
+      "id": "8f9231bc-1780-4307-8a53-221e4bda0a4f",
+      "timestamp": "2025-01-01T00:00:01Z",
+      "change_type": "ProblemSolved",
+      "description": "description 1",
+      "related_update_id": "00000000-0000-0000-0000-000000001001"
+    },
+    {
+      "id": "51b20a34-6143-4a83-8440-30754847bc5f",
+      "timestamp": "2025-01-01T00:00:02Z",
+      "change_type": "CodeChanged",
+      "description": "description 2",
+      "related_update_id": "00000000-0000-0000-0000-000000001002"
+    },
+    {
+      "id": "40111a3d-d899-4d52-8a28-791b4aec19e6",
+      "timestamp": "2025-01-01T00:00:03Z",
+      "change_type": "DecisionMade",
+      "description": "description 3",
+      "related_update_id": "00000000-0000-0000-0000-000000001003"
+    },
+    {
+      "id": "4edbb96f-ca53-41e8-84e2-60d3a50c566e",
+      "timestamp": "2025-01-01T00:00:04Z",
+      "change_type": "ConceptDefined",
+      "description": "description 4",
+      "related_update_id": "00000000-0000-0000-0000-000000001004"
+    },
+    {
+      "id": "33850752-25d4-4ad5-8c5a-ee800f198b8d",
+      "timestamp": "2025-01-01T00:00:05Z",
+      "change_type": "RequirementAdded",
+      "description": "description 5",
+      "related_update_id": "00000000-0000-0000-0000-000000001005"
+    },
+    {
+      "id": "1695bd35-1bc5-4c03-a301-3956ec20afe2",
+      "timestamp": "2025-01-01T00:00:06Z",
+      "change_type": "QuestionAnswered",
+      "description": "description 6",
+      "related_update_id": "00000000-0000-0000-0000-000000001006"
+    }
+  ],
+  "entity_graph": {
+    "entities": {
+      "entity0": {
+        "name": "entity0",
+        "entity_type": "Concept",
+        "first_mentioned": "2026-10-18T12:27:45.364928Z",
+        "last_mentioned": "2026-10-18T12:27:45.364928Z",
+        "mention_count": 1,
+        "importance_score": 1.0,
+        "description": null
+      },
+      "entity1": {
+        "name": "entity1",
+        "entity_type": "Concept",
+        "first_mentioned": "2025-01-01T00:00:01Z",
+        "last_mentioned": "2025-01-01T00:00:01Z",
+        "mention_count": 1,
+        "importance_score": 1.0,
+        "description": "From update: title 1"
+      },
+      "entity2": {
+        "name": "entity2",
+        "entity_type": "Concept",
+        "first_mentioned": "2025-01-01T00:00:02Z",
+        "last_mentioned": "2025-01-01T00:00:02Z",
+        "mention_count": 1,
+        "importance_score": 1.0,
+        "description": "From update: title 2"
+      },
+      "entity3": {
+        "name": "entity3",
+        "entity_type": "Concept",
+        "first_mentioned": "2026-10-18T12:27:45.364992Z",
+        "last_mentioned": "2026-10-18T12:27:45.364992Z",
+        "mention_count": 1,
+        "importance_score": 1.0,
+        "description": null
+      },
+      "entity4": {
+        "name": "entity4",
+        "entity_type": "Concept",
+        "first_mentioned": "2025-01-01T00:00:04Z",
+        "last_mentioned": "2025-01-01T00:00:04Z",
+        "mention_count": 1,
+        "importance_score": 1.0,
+        "description": "From update: title 4"
+      },
+      "entity5": {
+        "name": "entity5",
+        "entity_type": "Concept",
+        "first_mentioned": "2025-01-01T00:00:05Z",
+        "last_mentioned": "2025-01-01T00:00:05Z",
+        "mention_count": 1,
+        "importance_score": 1.0,
+        "description": "From update: title 5"
+      },
+      "entity6": {
+        "name": "entity6",
+        "entity_type": "Concept",
+        "first_mentioned": "2026-10-18T12:27:45.365041Z",
+        "last_mentioned": "2026-10-18T12:27:45.365041Z",
+        "mention_count": 1,
+        "importance_score": 1.0,
+        "description": null
+      },
+      "hub": {
+        "name": "hub",
+        "entity_type": "Concept",
+        "first_mentioned": "2026-10-18T12:27:45.364928Z",
+        "last_mentioned": "2026-10-18T12:27:45.364928Z",
+        "mention_count": 1,
+        "importance_score": 1.0,
+        "description": null
+      },
+      "typed0": {
+        "name": "typed0",
+        "entity_type": "Technology",
+        "first_mentioned": "2025-01-01T00:00:00Z",
+        "last_mentioned": "2025-01-01T00:00:00Z",
+        "mention_count": 1,
+        "importance_score": 1.0,
+        "description": "Provided by caller: title 0"
+      },
+      "typed3": {
+        "name": "typed3",
+        "entity_type": "Technology",
+        "first_mentioned": "2025-01-01T00:00:03Z",
+        "last_mentioned": "2025-01-01T00:00:03Z",
+        "mention_count": 1,
+        "importance_score": 1.0,
+        "description": "Provided by caller: title 3"
+      },
+      "typed6": {
+        "name": "typed6",
+        "entity_type": "Technology",
+        "first_mentioned": "2025-01-01T00:00:06Z",
+        "last_mentioned": "2025-01-01T00:00:06Z",
+        "mention_count": 1,
+        "importance_score": 1.0,
+        "description": "Provided by caller: title 6"
+      }
+    },
+    "entity_mentions": {},
+    "graph": {
+      "nodes": [
+        "entity0",
+        "entity1",
+        "entity2",
+        "entity3",
+        "entity4",
+        "entity5",
+        "entity6",
+        "hub",
+        "typed0",
+        "typed3",
+        "typed6"
+      ],
+      "edges": [
+        [
+          "entity0",
+          "hub",
+          {
+            "relation_type": "DependsOn",
+            "context": "ctx 0"
+          }
+        ],
+        [
+          "entity1",
+          "hub",
+          {
+            "relation_type": "DependsOn",
+            "context": "ctx 1"
+          }
+        ],
+        [
+          "entity2",
+          "hub",
+          {
+            "relation_type": "DependsOn",
+            "context": "ctx 2"
+          }
+        ],
+        [
+          "entity3",
+          "hub",
+          {
+            "relation_type": "DependsOn",
+            "context": "ctx 3"
+          }
+        ],
+        [
+          "entity4",
+          "hub",
+          {
+            "relation_type": "DependsOn",
+            "context": "ctx 4"
+          }
+        ],
+        [
+          "entity5",
+          "hub",
+          {
+            "relation_type": "DependsOn",
+            "context": "ctx 5"
+          }
+        ],
+        [
+          "entity6",
+          "hub",
+          {
+            "relation_type": "DependsOn",
+            "context": "ctx 6"
+          }
+        ]
+      ]
+    }
+  },
+  "vectorized_update_ids": [
+    "00000000-0000-0000-0000-000000001000",
+    "00000000-0000-0000-0000-000000001001"
+  ]
+}

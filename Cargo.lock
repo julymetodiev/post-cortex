@@ -4292,7 +4292,6 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "async-trait",
- "atomic_float",
  "bincode",
  "chrono",
  "criterion",

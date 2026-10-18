@@ -61,13 +61,13 @@ pub async fn load_session_checkpoint_with_system(
     session.current_state = Arc::new(checkpoint.structured_context);
 
     eprintln!("Loading checkpoint - step 6: Restoring incremental updates");
-    session.incremental_updates = Arc::new(checkpoint.recent_updates);
+    session.set_incremental_updates(checkpoint.recent_updates);
 
     eprintln!("Loading checkpoint - step 10: Restoring code references");
     session.code_references = Arc::new(checkpoint.code_references);
 
     eprintln!("Loading checkpoint - step 11: Restoring change history");
-    session.change_history = Arc::new(checkpoint.change_history);
+    session.set_change_history(checkpoint.change_history);
 
     eprintln!("Loading checkpoint - step 12: Entity graph restored");
 
@@ -142,9 +142,9 @@ pub async fn load_session_checkpoint(
 
         let mut session = ActiveSession::new(session_id, None, None);
         session.current_state = Arc::new(checkpoint.structured_context);
-        session.incremental_updates = Arc::new(checkpoint.recent_updates);
+        session.set_incremental_updates(checkpoint.recent_updates);
         session.code_references = Arc::new(checkpoint.code_references);
-        session.change_history = Arc::new(checkpoint.change_history);
+        session.set_change_history(checkpoint.change_history);
 
         system
             .session_manager
@@ -188,7 +188,7 @@ pub async fn mark_important(session_id: Uuid, update_id: String) -> Result<MCPTo
         let updates = Arc::make_mut(&mut updated.incremental_updates);
         for update in updates.iter_mut() {
             if update.id == update_id {
-                update.user_marked_important = true;
+                Arc::make_mut(update).user_marked_important = true;
                 found = true;
                 break;
             }
@@ -465,9 +465,9 @@ async fn create_comprehensive_checkpoint(session: &ActiveSession) -> Result<Sess
         session_id: session.id(),
         created_at: chrono::Utc::now(),
         structured_context: (*session.current_state).clone(),
-        recent_updates: (*session.incremental_updates).clone(),
+        recent_updates: session.incremental_updates_owned(),
         code_references: (*session.code_references).clone(),
-        change_history: (*session.change_history).clone(),
+        change_history: session.change_history_owned(),
         total_updates: session.incremental_updates.len(),
         context_quality_score: 1.0,
         compression_ratio: 1.0,

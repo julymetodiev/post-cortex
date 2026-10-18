@@ -28,8 +28,19 @@ pub use presentation::{
     StructuredSummaryView,
 };
 
+use crate::core::structured_context::{ConceptItem, DecisionItem, QuestionItem};
+use crate::graph::entity_graph::top_k_by;
 use crate::session::active_session::ActiveSession;
 use chrono::Utc;
+
+/// Sorted top `limit` of `items` (all of them, sorted, when `limit` is None).
+fn top_k<T>(
+    items: Vec<T>,
+    limit: Option<usize>,
+    cmp: impl FnMut(&T, &T) -> std::cmp::Ordering,
+) -> Vec<T> {
+    top_k_by(items, limit.unwrap_or(usize::MAX), cmp)
+}
 
 /// Options for filtering and limiting summary output
 #[derive(Debug, Clone, Default)]
@@ -103,9 +114,10 @@ impl SummaryGenerator {
             options.entities_limit.unwrap_or(20)
         };
 
-        // Single pass: get entity analysis, truncate, then derive names
-        let mut entity_analysis = session.entity_graph.analyze_entity_importance();
-        entity_analysis.truncate(entity_limit);
+        // Top-k entity analysis: only the survivors are materialised.
+        let entity_analysis = session
+            .entity_graph
+            .analyze_entity_importance_top(entity_limit);
 
         // Derive important_entities from entity_analysis (already sorted by importance)
         let important_entities: Vec<String> = entity_analysis
@@ -113,62 +125,51 @@ impl SummaryGenerator {
             .map(|e| e.entity_name.clone())
             .collect();
 
-        // Filter and limit decisions
-        let mut key_decisions: Vec<DecisionSummary> = session
-            .current_state
+        let state = &session.current_state;
+
+        // Filter, then select the top decisions by reference; clone only
+        // the survivors. Order: confidence (highest first), then timestamp
+        // (newest first), then original position (keeps the previous
+        // stable-sort order for full ties).
+        let decisions: Vec<(usize, &DecisionItem)> = state
             .key_decisions
             .iter()
-            .filter(|d| {
-                if let Some(min_conf) = options.min_confidence {
-                    d.confidence >= min_conf
-                } else {
-                    true
-                }
+            .enumerate()
+            .filter(|(_, d)| options.min_confidence.is_none_or(|min| d.confidence >= min))
+            .collect();
+        let key_decisions: Vec<DecisionSummary> =
+            top_k(decisions, options.decisions_limit, |(ia, a), (ib, b)| {
+                b.confidence
+                    .total_cmp(&a.confidence)
+                    .then_with(|| b.timestamp.cmp(&a.timestamp))
+                    .then_with(|| ia.cmp(ib))
             })
-            .map(DecisionSummary::from_decision_item)
+            .into_iter()
+            .map(|(_, d)| DecisionSummary::from_decision_item(d))
             .collect();
 
-        // Sort by confidence (highest first) then by timestamp
-        key_decisions.sort_by(|a, b| {
-            b.confidence
-                .partial_cmp(&a.confidence)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.timestamp.cmp(&a.timestamp))
-        });
+        // Questions and concepts: most recent first.
+        let open_questions: Vec<QuestionSummary> = top_k(
+            state.open_questions.iter().enumerate().collect(),
+            options.questions_limit,
+            |(ia, a): &(usize, &QuestionItem), (ib, b)| {
+                b.timestamp.cmp(&a.timestamp).then_with(|| ia.cmp(ib))
+            },
+        )
+        .into_iter()
+        .map(|(_, q)| QuestionSummary::from_question_item(q))
+        .collect();
 
-        if let Some(limit) = options.decisions_limit {
-            key_decisions.truncate(limit);
-        }
-
-        // Limit questions
-        let mut open_questions: Vec<QuestionSummary> = session
-            .current_state
-            .open_questions
-            .iter()
-            .map(QuestionSummary::from_question_item)
-            .collect();
-
-        // Sort by urgency and recency
-        open_questions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-
-        if let Some(limit) = options.questions_limit {
-            open_questions.truncate(limit);
-        }
-
-        // Limit concepts
-        let mut key_concepts: Vec<ConceptSummary> = session
-            .current_state
-            .key_concepts
-            .iter()
-            .map(ConceptSummary::from_concept_item)
-            .collect();
-
-        // Sort by timestamp (most recent first)
-        key_concepts.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-
-        if let Some(limit) = options.concepts_limit {
-            key_concepts.truncate(limit);
-        }
+        let key_concepts: Vec<ConceptSummary> = top_k(
+            state.key_concepts.iter().enumerate().collect(),
+            options.concepts_limit,
+            |(ia, a): &(usize, &ConceptItem), (ib, b)| {
+                b.timestamp.cmp(&a.timestamp).then_with(|| ia.cmp(ib))
+            },
+        )
+        .into_iter()
+        .map(|(_, c)| ConceptSummary::from_concept_item(c))
+        .collect();
 
         StructuredSummaryView {
             session_id: session.id(),
@@ -332,5 +333,109 @@ mod tests {
 
         // Empty session should have minimal insights
         assert!(insights.len() <= 5);
+    }
+
+    #[test]
+    fn test_limited_summary_matches_full_sort_then_truncate() {
+        use crate::core::context_update::EntityType;
+        use crate::core::structured_context::{ConceptItem, DecisionItem, QuestionItem};
+        use chrono::TimeZone;
+        use std::sync::Arc;
+
+        let mut session = ActiveSession::new(Uuid::new_v4(), None, None);
+        let ts = |s: u32| Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, s).unwrap();
+        {
+            let state = Arc::make_mut(&mut session.current_state);
+            for i in 0..30u32 {
+                state.key_decisions.push(DecisionItem::new(
+                    format!("d{i}"),
+                    String::new(),
+                    vec![],
+                    (i % 4) as f32 / 4.0,
+                    ts(i % 7),
+                ));
+                state.open_questions.push(QuestionItem {
+                    question: format!("q{i}"),
+                    timestamp: ts(i % 5),
+                    ..Default::default()
+                });
+                state.key_concepts.push(ConceptItem {
+                    name: format!("c{i}"),
+                    timestamp: ts(i % 3),
+                    ..Default::default()
+                });
+            }
+            state.key_decisions[3].confidence = f32::NAN; // must not panic
+        }
+        let graph = Arc::make_mut(&mut session.entity_graph);
+        for i in 0..25u32 {
+            graph.add_or_update_entity(format!("e{i:02}"), EntityType::Concept, ts(0), "");
+            graph
+                .entities
+                .get_mut(&format!("e{i:02}"))
+                .unwrap()
+                .importance_score = (i % 3) as f32;
+        }
+
+        let options = SummaryOptions {
+            decisions_limit: Some(5),
+            entities_limit: Some(4),
+            questions_limit: Some(6),
+            concepts_limit: Some(7),
+            min_confidence: Some(0.25),
+            compact: false,
+        };
+        let view = SummaryGenerator::generate_structured_summary_filtered(&session, &options);
+
+        // Reference: the previous full stable sort + truncate.
+        let mut decisions: Vec<&DecisionItem> = session
+            .current_state
+            .key_decisions
+            .iter()
+            .filter(|d| d.confidence >= 0.25)
+            .collect();
+        decisions.sort_by(|a, b| {
+            b.confidence
+                .total_cmp(&a.confidence)
+                .then_with(|| b.timestamp.cmp(&a.timestamp))
+        });
+        let expected: Vec<&str> = decisions
+            .iter()
+            .take(5)
+            .map(|d| d.description.as_str())
+            .collect();
+        let got: Vec<&str> = view
+            .key_decisions
+            .iter()
+            .map(|d| d.description.as_str())
+            .collect();
+        assert_eq!(got, expected);
+
+        let mut questions: Vec<&QuestionItem> =
+            session.current_state.open_questions.iter().collect();
+        questions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        let expected: Vec<&str> = questions
+            .iter()
+            .take(6)
+            .map(|q| q.question.as_str())
+            .collect();
+        let got: Vec<&str> = view
+            .open_questions
+            .iter()
+            .map(|q| q.question.as_str())
+            .collect();
+        assert_eq!(got, expected);
+
+        let mut concepts: Vec<&ConceptItem> = session.current_state.key_concepts.iter().collect();
+        concepts.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        let expected: Vec<&str> = concepts.iter().take(7).map(|c| c.name.as_str()).collect();
+        let got: Vec<&str> = view.key_concepts.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(got, expected);
+
+        let mut all = session.entity_graph.analyze_entity_importance();
+        all.truncate(4);
+        let expected: Vec<String> = all.into_iter().map(|a| a.entity_name).collect();
+        assert_eq!(view.important_entities, expected);
+        assert_eq!(view.important_entities, vec!["e02", "e05", "e08", "e11"]);
     }
 }

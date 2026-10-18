@@ -20,14 +20,13 @@
 
 //! Lock-free LRU cache backed by DashMap with atomic metrics
 
-use atomic_float::AtomicF64;
 use crossbeam_channel::{Receiver, Sender, bounded};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::hash::Hash;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
 
 /// LRU-like cache using `DashMap`
@@ -45,10 +44,9 @@ pub struct Cache<K, V> {
     /// Monotonically increasing counter used as a logical clock for LRU
     global_access_counter: AtomicU64,
 
-    /// Total number of get requests
-    total_requests: AtomicU64,
-
-    /// Number of cache hits
+    /// Number of cache hits (requests = hits + misses; rates are derived
+    /// in `get_stats` so the hot `get` path touches as few shared atomics
+    /// as possible)
     hits: AtomicU64,
 
     /// Number of cache misses
@@ -57,14 +55,10 @@ pub struct Cache<K, V> {
     /// Number of evicted entries
     evictions: AtomicU64,
 
-    /// Cumulative lookup time in nanoseconds
-    total_lookup_time_ns: AtomicU64,
-
-    /// Cached hit rate for fast reads
-    hit_rate: AtomicF64,
-
-    /// Cached average lookup time in nanoseconds
-    avg_lookup_time_ns: AtomicU64,
+    /// Rotating start offset for eviction sampling, so successive
+    /// evictions look at different entries instead of always the first
+    /// few in DashMap iteration order
+    eviction_cursor: AtomicUsize,
 
     /// Human-readable cache name for logging
     name: String,
@@ -140,7 +134,9 @@ pub struct CacheStats {
     pub hit_rate: f64,
     /// Miss rate as a ratio (0.0 – 1.0)
     pub miss_rate: f64,
-    /// Average lookup time in nanoseconds
+    /// Average lookup time in nanoseconds. Lookup latency is no longer
+    /// measured on the hot path (two clock reads per `get` cost more than
+    /// the lookup itself); always 0. Kept for API compatibility.
     pub avg_lookup_time_ns: u64,
     /// Unix timestamp when the cache was created
     pub created_at: u64,
@@ -217,13 +213,10 @@ where
             capacity: AtomicUsize::new(capacity),
             current_size: AtomicUsize::new(0),
             global_access_counter: AtomicU64::new(0),
-            total_requests: AtomicU64::new(0),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             evictions: AtomicU64::new(0),
-            total_lookup_time_ns: AtomicU64::new(0),
-            hit_rate: AtomicF64::new(0.0),
-            avg_lookup_time_ns: AtomicU64::new(0),
+            eviction_cursor: AtomicUsize::new(0),
             name,
             created_at: AtomicU64::new(now),
             eviction_sender,
@@ -232,64 +225,34 @@ where
     }
 
     /// Get value from cache - completely lock-free
-    #[allow(clippy::option_if_let_else)]
+    ///
+    /// Hot path: one shard read lock, the LRU touch, and one hit/miss
+    /// counter increment. Rates are derived in [`get_stats`](Self::get_stats).
     pub fn get(&self, key: &K) -> Option<V> {
-        let start = Instant::now();
-        let total_requests = self.total_requests.fetch_add(1, Ordering::Relaxed) + 1;
-
-        let result = if let Some(entry_ref) = self.data.get(key) {
-            // Cache hit - update access tracking
-            let access_count = entry_ref.value().touch(&self.global_access_counter);
+        if let Some(entry_ref) = self.data.get(key) {
+            entry_ref.value().touch(&self.global_access_counter);
             let value = entry_ref.value().value.clone();
-
-            // Update hit metrics
-            let hits = self.hits.fetch_add(1, Ordering::Relaxed) + 1;
-
-            // Update cached hit rate
-            #[allow(clippy::cast_precision_loss)]
-            let hit_rate = hits as f64 / total_requests as f64;
-            self.hit_rate.store(hit_rate, Ordering::Relaxed);
-
-            debug!("{} Cache: HIT (access_count: {})", self.name, access_count);
+            drop(entry_ref);
+            self.hits.fetch_add(1, Ordering::Relaxed);
             Some(value)
         } else {
-            // Cache miss
             self.misses.fetch_add(1, Ordering::Relaxed);
-
-            // Update cached hit rate
-            let hits = self.hits.load(Ordering::Relaxed);
-            #[allow(clippy::cast_precision_loss)]
-            let hit_rate = hits as f64 / total_requests as f64;
-            self.hit_rate.store(hit_rate, Ordering::Relaxed);
-
-            debug!("{} Cache: MISS", self.name);
             None
-        };
-
-        // Update lookup time metrics
-        #[allow(clippy::cast_possible_truncation)]
-        let lookup_time_ns = start.elapsed().as_nanos() as u64;
-        let total_lookup_time = self
-            .total_lookup_time_ns
-            .fetch_add(lookup_time_ns, Ordering::Relaxed)
-            + lookup_time_ns;
-        let avg_lookup_time = total_lookup_time / total_requests;
-        self.avg_lookup_time_ns
-            .store(avg_lookup_time, Ordering::Relaxed);
-
-        result
+        }
     }
 
     /// Put value in cache - lock-free with atomic eviction
+    ///
+    /// Replacing an existing key never evicts another entry.
     pub fn put(&self, key: K, value: V) -> Option<V> {
         let capacity = self.capacity.load(Ordering::Relaxed);
         let logical_time = self.global_access_counter.fetch_add(1, Ordering::Relaxed) + 1;
         let entry = CacheEntry::new_with_logical_time(value, logical_time);
 
-        // Check if we need to evict
+        // Only a new key grows the cache, so only a new key needs room.
         let current_size = self.current_size.load(Ordering::Relaxed);
-        if current_size >= capacity {
-            self.try_evict();
+        if current_size >= capacity && !self.data.contains_key(&key) {
+            self.try_evict_excluding(Some(&key));
         }
 
         // Insert new entry
@@ -306,8 +269,20 @@ where
         old_value
     }
 
+    /// Number of entries examined per eviction.
+    const EVICTION_SAMPLE: usize = 20;
+
     /// Approximate LRU eviction - completely lock-free
     fn try_evict(&self) {
+        self.try_evict_excluding(None);
+    }
+
+    /// Evict the highest-priority (least recent / least frequent) entry
+    /// among a sample of `EVICTION_SAMPLE` entries. The sample window
+    /// rotates through the map on every eviction (wrapping around), so
+    /// over successive evictions every entry gets considered rather than
+    /// always the first few in iteration order. `exclude` is never evicted.
+    fn try_evict_excluding(&self, exclude: Option<&K>) {
         let capacity = self.capacity.load(Ordering::Relaxed);
         let current_size = self.current_size.load(Ordering::Relaxed);
 
@@ -315,30 +290,47 @@ where
             return; // Race condition - size decreased, no need to evict
         }
 
+        let len = self.data.len();
+        if len == 0 {
+            return;
+        }
+
         // Get current logical time for priority calculation (no syscall)
         let current_logical_time = self.global_access_counter.load(Ordering::Relaxed);
 
-        // Find candidate for eviction by scanning entries
-        // This is O(n) but only happens on capacity overflow
-        let mut eviction_candidate: Option<(K, u64)> = None;
+        let sample_size = Self::EVICTION_SAMPLE.min(len);
+        let start = self
+            .eviction_cursor
+            .fetch_add(sample_size, Ordering::Relaxed)
+            % len;
+
+        let mut eviction_candidate: Option<K> = None;
         let mut highest_eviction_priority = 0;
-
-        // Sample a subset of entries for efficiency (approximate LRU)
-        let sample_size = std::cmp::min(20, self.data.len());
-        for (sampled, entry_ref) in self.data.iter().enumerate() {
-            if sampled >= sample_size {
-                break;
+        let mut consider = |key: &K, entry: &CacheEntry<V>| {
+            if exclude == Some(key) {
+                return;
             }
-
-            let priority = entry_ref.value().priority_score(current_logical_time);
-            if priority > highest_eviction_priority {
+            let priority = entry.priority_score(current_logical_time);
+            if eviction_candidate.is_none() || priority > highest_eviction_priority {
                 highest_eviction_priority = priority;
-                eviction_candidate = Some((entry_ref.key().clone(), priority));
+                eviction_candidate = Some(key.clone());
+            }
+        };
+
+        // Window [start, start + sample_size), wrapping to the beginning.
+        let mut sampled = 0;
+        for entry_ref in self.data.iter().skip(start).take(sample_size) {
+            consider(entry_ref.key(), entry_ref.value());
+            sampled += 1;
+        }
+        if sampled < sample_size {
+            for entry_ref in self.data.iter().take(sample_size - sampled) {
+                consider(entry_ref.key(), entry_ref.value());
             }
         }
 
         // Evict the candidate
-        if let Some((key, _priority)) = eviction_candidate
+        if let Some(key) = eviction_candidate
             && let Some((_key, _old_entry)) = self.data.remove(&key)
         {
             self.current_size.fetch_sub(1, Ordering::Relaxed);
@@ -411,6 +403,15 @@ where
         let created_at = self.created_at.load(Ordering::Relaxed);
         let current_size = self.current_size.load(Ordering::Relaxed);
         let capacity = self.capacity.load(Ordering::Relaxed);
+        let hits = self.hits.load(Ordering::Relaxed);
+        let misses = self.misses.load(Ordering::Relaxed);
+        let total_requests = hits + misses;
+        #[allow(clippy::cast_precision_loss)]
+        let hit_rate = if total_requests > 0 {
+            hits as f64 / total_requests as f64
+        } else {
+            0.0
+        };
 
         CacheStats {
             name: self.name.clone(),
@@ -424,13 +425,14 @@ where
             } else {
                 0.0
             },
-            total_requests: self.total_requests.load(Ordering::Relaxed),
-            hits: self.hits.load(Ordering::Relaxed),
-            misses: self.misses.load(Ordering::Relaxed),
+            total_requests,
+            hits,
+            misses,
             evictions: self.evictions.load(Ordering::Relaxed),
-            hit_rate: self.hit_rate.load(Ordering::Relaxed),
-            miss_rate: 1.0 - self.hit_rate.load(Ordering::Relaxed),
-            avg_lookup_time_ns: self.avg_lookup_time_ns.load(Ordering::Relaxed),
+            hit_rate,
+            // Matches the previous `1 - hit_rate` (1.0 before any request).
+            miss_rate: 1.0 - hit_rate,
+            avg_lookup_time_ns: 0,
             created_at,
             uptime_seconds: now.saturating_sub(created_at),
         }
@@ -438,15 +440,14 @@ where
 
     /// Reset metrics - atomic operations
     pub fn reset_metrics(&self) {
-        self.total_requests.store(0, Ordering::Relaxed);
+        self.reset_counters();
+        info!("{} Cache: Metrics reset", self.name);
+    }
+
+    fn reset_counters(&self) {
         self.hits.store(0, Ordering::Relaxed);
         self.misses.store(0, Ordering::Relaxed);
         self.evictions.store(0, Ordering::Relaxed);
-        self.total_lookup_time_ns.store(0, Ordering::Relaxed);
-        self.hit_rate.store(0.0, Ordering::Relaxed);
-        self.avg_lookup_time_ns.store(0, Ordering::Relaxed);
-
-        info!("{} Cache: Metrics reset", self.name);
     }
 
     /// Resize cache capacity - atomic
@@ -626,13 +627,7 @@ where
     }
 
     fn reset_metrics(&self) {
-        self.total_requests.store(0, Ordering::Relaxed);
-        self.hits.store(0, Ordering::Relaxed);
-        self.misses.store(0, Ordering::Relaxed);
-        self.evictions.store(0, Ordering::Relaxed);
-        self.total_lookup_time_ns.store(0, Ordering::Relaxed);
-        self.hit_rate.store(0.0, Ordering::Relaxed);
-        self.avg_lookup_time_ns.store(0, Ordering::Relaxed);
+        self.reset_counters();
     }
 
     fn has_performance_issues(&self) -> bool {
@@ -782,4 +777,81 @@ macro_rules! new_cache {
     ($capacity:expr, $name:expr) => {
         $crate::core::cache::Cache::new($capacity, $name.to_string())
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stats_are_derived_from_hit_and_miss_counters() {
+        let cache: Cache<u32, u32> = Cache::new(4, "t".into()).unwrap();
+        let fresh = cache.get_stats();
+        assert_eq!(fresh.total_requests, 0);
+        assert_eq!(fresh.hit_rate, 0.0);
+
+        cache.put(1, 10);
+        assert_eq!(cache.get(&1), Some(10));
+        assert_eq!(cache.get(&1), Some(10));
+        assert_eq!(cache.get(&2), None);
+        let stats = cache.get_stats();
+        assert_eq!(stats.hits, 2);
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.total_requests, 3);
+        assert!((stats.hit_rate - 2.0 / 3.0).abs() < 1e-9);
+        assert!((stats.miss_rate - 1.0 / 3.0).abs() < 1e-9);
+
+        cache.reset_metrics();
+        assert_eq!(cache.get_stats().total_requests, 0);
+    }
+
+    #[test]
+    fn replacing_a_key_at_capacity_does_not_evict() {
+        let cache: Cache<u32, u32> = Cache::new(3, "t".into()).unwrap();
+        for k in 0..3 {
+            cache.put(k, k);
+        }
+        assert_eq!(cache.put(1, 100), Some(1));
+        assert_eq!(cache.len(), 3);
+        assert_eq!(cache.get_stats().evictions, 0);
+        for k in 0..3 {
+            assert!(cache.contains_key(&k));
+        }
+
+        // A new key at capacity evicts exactly one other entry.
+        cache.put(9, 9);
+        assert_eq!(cache.len(), 3);
+        assert_eq!(cache.get_stats().evictions, 1);
+        assert!(cache.contains_key(&9));
+    }
+
+    #[test]
+    fn eviction_prefers_cold_entries_beyond_the_first_sample() {
+        // Capacity > sample size: the rotating window must eventually
+        // consider entries past the first EVICTION_SAMPLE in iteration
+        // order, so the hot set survives repeated inserts.
+        let capacity = 100;
+        let cache: Cache<u32, u32> = Cache::new(capacity, "t".into()).unwrap();
+        for k in 0..capacity as u32 {
+            cache.put(k, k);
+        }
+        let hot: Vec<u32> = (0..10).collect();
+        for round in 0..200u32 {
+            for k in &hot {
+                cache.get(k);
+            }
+            cache.put(1_000 + round, round);
+        }
+        assert_eq!(cache.len(), capacity);
+        let surviving_hot = hot.iter().filter(|k| cache.contains_key(k)).count();
+        assert!(
+            surviving_hot >= 8,
+            "hot entries evicted: {surviving_hot}/10 left"
+        );
+        // Cold original entries were evicted across the whole map.
+        let surviving_cold = (10..capacity as u32)
+            .filter(|k| cache.contains_key(k))
+            .count();
+        assert!(surviving_cold < 90 - 50, "cold survivors: {surviving_cold}");
+    }
 }
