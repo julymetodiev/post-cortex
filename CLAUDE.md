@@ -11,7 +11,7 @@
 
 1. **Search before answering** — call `semantic_search` (session → workspace → global) BEFORE answering any code/architecture question
 2. **Log after discovery** — call `update_conversation_context` AFTER making decisions, fixing bugs, or changing code
-3. **Self-check** — enforced by Stop hook automatically
+3. **Self-check** — the Stop hook blocks a turn that changed project files (edits, `git commit`) without a later `update_conversation_context`
 
 ### Interaction Types
 
@@ -38,5 +38,5 @@ Call directly — do NOT use subagents for simple search/log operations.
 | Event | Purpose |
 |-------|---------|
 | `UserPromptSubmit` | Injects session ID + rules |
-| `Stop` (prompt) | Verifies rule compliance |
+| `Stop` | `pcx-stop-check.py`: blocks only if this turn changed project files and logged nothing afterwards |
 | `SessionStart` (compact) | Re-injects PCX context after compaction |

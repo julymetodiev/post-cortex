@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`pcx setup` installs a deterministic Stop hook** (`.claude/hooks/pcx-stop-check.py`)
+  instead of the prompt-type compliance checker. The old hook asked a model to
+  judge every turn and kept flagging status updates and already-logged work,
+  which pushed agents into writing empty duplicate entries. The new one reads
+  the transcript and blocks only when the current turn edited project files or
+  ran `git commit` / `git merge` without a later `update_conversation_context`
+  (or `context-builder` subagent). It never blocks twice in a row and fails
+  open. Existing projects keep their hooks — `pcx setup` skips a
+  `settings.json` that already has `hooks`; replace the `Stop` entry by hand
+  (see `crates/post-cortex-daemon/src/bin/templates/settings.json`).
+
 ## [0.4.0] - 2026-10-18 — Auth, redaction, row-backed storage and performance
 
 ### Added

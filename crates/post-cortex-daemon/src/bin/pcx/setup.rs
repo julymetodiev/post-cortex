@@ -311,6 +311,25 @@ pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result
         println!("  Created: .claude/hooks/pcx-compact-reinject.sh");
     }
 
+    // .claude/hooks/pcx-stop-check.py (Stop hook; session id comes from settings.json)
+    let stop_hook_path = hooks_dir.join("pcx-stop-check.py");
+    if stop_hook_path.exists() {
+        println!("  .claude/hooks/pcx-stop-check.py already exists, skipping");
+    } else {
+        std::fs::write(
+            &stop_hook_path,
+            include_str!("../templates/pcx-stop-check.py"),
+        )
+        .map_err(|e| format!("Failed to write hook script: {}", e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stop_hook_path, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| format!("Failed to set permissions: {}", e))?;
+        }
+        println!("  Created: .claude/hooks/pcx-stop-check.py");
+    }
+
     // 6. Install agents to ~/.claude/agents/post-cortex-agents/
     let agents_dir = dirs::home_dir()
         .ok_or_else(|| "Cannot determine home directory".to_string())?
