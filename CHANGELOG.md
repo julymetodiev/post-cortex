@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-18 — Auth, redaction, row-backed storage and performance
+
 ### Added
 
 - **Bearer-token auth** for the daemon: `auth_token` / `PC_AUTH_TOKEN`.
@@ -20,8 +22,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   adds regexes. `Redactor::redact_json` covers imported documents.
 - **Namespace-level SurrealDB users**: any `surrealdb_username` other than
   `root` signs in as a user of `surrealdb_namespace`.
+- **Session summaries without loading sessions**: `Storage::list_session_summaries`
+  (`SessionSummary { id, name, description, created_at, last_updated, update_count }`),
+  served from `session_meta:{id}` records on RocksDB and one query on SurrealDB.
+  `ConversationMemorySystem::{list_session_summaries, find_session_summaries}`
+  back session listing/search on every transport.
+- **Graceful shutdown flush**: `pcx start` handles SIGTERM and writes every
+  queued session persist before exiting (`ConversationMemorySystem::flush_all`).
+- `RealRocksDBStorage::new_with_dimension`, `Storage::save_session_with_changes`
+  (explicit removed update ids), `VectorStorage::remove_session_vector`,
+  `post_cortex_storage::is_not_found`.
+- VectorDB: `add_vectors_bulk`, `search_in_sources(_with_filter)`,
+  `remove_by_content_id`, `remove_source`, and the `dot` / `l2_norm` /
+  `cosine_with_norms` / `cosine_similarity` kernels.
+- Graph: `relationships_of`, `relation_between`, `edge_count`,
+  `analyze_entity_importance_top`, `get_entity_network_bounded`, `insert_entity`.
 
 ### Fixed
+
+- **A failed session load could wipe the session.** Any load error (bad JSON,
+  timeout) was treated as "not found", so the session was re-created empty and
+  saved over the stored one. Only a real not-found creates a session now.
+- **RocksDB never persisted embeddings**: it hard-coded 384 dimensions and
+  rejected every 256-dim Potion vector. The dimension now comes from the config.
+- **Entity graph applied twice per update** (legacy spawn plus pipeline), which
+  doubled `mention_count` and importance. The pipeline is now the only path;
+  a lost CAS retries instead of dropping the graph update.
+- **Out-of-order and stale session writes.** Persists ran as independent tasks,
+  so an older snapshot could overwrite a newer one. A per-session writer now
+  always writes the newest snapshot last, and a reload waits for queued writes.
+- **Deleted sessions could come back** when a load or an in-flight persist raced
+  `delete_session`; a deleted item's embeddings were removed from every session
+  that used the same content id; deleted updates and entities stayed searchable.
+- **Stale search results** for global and workspace searches for up to the cache
+  TTL after a write.
+- **Hot-context duplicates** on CAS retries (the shared hot tier was mutated
+  before the swap).
+- **Entity vectors duplicated** on every re-vectorization; sessions without
+  embeddable updates re-embedded their entities on every search.
+- **SurrealQL injection** through entity names interpolated into record ids;
+  ids are now bound parameters. Graph queries using `->*->` (which SurrealDB 3
+  does not parse) are rewritten. SurrealDB load keeps entity `mention_count`,
+  `importance_score` and `first_mentioned`; deleted updates are removed from
+  `context_update`; pagination has stable ordering.
+- RocksDB `delete_session` left embeddings, entities, relationships and
+  workspace memberships behind.
+- `update_session_metadata` and `delete_entity` were neither CAS-safe nor persisted.
+- `update_context` reported `durable: true` before the write; it now waits for it.
+- MCP: `get_open_questions` returned a hard-coded string, entity network and
+  importance queries discarded their results, session statistics double-counted
+  updates; malformed `code_reference` values were silently dropped (now an
+  invalid-params error); type coercion stringified typed fields such as
+  `updates` and `limit`.
+- `partial_cmp().unwrap()` on importance scores could abort the daemon on NaN.
+- Deserializing a session reset `created_at` to the load time.
 
 - **Lost embeddings on back-to-back writes.** Background vectorization
   (pipeline worker and the legacy spawn) embedded "the latest update" at
@@ -64,6 +118,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SurrealDB SDK 3.0 → 3.3.4.** Verified against a SurrealDB 3.3.4 server
   upgraded in place from 3.0 (record counts identical, HNSW `REBUILD INDEX`
   and kNN OK). Not tested against 3.0 servers — upgrade the server first.
+- **Breaking (storage format):** session blobs no longer embed
+  `incremental_updates`; updates live in their own rows (RocksDB adds a
+  `session_updates:{id}` index). Old blobs load and are migrated in place.
+  Saves no longer infer deletions from a snapshot — removals are passed
+  explicitly via `save_session_with_changes`.
+- **Breaking (SurrealDB schema):** embedding records are keyed
+  `{session_id}_{content_id}` with a unique `(session_id, content_id)` index;
+  the old unique index on `content_id` is dropped. Legacy records stay readable.
+- **Breaking (build):** the BERT backend is opt-in (`--features bert`); default
+  builds no longer compile candle. tonic/prost 0.14, opentelemetry 0.31.
+  Release binaries are stripped.
+- **Breaking (API):** `post_cortex_memory::performance` (`PerformanceMonitor`)
+  removed; `ActiveSession::incremental_updates` / `change_history` hold `Arc`
+  elements; `StorageActorHandle::persist_session_and_update_nowait` replaced by
+  `persist_session_nowait` / `persist_session_and_wait`; `delete_session` takes
+  the live handle; `QueryCache::{search, cache_results}` replaced by
+  `get` / `insert`; MCP `EntityNetwork` / `ImportanceAnalysis` responses are typed.
+- Quantization is off by default; `max_vectors` is enforced;
+  `max_vectors_per_session` is deprecated (never enforced).
+- MCP `list_sessions` reports `entity_count: null` for sessions not in memory;
+  listings are ordered by creation time.
+- MCP and gRPC text payloads use compact JSON.
+- `assemble_context` description now says what it does (entity match, one-hop
+  graph, impact analysis, recency) — it does not use embeddings.
+
+### Performance
+
+- **Write path:** persists are coalesced per session (one blob write per burst
+  instead of up to five per update); `ActiveSession` serializes by reference
+  instead of deep-cloning; update and change-history vectors share `Arc`s, so
+  copy-on-write no longer clones every update; cold-tier summaries are compact
+  and capped at 100 instead of growing quadratically.
+- **Vector search:** no HNSW graph is built below `exact_search_threshold`
+  (10 000; startup was O(n²)), and above it it is built once in bulk; bounded
+  top-k instead of full sorts; filters run during the scan and metadata is
+  cloned only for the results; single-pass cosine using stored norms (~17×
+  faster kernel); per-session and per-content-id indexes make session checks
+  O(1) and scope searches to that session's vectors.
+- **Query cache:** O(1) lookup checked before embedding the query; shared
+  `Arc` results; unbounded pattern maps removed.
+- **Reads:** `assemble_context` walks O(degree) edges instead of every edge per
+  entity and caches merged workspace graphs; listings read `session_meta` only
+  and never fill the session cache; RocksDB drops its unused in-memory vector
+  index, adds bloom filters, a block cache and zstd, and indexes freshness
+  source refs by file; SurrealDB saves only changed entities and edges, and
+  listings are one query each.
+- Session cache `get` does one counter update; storage actor runs up to 32
+  requests concurrently on a bounded queue.
+
+### Migration
+
+Back up the SurrealDB database before the first start: the schema change is
+forward-only, and an older daemon will not start against it afterwards.
+Verified on a database written by 0.3.1 (sessions, updates and legacy
+embeddings load and stay searchable). RocksDB data written by this version is
+not readable by older binaries (they see sessions without updates). BERT model
+users must build with `--features bert`.
 
 ## [0.3.1] - 2026-05-17 — Daemon Potion default fix + CI cleanup
 
