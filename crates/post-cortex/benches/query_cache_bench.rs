@@ -2,13 +2,14 @@
 use chrono::Utc;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use post_cortex_memory::content_vectorizer::{ContentType, SemanticSearchResult};
-use post_cortex_memory::query_cache::{QueryCache, QueryCacheConfig};
+use post_cortex_memory::query_cache::{CacheScope, QueryCache, QueryCacheConfig};
 
-fn create_test_results() -> Vec<SemanticSearchResult> {
-    vec![
+fn create_test_results() -> Arc<[SemanticSearchResult]> {
+    Arc::from(vec![
         SemanticSearchResult {
             content_id: Uuid::new_v4().to_string(),
             session_id: Uuid::new_v4(),
@@ -29,7 +30,7 @@ fn create_test_results() -> Vec<SemanticSearchResult> {
             timestamp: Utc::now(),
             combined_score: 0.71,
         },
-    ]
+    ])
 }
 
 fn bench_cache_search(c: &mut Criterion) {
@@ -46,13 +47,11 @@ fn bench_cache_search(c: &mut Criterion) {
                         let results = create_test_results();
                         for i in 0..load {
                             let query_text = format!("query {}", i);
-                            let query_vector = vec![i as f32 * 0.1, i as f32 * 0.2, i as f32 * 0.3];
-                            let _ = cache.cache_results(
+                            cache.insert(
                                 query_text,
-                                query_vector,
-                                results.clone(),
+                                Arc::clone(&results),
                                 i as u64,
-                                None,
+                                CacheScope::Global,
                             );
                         }
                         cache
@@ -60,9 +59,8 @@ fn bench_cache_search(c: &mut Criterion) {
                     |cache| {
                         for j in 0..load {
                             let query_text = format!("query {}", j % load);
-                            let query_vector = vec![j as f32 * 0.1, j as f32 * 0.2, j as f32 * 0.3];
                             let params_hash = (j % load) as u64;
-                            let hit = cache.search(&query_text, &query_vector, params_hash);
+                            let hit = cache.get(params_hash, &query_text);
                             black_box(hit);
                         }
                     },
@@ -87,13 +85,11 @@ fn bench_cache_insert(c: &mut Criterion) {
             |(cache, results)| {
                 for i in 0..100usize {
                     let query_text = format!("query {}", i);
-                    let query_vector = vec![i as f32 * 0.1, i as f32 * 0.2, i as f32 * 0.3];
-                    let _ = cache.cache_results(
+                    cache.insert(
                         query_text,
-                        query_vector,
-                        results.clone(),
+                        Arc::clone(&results),
                         i as u64,
-                        None,
+                        CacheScope::Global,
                     );
                 }
             },

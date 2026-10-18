@@ -12,9 +12,10 @@
 // not just keyword-similar.
 
 use chrono::Utc;
-use post_cortex_core::core::context_update::{EntityRelationship, RelationType};
+use post_cortex_core::core::context_update::{ContextUpdate, EntityRelationship, RelationType};
 use post_cortex_core::graph::entity_graph::SimpleEntityGraph;
 use serde::{Deserialize, Serialize};
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, info};
 
@@ -123,10 +124,9 @@ pub fn find_query_entities(query: &str, graph: &SimpleEntityGraph) -> Vec<String
         .filter(|t| t.len() >= 3)
         .collect();
 
-    let all_entities = graph.get_all_entities();
-    let mut found: Vec<(String, usize, bool)> = Vec::new(); // (name, score, is_exact)
+    let mut found: Vec<(&str, usize, bool)> = Vec::new(); // (name, score, is_exact)
 
-    for entity_data in &all_entities {
+    for entity_data in graph.entities.values() {
         let name_lower = entity_data.name.to_lowercase();
 
         // Skip very short entity names (< 2 chars) to avoid false matches
@@ -136,7 +136,7 @@ pub fn find_query_entities(query: &str, graph: &SimpleEntityGraph) -> Vec<String
 
         // Strategy 1: Exact substring match (highest confidence)
         if query_lower.contains(&name_lower) {
-            found.push((entity_data.name.clone(), name_lower.len() * 10, true));
+            found.push((&entity_data.name, name_lower.len() * 10, true));
             continue;
         }
 
@@ -181,13 +181,16 @@ pub fn find_query_entities(query: &str, graph: &SimpleEntityGraph) -> Vec<String
 
         if matched >= threshold {
             let score = matched * 5 + name_lower.len();
-            found.push((entity_data.name.clone(), score, false));
+            found.push((&entity_data.name, score, false));
         }
     }
 
     // Sort: exact matches first, then by score descending
     found.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| b.1.cmp(&a.1)));
-    found.into_iter().map(|(name, _, _)| name).collect()
+    found
+        .into_iter()
+        .map(|(name, _, _)| name.to_string())
+        .collect()
 }
 
 /// Split an entity name into searchable tokens.
@@ -285,26 +288,22 @@ pub fn build_entity_context(
     result
 }
 
-/// Get all relationships for an entity (both outgoing and incoming)
+/// Get all relationships for an entity (outgoing, then incoming). O(degree).
 fn get_entity_relationships(entity: &str, graph: &SimpleEntityGraph) -> Vec<EntityRelationship> {
     graph
-        .get_all_relationships()
-        .into_iter()
-        .filter(|r| r.from_entity == entity || r.to_entity == entity)
+        .relationships_of(entity)
+        .iter()
+        .map(|r| r.to_relationship())
         .collect()
 }
 
 /// Get a human-readable description of the relationship between two entities
 fn get_relationship_description(from: &str, to: &str, graph: &SimpleEntityGraph) -> String {
-    for rel in graph.get_all_relationships() {
-        if rel.from_entity == from && rel.to_entity == to {
-            return format!("{:?}", rel.relation_type);
-        }
-        if rel.from_entity == to && rel.to_entity == from {
-            return format!("{:?} (reverse)", rel.relation_type);
-        }
+    match graph.relation_between(from, to).first() {
+        Some(rel) if rel.from == from => format!("{:?}", rel.relation_type),
+        Some(rel) => format!("{:?} (reverse)", rel.relation_type),
+        None => "RelatedTo".to_string(),
     }
-    "RelatedTo".to_string()
 }
 
 /// Perform impact analysis: find all entities that depend on any of the query entities.
@@ -316,38 +315,39 @@ pub fn analyze_impact(query_entities: &[String], graph: &SimpleEntityGraph) -> V
         RelationType::Implements,
     ];
 
-    let all_rels = graph.get_all_relationships();
     let mut impacts: Vec<ImpactEntry> = Vec::new();
-    let query_set: HashSet<&String> = query_entities.iter().collect();
+    let query_set: HashSet<&str> = query_entities.iter().map(String::as_str).collect();
 
-    for rel in &all_rels {
-        // For DependsOn: if B depends on A, and A is a query entity → B is impacted
-        // The edge is: from=B, to=A, type=DependsOn
-        if dependency_types.contains(&rel.relation_type) && query_set.contains(&rel.to_entity) {
+    // Every impacting edge touches a query entity, so walking each query
+    // entity's own edges (O(degree)) finds them all.
+    for query_entity in query_entities {
+        for rel in graph.relationships_of(query_entity) {
             // Skip self-references
-            if rel.from_entity == rel.to_entity {
+            if rel.from == rel.to {
                 continue;
             }
-            impacts.push(ImpactEntry {
-                entity: rel.from_entity.clone(),
-                depends_on: rel.to_entity.clone(),
-                relation_type: rel.relation_type.clone(),
-                context: rel.context.clone(),
-            });
-        }
 
-        // For RequiredBy: if A is required by B, and A is a query entity → B is impacted
-        // The edge is: from=A, to=B, type=RequiredBy
-        if rel.relation_type == RelationType::RequiredBy && query_set.contains(&rel.from_entity) {
-            if rel.from_entity == rel.to_entity {
-                continue;
+            // For DependsOn: if B depends on A, and A is a query entity → B is impacted
+            // The edge is: from=B, to=A, type=DependsOn
+            if dependency_types.contains(rel.relation_type) && query_set.contains(rel.to) {
+                impacts.push(ImpactEntry {
+                    entity: rel.from.to_string(),
+                    depends_on: rel.to.to_string(),
+                    relation_type: rel.relation_type.clone(),
+                    context: rel.context.to_string(),
+                });
             }
-            impacts.push(ImpactEntry {
-                entity: rel.to_entity.clone(),
-                depends_on: rel.from_entity.clone(),
-                relation_type: rel.relation_type.clone(),
-                context: rel.context.clone(),
-            });
+
+            // For RequiredBy: if A is required by B, and A is a query entity → B is impacted
+            // The edge is: from=A, to=B, type=RequiredBy
+            if *rel.relation_type == RelationType::RequiredBy && query_set.contains(rel.from) {
+                impacts.push(ImpactEntry {
+                    entity: rel.to.to_string(),
+                    depends_on: rel.from.to_string(),
+                    relation_type: rel.relation_type.clone(),
+                    context: rel.context.to_string(),
+                });
+            }
         }
     }
 
@@ -400,10 +400,13 @@ pub fn boost_by_graph(
 /// This is the main entry point for graph-aware context assembly.
 /// It combines entity graph traversal with content scoring to produce
 /// a ranked list of context items within a token budget.
-pub fn assemble_context(
+///
+/// `updates` may be owned updates or shared ones (`&[Arc<ContextUpdate>]`,
+/// e.g. a session's `incremental_updates`), so callers need not clone them.
+pub fn assemble_context<U: Borrow<ContextUpdate>>(
     query: &str,
     graph: &SimpleEntityGraph,
-    updates: &[post_cortex_core::core::context_update::ContextUpdate],
+    updates: &[U],
     token_budget: usize,
 ) -> AssembledContext {
     info!(
@@ -429,19 +432,22 @@ pub fn assemble_context(
     }
 
     // Step 4: Score all updates
-    let _relevant_entity_names: HashSet<String> = entity_context
+    // Lowercase each entity name once, not once per update.
+    let entity_names_lower: Vec<(String, &EntityContext)> = entity_context
         .iter()
-        .map(|ec| ec.name.to_lowercase())
+        .map(|ec| (ec.name.to_lowercase(), ec))
         .collect();
+    let now = Utc::now();
 
-    let mut scored_items: Vec<ContextItem> = Vec::new();
+    let mut scored_items: Vec<ContextItem> = Vec::with_capacity(updates.len());
 
     for update in updates {
+        let update: &ContextUpdate = update.borrow();
         let text = format!("{}: {}", update.content.title, update.content.description);
         let tokens = estimate_tokens(&text);
 
         // Base score: recency (newer updates score higher)
-        let age_hours = (Utc::now() - update.timestamp).num_hours().max(0) as f32;
+        let age_hours = (now - update.timestamp).num_hours().max(0) as f32;
         let recency_score = 1.0 / (1.0 + age_hours / 24.0); // Decays over days
 
         // Entity match boost
@@ -449,9 +455,8 @@ pub fn assemble_context(
         let mut entity_boost: f32 = 0.0;
         let mut matched_entities: Vec<String> = Vec::new();
 
-        for ec in &entity_context {
-            let name_lower = ec.name.to_lowercase();
-            if text_lower.contains(&name_lower) {
+        for (name_lower, ec) in &entity_names_lower {
+            if text_lower.contains(name_lower.as_str()) {
                 matched_entities.push(ec.name.clone());
                 entity_boost += match &ec.relevance {
                     EntityRelevance::DirectMention => 0.4,
@@ -765,6 +770,68 @@ mod tests {
                 "entry_id must match one of the input updates"
             );
         }
+    }
+
+    #[test]
+    fn test_entity_relationships_cover_both_directions() {
+        let graph = make_graph();
+        let ctx = build_entity_context(&["gRPC".to_string()], &graph, 1);
+        let grpc = ctx.iter().find(|ec| ec.name == "gRPC").unwrap();
+        let mut edges: Vec<(&str, &str)> = grpc
+            .relationships
+            .iter()
+            .map(|r| (r.from_entity.as_str(), r.to_entity.as_str()))
+            .collect();
+        edges.sort_unstable();
+        assert_eq!(edges, vec![("Axon", "gRPC"), ("gRPC", "tonic")]);
+
+        let axon = ctx.iter().find(|ec| ec.name == "Axon").unwrap();
+        assert_eq!(
+            axon.relevance,
+            EntityRelevance::GraphNeighbor {
+                via: "gRPC".to_string(),
+                relation: "DependsOn (reverse)".to_string(),
+            }
+        );
+        let tonic = ctx.iter().find(|ec| ec.name == "tonic").unwrap();
+        assert_eq!(
+            tonic.relevance,
+            EntityRelevance::GraphNeighbor {
+                via: "gRPC".to_string(),
+                relation: "DependsOn".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_assemble_context_accepts_shared_updates() {
+        let graph = make_graph();
+        let update = std::sync::Arc::new(ContextUpdate {
+            id: uuid::Uuid::new_v4(),
+            update_type: UpdateType::ConceptDefined,
+            content: UpdateContent {
+                title: "RocksDB tuning".to_string(),
+                description: "Bloom filters for RocksDB".to_string(),
+                details: vec![],
+                examples: vec![],
+                implications: vec![],
+            },
+            timestamp: Utc::now(),
+            related_code: None,
+            parent_update: None,
+            user_marked_important: false,
+            creates_entities: vec![],
+            creates_relationships: vec![],
+            references_entities: vec![],
+            typed_entities: vec![],
+        });
+        let shared = vec![std::sync::Arc::clone(&update)];
+        let from_shared = assemble_context("rocksdb", &graph, &shared, 1000);
+        let from_owned = assemble_context("rocksdb", &graph, &[(*update).clone()], 1000);
+        assert_eq!(from_shared.items.len(), 1);
+        assert_eq!(from_shared.items[0].text, from_owned.items[0].text);
+        assert_eq!(from_shared.items[0].score, from_owned.items[0].score);
+        assert_eq!(from_shared.items[0].entities, vec!["RocksDB".to_string()]);
     }
 
     #[test]

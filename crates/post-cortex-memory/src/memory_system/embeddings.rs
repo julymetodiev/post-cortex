@@ -61,11 +61,12 @@ impl ConversationMemorySystem {
 
         let storage_actor = self.storage_actor.clone();
         tokio::spawn(async move {
-            let session = session_arc.load();
+            // Owned snapshot: an ArcSwap guard must not live across the
+            // embedding await.
+            let session = session_arc.load_full();
             match vectorizer.vectorize_update(&session, update_id).await {
                 Ok(count) if count > 0 => {
-                    let _ = vectorizer.invalidate_session_cache(session_id).await;
-                    storage_actor.persist_session_and_update_nowait((**session).clone(), vec![]);
+                    storage_actor.persist_session_and_update_nowait((*session).clone(), vec![]);
                     debug!(
                         "Background vectorization: {} update(s) for session {}",
                         count, session_id
@@ -257,9 +258,8 @@ impl ConversationMemorySystem {
         // Lazy-initialize vectorizer if needed
         let vectorizer = self.ensure_vectorizer_initialized().await?;
 
-        // Load session
-        let session_result = self.get_session(session_id).await?;
-        let session = session_result.load();
+        // Load session (owned snapshot: no ArcSwap guard across the await)
+        let session = self.get_session(session_id).await?.load_full();
 
         // Vectorize content
         match vectorizer.vectorize_session(&session).await {
@@ -304,7 +304,7 @@ impl ConversationMemorySystem {
             }
         };
 
-        let session = session_arc.load();
+        let session = session_arc.load_full();
 
         // Retry loop for vectorization with exponential backoff
         let mut last_error = None;
@@ -316,19 +316,11 @@ impl ConversationMemorySystem {
                         count, session_id, attempt
                     );
 
-                    // Invalidate only this session's cache entries instead of clearing all
-                    // This is handled by the vectorizer internally now
+                    // The vectorizer invalidates the affected cache entries itself.
                     if count > 0 {
-                        if let Err(e) = vectorizer.invalidate_session_cache(session_id).await {
-                            debug!(
-                                "Cache invalidation for session {} (non-critical): {}",
-                                session_id, e
-                            );
-                        }
-
                         // Fire-and-forget persist to save the updated vectorized_update_ids
                         self.storage_actor
-                            .persist_session_and_update_nowait((**session).clone(), vec![]);
+                            .persist_session_and_update_nowait((*session).clone(), vec![]);
                         debug!("Session {} vectorization persist enqueued", session_id);
                     }
 
@@ -406,9 +398,9 @@ impl ConversationMemorySystem {
             let failed_sessions = Arc::clone(&failed_sessions);
             let processed_count = Arc::clone(&processed_count);
 
-            // Clone session_arc data we need before spawning
+            // Owned snapshot of the session for the spawned task
             let session_data = match self.get_session(session_id).await {
-                Ok(arc) => Some(arc.load().as_ref().clone()),
+                Ok(arc) => Some(arc.load_full()),
                 Err(e) => {
                     failed_sessions.fetch_add(1, Ordering::Relaxed);
                     let count = processed_count.fetch_add(1, Ordering::Relaxed) + 1;
@@ -535,8 +527,8 @@ impl ConversationMemorySystem {
         // We keep a reference to use for Graph-RAG enrichment
         let session_arc = self.get_session(session_id).await?;
 
-        // Auto-vectorize if session hasn't been vectorized yet
-        if !vectorizer.is_session_vectorized(session_id) {
+        // Auto-vectorize if the session has content not vectorized yet
+        if vectorizer.needs_vectorization(&session_arc.load_full()) {
             info!(
                 "Session {} not vectorized, auto-vectorizing before search",
                 session_id
@@ -579,12 +571,12 @@ impl ConversationMemorySystem {
         // Lazy-initialize vectorizer if needed
         let vectorizer = self.ensure_vectorizer_initialized().await?;
 
-        // Auto-load session if not already loaded
-        let session_result = self.get_session(session_id).await?;
-        let session = session_result.load();
+        // Auto-load session if not already loaded (owned snapshot: it is
+        // used across awaits below)
+        let session = self.get_session(session_id).await?.load_full();
 
-        // Auto-vectorize if session hasn't been vectorized yet
-        if !vectorizer.is_session_vectorized(session_id) {
+        // Auto-vectorize if the session has content not vectorized yet
+        if vectorizer.needs_vectorization(&session) {
             info!(
                 "Session {} not vectorized, auto-vectorizing before related content search",
                 session_id
@@ -700,11 +692,22 @@ impl ConversationMemorySystem {
             .get_or_create_session(session_id)
             .await?;
 
-        let current = session_arc.load();
-        let mut new_session = (**current).clone();
+        let current = session_arc.load_full();
+        let mut new_session = (*current).clone();
 
         let removed = new_session.remove_updates_for_file(file_path);
         if removed > 0 {
+            let remaining: std::collections::HashSet<Uuid> = new_session
+                .incremental_updates
+                .iter()
+                .map(|u| u.id)
+                .collect();
+            let removed_ids: Vec<String> = current
+                .incremental_updates
+                .iter()
+                .filter(|u| !remaining.contains(&u.id))
+                .map(|u| u.id.to_string())
+                .collect();
             match new_session.rebuild_entity_graph_from_updates().await {
                 Ok((before, after)) => {
                     info!(
@@ -715,8 +718,14 @@ impl ConversationMemorySystem {
                     let new_arc = Arc::new(new_session);
                     let prev = session_arc.compare_and_swap(&current, Arc::clone(&new_arc));
                     if Arc::ptr_eq(&prev, &current) {
+                        for id in &removed_ids {
+                            if let Ok(id) = Uuid::parse_str(id) {
+                                new_arc.vectorized_update_ids.remove(&id);
+                            }
+                        }
                         self.storage_actor
                             .persist_session_and_update_nowait((*new_arc).clone(), vec![]);
+                        self.drop_content_vectors(session_id, &removed_ids).await;
                     } else {
                         warn!(
                             "CAS failed during invalidate+rebuild for session {}",
@@ -736,6 +745,41 @@ impl ConversationMemorySystem {
                 file_path
             );
             Ok((entries_invalidated, new_session.entity_graph.entity_count()))
+        }
+    }
+
+    /// Remove the embeddings of deleted content (update ids or
+    /// `entity:<name>`) of one session: from the in-memory vector DB, from
+    /// persistent storage, and from every cached query they could appear
+    /// in. Best-effort: failures are logged, never returned, because the
+    /// content itself is already gone.
+    pub(crate) async fn drop_content_vectors(&self, session_id: Uuid, content_ids: &[String]) {
+        if content_ids.is_empty() {
+            return;
+        }
+
+        #[cfg(feature = "embeddings")]
+        if let Some(vectorizer) = self.content_vectorizer.get() {
+            for content_id in content_ids {
+                if let Err(e) = vectorizer.remove_content(session_id, content_id).await {
+                    warn!(
+                        "Failed to remove embedding {} of session {}: {:#}",
+                        content_id, session_id, e
+                    );
+                }
+            }
+            return;
+        }
+
+        // Vectorizer not initialised: nothing is in memory or cached yet,
+        // but the persisted copy would be loaded at init.
+        for content_id in content_ids {
+            if let Err(e) = self.vector_storage.remove_vector(content_id).await {
+                warn!(
+                    "Failed to remove persisted embedding {} of session {}: {:#}",
+                    content_id, session_id, e
+                );
+            }
         }
     }
 
@@ -868,4 +912,144 @@ fn enrich_results_with_graph(
     }
 
     enriched
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory_system::SystemConfig;
+    use post_cortex_core::core::context_update::EntityType;
+    use post_cortex_embeddings::VectorMetadata;
+
+    async fn system(suffix: &str) -> (ConversationMemorySystem, tempfile::TempDir) {
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("pcx_mems_{suffix}_"))
+            .tempdir()
+            .unwrap();
+        let config = SystemConfig {
+            data_directory: dir.path().to_string_lossy().into_owned(),
+            // No model load: these tests cover the paths that must work
+            // before (or without) the vectorizer.
+            enable_embeddings: false,
+            ..Default::default()
+        };
+        (ConversationMemorySystem::new(config).await.unwrap(), dir)
+    }
+
+    /// Persist an embedding for `content_id`, in whatever dimension the
+    /// storage backend accepts.
+    async fn persist_embedding(sys: &ConversationMemorySystem, session_id: Uuid, content_id: &str) {
+        for dim in [sys.config.vector_dimension, 384, 256] {
+            let metadata = VectorMetadata::new(
+                content_id.to_string(),
+                "text".to_string(),
+                session_id.to_string(),
+                "UpdateContent".to_string(),
+            );
+            if sys
+                .vector_storage
+                .add_vector(vec![0.5; dim], metadata)
+                .await
+                .is_ok()
+            {
+                return;
+            }
+        }
+        panic!("storage accepted no embedding dimension");
+    }
+
+    async fn persisted_count(sys: &ConversationMemorySystem, session_id: Uuid) -> usize {
+        sys.vector_storage
+            .count_session_embeddings(&session_id.to_string())
+            .await
+    }
+
+    /// Poll the stored session until `check` holds (persists are queued).
+    async fn wait_for_stored(
+        sys: &ConversationMemorySystem,
+        session_id: Uuid,
+        check: impl Fn(&ActiveSession) -> bool,
+    ) -> bool {
+        for _ in 0..100 {
+            if let Ok(Some(stored)) = sys.storage_actor.load_session(session_id).await
+                && check(&stored)
+            {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        false
+    }
+
+    #[tokio::test]
+    async fn delete_update_removes_persisted_embedding() {
+        let (sys, _dir) = system("delupd").await;
+        let sid = sys.create_session(None, None).await.unwrap();
+        sys.add_incremental_update(sid, "an update worth keeping".into(), None)
+            .await
+            .unwrap();
+        let entry_id = sys
+            .get_session(sid)
+            .await
+            .unwrap()
+            .load()
+            .incremental_updates[0]
+            .id;
+        persist_embedding(&sys, sid, &entry_id.to_string()).await;
+        assert_eq!(persisted_count(&sys, sid).await, 1);
+
+        assert!(sys.delete_update(sid, entry_id).await.unwrap());
+        assert!(!sys.delete_update(sid, entry_id).await.unwrap());
+
+        assert_eq!(
+            persisted_count(&sys, sid).await,
+            0,
+            "deleted update's embedding would be reloaded on restart"
+        );
+        let session = sys.get_session(sid).await.unwrap().load_full();
+        assert!(session.incremental_updates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_entity_removes_persisted_embedding_and_persists_session() {
+        let (sys, _dir) = system("delent").await;
+        let sid = sys.create_session(None, None).await.unwrap();
+        {
+            let arc = sys.get_session(sid).await.unwrap();
+            let mut session = (**arc.load()).clone();
+            Arc::make_mut(&mut session.entity_graph).add_or_update_entity(
+                "Doomed".into(),
+                EntityType::Concept,
+                chrono::Utc::now(),
+                "",
+            );
+            arc.store(Arc::new(session));
+        }
+        persist_embedding(&sys, sid, "entity:Doomed").await;
+
+        assert!(sys.delete_entity(sid, "Doomed").await.unwrap());
+        assert!(!sys.delete_entity(sid, "Doomed").await.unwrap());
+        assert_eq!(persisted_count(&sys, sid).await, 0);
+
+        let persisted = wait_for_stored(&sys, sid, |s| !s.entity_graph.has_entity("Doomed")).await;
+        assert!(persisted, "entity removal was not persisted");
+    }
+
+    #[tokio::test]
+    async fn update_session_metadata_persists() {
+        let (sys, _dir) = system("meta").await;
+        let sid = sys.create_session(None, None).await.unwrap();
+
+        sys.update_session_metadata(sid, Some("renamed".into()), Some("desc".into()))
+            .await
+            .unwrap();
+        let session = sys.get_session(sid).await.unwrap().load_full();
+        assert_eq!(session.name().as_deref(), Some("renamed"));
+
+        let persisted = wait_for_stored(&sys, sid, |s| {
+            s.name().as_deref() == Some("renamed") && s.description().as_deref() == Some("desc")
+        })
+        .await;
+        assert!(persisted, "metadata change was not persisted");
+    }
 }

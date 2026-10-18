@@ -383,7 +383,9 @@ impl ConversationMemorySystem {
         &self.storage_actor
     }
 
-    /// Update session metadata compatibility method
+    /// Update session metadata compatibility method. Swaps the change in
+    /// with a CAS retry loop (a plain store would drop concurrent writes)
+    /// and persists it.
     pub async fn update_session_metadata(
         &self,
         session_id: Uuid,
@@ -392,14 +394,21 @@ impl ConversationMemorySystem {
     ) -> Result<(), String> {
         let session_arc = self.get_session(session_id).await?;
 
-        // Update session atomically
-        let current_session = session_arc.load();
-        let mut new_session = (**current_session).clone();
+        let updated = Self::cas_update_session(
+            &session_arc,
+            session_id,
+            "update_session_metadata",
+            |session| {
+                session.update_metadata(name.clone(), description.clone());
+                true
+            },
+        )
+        .await?;
 
-        // Use the update_metadata method to modify metadata
-        new_session.update_metadata(name, description);
-
-        session_arc.store(Arc::new(new_session));
+        if let Some(new_arc) = updated {
+            self.storage_actor
+                .persist_session_and_update_nowait((*new_arc).clone(), vec![]);
+        }
         Ok(())
     }
 
@@ -415,24 +424,34 @@ impl ConversationMemorySystem {
     }
 
     /// Delete a single entity from a session: removes the node + incident
-    /// edges from the in-memory graph (so cached writes don't resurrect it)
-    /// and cascades the same delete to storage (entity row + all 8 edge
-    /// tables). Returns whether the entity existed.
+    /// edges from the in-memory graph (CAS, so concurrent writes neither
+    /// lose nor resurrect it), persists the session, cascades the delete to
+    /// storage (entity row + all 8 edge tables) and drops the entity's
+    /// embedding. Returns whether the entity existed.
     pub async fn delete_entity(&self, session_id: Uuid, entity_name: &str) -> Result<bool, String> {
         let session_arc = self.get_session(session_id).await?;
 
-        let current = session_arc.load();
-        let existed = current.entity_graph.has_entity(entity_name);
-        if existed {
-            let mut new_session = (**current).clone();
-            let graph_mut = std::sync::Arc::make_mut(&mut new_session.entity_graph);
-            graph_mut.remove_entity(entity_name);
-            session_arc.store(Arc::new(new_session));
+        let updated =
+            Self::cas_update_session(&session_arc, session_id, "delete_entity", |session| {
+                if !session.entity_graph.has_entity(entity_name) {
+                    return false;
+                }
+                Arc::make_mut(&mut session.entity_graph).remove_entity(entity_name);
+                true
+            })
+            .await?;
+        let existed = updated.is_some();
+        if let Some(new_arc) = updated {
+            self.storage_actor
+                .persist_session_and_update_nowait((*new_arc).clone(), vec![]);
         }
 
         self.storage_actor
             .delete_entity(session_id, entity_name)
             .await?;
+
+        self.drop_content_vectors(session_id, &[format!("entity:{entity_name}")])
+            .await;
 
         Ok(existed)
     }
@@ -441,27 +460,55 @@ impl ConversationMemorySystem {
     ///
     /// Used by MCP `manage_entity` action=delete_update to clean up ghost/bad rows
     /// produced when a client posts content the dispatcher can't map to a title.
-    /// Persists the updated session via the storage actor. Returns true if the
+    /// Persists the updated session via the storage actor and drops the
+    /// update's embedding (memory, storage, query cache). Returns true if the
     /// entry existed.
     pub async fn delete_update(&self, session_id: Uuid, entry_id: Uuid) -> Result<bool, String> {
-        const MAX_CAS_ATTEMPTS: u32 = 20;
         let session_arc = self.get_session(session_id).await?;
 
-        for attempt in 1..=MAX_CAS_ATTEMPTS {
-            let current = session_arc.load();
-            let mut new_session = (**current).clone();
-            let existed = new_session.remove_update_by_id(&entry_id);
+        let updated =
+            Self::cas_update_session(&session_arc, session_id, "delete_update", |session| {
+                session.remove_update_by_id(&entry_id)
+            })
+            .await?;
+        let Some(new_arc) = updated else {
+            return Ok(false);
+        };
 
-            if !existed {
-                return Ok(false);
+        // Shared set: drop the id before the snapshot is persisted.
+        new_arc.vectorized_update_ids.remove(&entry_id);
+        self.storage_actor
+            .persist_session_and_update_nowait((*new_arc).clone(), vec![]);
+
+        self.drop_content_vectors(session_id, &[entry_id.to_string()])
+            .await;
+
+        Ok(true)
+    }
+
+    /// Apply `mutate` to a copy of the current session and compare-and-swap
+    /// it in, retrying with backoff while other writers win. `mutate`
+    /// returns false when there is nothing to change; that ends the loop
+    /// with `Ok(None)`. On success returns the installed snapshot.
+    async fn cas_update_session(
+        session_arc: &ArcSwap<ActiveSession>,
+        session_id: Uuid,
+        op: &str,
+        mut mutate: impl FnMut(&mut ActiveSession) -> bool,
+    ) -> Result<Option<Arc<ActiveSession>>, String> {
+        const MAX_CAS_ATTEMPTS: u32 = 20;
+
+        for attempt in 1..=MAX_CAS_ATTEMPTS {
+            let current = session_arc.load_full();
+            let mut new_session = (*current).clone();
+            if !mutate(&mut new_session) {
+                return Ok(None);
             }
 
             let new_arc = Arc::new(new_session);
             let prev = session_arc.compare_and_swap(&current, Arc::clone(&new_arc));
             if Arc::ptr_eq(&prev, &current) {
-                self.storage_actor
-                    .persist_session_and_update_nowait((*new_arc).clone(), vec![]);
-                return Ok(true);
+                return Ok(Some(new_arc));
             }
 
             if attempt > 3 {
@@ -475,7 +522,7 @@ impl ConversationMemorySystem {
         }
 
         Err(format!(
-            "delete_update: high contention ({MAX_CAS_ATTEMPTS} CAS attempts exhausted) for session {session_id}"
+            "{op}: high contention ({MAX_CAS_ATTEMPTS} CAS attempts exhausted) for session {session_id}"
         ))
     }
 

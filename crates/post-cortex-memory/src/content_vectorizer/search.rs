@@ -13,15 +13,18 @@
 //! Semantic search, score post-processing, and lightweight similarity helpers.
 
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use tracing::{debug, warn};
+use tracing::debug;
 use uuid::Uuid;
 
 use post_cortex_core::session::active_session::ActiveSession;
-use post_cortex_embeddings::SearchMatch;
+use post_cortex_embeddings::{SearchMatch, cosine_similarity};
+
+use crate::query_cache::CacheScope;
 
 use super::types::{ContentType, SearchOptions, SemanticSearchResult};
 use super::vectorizer::ContentVectorizer;
@@ -38,75 +41,83 @@ impl ContentVectorizer {
         session_filter: Option<Uuid>,
         options: SearchOptions,
     ) -> Result<Vec<SemanticSearchResult>> {
+        Ok(self
+            .semantic_search_shared(query, limit, session_filter, options)
+            .await?
+            .to_vec())
+    }
+
+    /// [`Self::semantic_search`] returning the results shared with the query
+    /// cache: a cache hit costs one refcount bump instead of a deep copy.
+    ///
+    /// # Errors
+    /// Returns an error if the query cannot be embedded or the vector database search fails.
+    pub async fn semantic_search_shared(
+        &self,
+        query: &str,
+        limit: usize,
+        session_filter: Option<Uuid>,
+        options: SearchOptions,
+    ) -> Result<Arc<[SemanticSearchResult]>> {
         let recency_bias = options.recency_bias.unwrap_or(self.config.recency_bias);
         let date_range = options.date_range;
 
         debug!("Performing semantic search for: '{}'", query);
 
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        query.hash(&mut hasher);
-        limit.hash(&mut hasher);
-        if let Some(ref session_id) = session_filter {
-            session_id.hash(&mut hasher);
+        if session_filter.is_none() && !self.config.enable_cross_session_search {
+            return Ok(Arc::from(Vec::new()));
         }
-        if let Some(ref range) = date_range {
-            range.0.timestamp().hash(&mut hasher);
-            range.1.timestamp().hash(&mut hasher);
-        }
-        // Include recency_bias in cache key to prevent collisions
-        if recency_bias != 0.0 {
-            recency_bias.to_bits().hash(&mut hasher);
-        }
-        let params_hash = hasher.finish();
 
-        // Check query cache first
-        let query_embedding = if let Some(ref cache) = self.query_cache {
-            let query_embedding = self.embedding_engine.encode_text(query).await?;
-            if let Some(cached_results) = cache.search(query, &query_embedding, params_hash) {
-                debug!("Cache hit for semantic search query: '{}'", query);
-                return Ok(cached_results);
-            }
-            query_embedding
-        } else {
-            self.embedding_engine.encode_text(query).await?
+        let (scope_tag, scope) = match session_filter {
+            Some(session_id) => (1u8, CacheScope::Session(session_id)),
+            None => (0u8, CacheScope::Global),
         };
+        let params_hash = params_hash(
+            query,
+            limit,
+            scope_tag,
+            session_filter.as_slice(),
+            date_range,
+            recency_bias,
+        );
+
+        // Check the cache before paying for the embedding.
+        if let Some(ref cache) = self.query_cache
+            && let Some(cached) = cache.get(params_hash, query)
+        {
+            debug!("Cache hit for semantic search query: '{}'", query);
+            return Ok(cached);
+        }
+
+        let query_embedding = self.embedding_engine.encode_text(query).await?;
 
         let search_results = match (session_filter, date_range) {
             (Some(session_id), Some((start, end))) => {
-                self.vector_db
-                    .search_with_filter(&query_embedding, limit, |metadata| {
-                        metadata.source == session_id.to_string()
-                            && metadata.timestamp >= start
-                            && metadata.timestamp <= end
-                    })?
+                self.vector_db.search_in_sources_with_filter(
+                    &query_embedding,
+                    limit,
+                    &[session_id.to_string()],
+                    |metadata| metadata.timestamp >= start && metadata.timestamp <= end,
+                )?
             }
             (Some(session_id), None) => {
                 self.vector_db
                     .search_in_source(&query_embedding, limit, &session_id.to_string())?
             }
-            (None, Some((start, end))) if self.config.enable_cross_session_search => self
-                .vector_db
-                .search_with_filter(&query_embedding, limit, |metadata| {
-                    metadata.timestamp >= start && metadata.timestamp <= end
-                })?,
-            (None, None) if self.config.enable_cross_session_search => {
-                self.vector_db.search(&query_embedding, limit)?
+            (None, Some((start, end))) => {
+                self.vector_db
+                    .search_with_filter(&query_embedding, limit, |metadata| {
+                        metadata.timestamp >= start && metadata.timestamp <= end
+                    })?
             }
-            _ => return Ok(Vec::new()),
+            (None, None) => self.vector_db.search(&query_embedding, limit)?,
         };
 
-        let results = self.process_search_results(search_results, Some(recency_bias))?;
+        let results: Arc<[SemanticSearchResult]> =
+            Arc::from(self.process_search_results(search_results, Some(recency_bias))?);
 
-        if let Some(ref cache) = self.query_cache
-            && let Err(e) = cache.cache_results(
-                query.to_string(),
-                query_embedding,
-                results.clone(),
-                params_hash,
-                session_filter,
-            )
-        {
-            warn!("Failed to cache search results: {}", e);
+        if let Some(ref cache) = self.query_cache {
+            cache.insert(query.to_string(), Arc::clone(&results), params_hash, scope);
         }
 
         Ok(results)
@@ -114,9 +125,9 @@ impl ContentVectorizer {
 
     /// Perform semantic search within a specific set of sessions.
     ///
-    /// This optimized version performs a single vector database search across all
-    /// allowed sessions, then applies optional scoring adjustments (recency bias, etc.)
-    /// in post-processing — avoiding the O(n²) cost of searching each session separately.
+    /// Scores only the vectors of the allowed sessions (via the source index)
+    /// in a single pass, then applies optional scoring adjustments (recency
+    /// bias, etc.) in post-processing.
     pub async fn semantic_search_multisession(
         &self,
         query: &str,
@@ -124,6 +135,24 @@ impl ContentVectorizer {
         allowed_sessions: &[Uuid],
         options: SearchOptions,
     ) -> Result<Vec<SemanticSearchResult>> {
+        Ok(self
+            .semantic_search_multisession_shared(query, limit, allowed_sessions, options)
+            .await?
+            .to_vec())
+    }
+
+    /// [`Self::semantic_search_multisession`] returning results shared with
+    /// the query cache.
+    ///
+    /// # Errors
+    /// Returns an error if the query cannot be embedded or the vector database search fails.
+    pub async fn semantic_search_multisession_shared(
+        &self,
+        query: &str,
+        limit: usize,
+        allowed_sessions: &[Uuid],
+        options: SearchOptions,
+    ) -> Result<Arc<[SemanticSearchResult]>> {
         let recency_bias = options.recency_bias.unwrap_or(self.config.recency_bias);
         let date_range = options.date_range;
 
@@ -132,64 +161,49 @@ impl ContentVectorizer {
             recency_bias, query
         );
 
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        query.hash(&mut hasher);
-        limit.hash(&mut hasher);
-        for session_id in allowed_sessions {
-            session_id.hash(&mut hasher);
-        }
-        if let Some(ref range) = date_range {
-            range.0.timestamp().hash(&mut hasher);
-            range.1.timestamp().hash(&mut hasher);
-        }
-        if recency_bias != 0.0 {
-            recency_bias.to_bits().hash(&mut hasher);
-        }
-        let params_hash = hasher.finish();
+        // Order and duplicates don't change the result set; normalise so they
+        // share one cache entry.
+        let mut sessions = allowed_sessions.to_vec();
+        sessions.sort_unstable();
+        sessions.dedup();
 
-        let query_embedding = if let Some(ref cache) = self.query_cache {
-            let query_embedding = self.embedding_engine.encode_text(query).await?;
-            if let Some(cached_results) = cache.search(query, &query_embedding, params_hash) {
-                debug!(
-                    "Cache hit for multisession semantic search query: '{}'",
-                    query
-                );
-                return Ok(cached_results);
-            }
-            query_embedding
-        } else {
-            self.embedding_engine.encode_text(query).await?
-        };
-
-        let valid_sessions: std::collections::HashSet<String> =
-            allowed_sessions.iter().map(|id| id.to_string()).collect();
-
-        let search_results = if let Some((start, end)) = date_range {
-            self.vector_db
-                .search_with_filter(&query_embedding, limit, |metadata| {
-                    valid_sessions.contains(&metadata.source)
-                        && metadata.timestamp >= start
-                        && metadata.timestamp <= end
-                })?
-        } else {
-            self.vector_db
-                .search_with_filter(&query_embedding, limit, |metadata| {
-                    valid_sessions.contains(&metadata.source)
-                })?
-        };
-
-        let results = self.process_search_results(search_results, Some(recency_bias))?;
+        let params_hash = params_hash(query, limit, 2, &sessions, date_range, recency_bias);
 
         if let Some(ref cache) = self.query_cache
-            && let Err(e) = cache.cache_results(
-                query.to_string(),
-                query_embedding,
-                results.clone(),
-                params_hash,
-                None, // No session_filter for multisession
-            )
+            && let Some(cached) = cache.get(params_hash, query)
         {
-            warn!("Failed to cache search results: {}", e);
+            debug!(
+                "Cache hit for multisession semantic search query: '{}'",
+                query
+            );
+            return Ok(cached);
+        }
+
+        let query_embedding = self.embedding_engine.encode_text(query).await?;
+
+        let sources: Vec<String> = sessions.iter().map(Uuid::to_string).collect();
+        let search_results = if let Some((start, end)) = date_range {
+            self.vector_db.search_in_sources_with_filter(
+                &query_embedding,
+                limit,
+                &sources,
+                |metadata| metadata.timestamp >= start && metadata.timestamp <= end,
+            )?
+        } else {
+            self.vector_db
+                .search_in_sources(&query_embedding, limit, &sources)?
+        };
+
+        let results: Arc<[SemanticSearchResult]> =
+            Arc::from(self.process_search_results(search_results, Some(recency_bias))?);
+
+        if let Some(ref cache) = self.query_cache {
+            cache.insert(
+                query.to_string(),
+                Arc::clone(&results),
+                params_hash,
+                CacheScope::Sessions(Arc::from(sessions)),
+            );
         }
 
         Ok(results)
@@ -308,13 +322,14 @@ impl ContentVectorizer {
         limit: usize,
     ) -> Result<Vec<SemanticSearchResult>> {
         let results = self
-            .semantic_search(topic, limit * 2, None, SearchOptions::default())
+            .semantic_search_shared(topic, limit * 2, None, SearchOptions::default())
             .await?;
 
         let filtered: Vec<_> = results
-            .into_iter()
+            .iter()
             .filter(|r| r.session_id != session.id())
             .take(limit)
+            .cloned()
             .collect();
 
         debug!(
@@ -332,18 +347,7 @@ impl ContentVectorizer {
         let embedding1 = self.embedding_engine.encode_text(text1).await?;
         let embedding2 = self.embedding_engine.encode_text(text2).await?;
 
-        let dot_product: f32 = embedding1
-            .iter()
-            .zip(embedding2.iter())
-            .map(|(a, b)| a * b)
-            .sum();
-        let norm1: f32 = embedding1.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let norm2: f32 = embedding2.iter().map(|x| x * x).sum::<f32>().sqrt();
-
-        if norm1 == 0.0 || norm2 == 0.0 {
-            return Ok(0.0);
-        }
-        Ok(dot_product / (norm1 * norm2))
+        Ok(cosine_similarity(&embedding1, &embedding2))
     }
 
     /// Get statistics about vectorized content (sizes, dimension).
@@ -376,6 +380,32 @@ impl ContentVectorizer {
         self.vector_db
             .count_session_embeddings(&session_id.to_string())
     }
+}
+
+/// Cache key over every parameter that changes the result set.
+/// `scope_tag` keeps global, single-session and multi-session keys apart.
+fn params_hash(
+    query: &str,
+    limit: usize,
+    scope_tag: u8,
+    sessions: &[Uuid],
+    date_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    recency_bias: f32,
+) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    query.hash(&mut hasher);
+    limit.hash(&mut hasher);
+    scope_tag.hash(&mut hasher);
+    sessions.hash(&mut hasher);
+    if let Some((start, end)) = date_range {
+        start.timestamp().hash(&mut hasher);
+        end.timestamp().hash(&mut hasher);
+    }
+    // Include recency_bias in cache key to prevent collisions
+    if recency_bias != 0.0 {
+        recency_bias.to_bits().hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 fn parse_content_type(content_type_str: &str) -> ContentType {

@@ -19,20 +19,30 @@
 // SOFTWARE.
 //! Query caching system for semantic search results
 //!
-//! This is a cleaned version of the query cache with removed unused code.
-//! All functionality is preserved, but unused components have been removed.
+//! Entries are keyed by the hash of the full query parameters (query text,
+//! limit, scope, date range, recency bias), so a lookup is one map probe and
+//! happens *before* the query is embedded. Results are shared as
+//! `Arc<[SemanticSearchResult]>`: a hit never copies them under the map lock.
+//!
+//! Every entry records the sessions it covers ([`CacheScope`]). A write to a
+//! session must call [`QueryCache::invalidate_session`], which drops that
+//! session's entries, every multi-session entry that includes it and every
+//! global entry — otherwise those would serve stale results until the TTL.
 
 use anyhow::Result;
-use chrono::{DateTime, Duration, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::content_vectorizer::SemanticSearchResult;
+
+/// Run a full expiry sweep at most once per this many inserts.
+const EXPIRY_SWEEP_INTERVAL: u64 = 64;
 
 /// Configuration for query cache
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -41,11 +51,12 @@ pub struct QueryCacheConfig {
     pub max_cache_size: usize,
     /// Time-to-live for cached results in minutes
     pub ttl_minutes: i64,
-    /// Similarity threshold for query matching (0.0-1.0)
+    /// Ignored. Lookups are exact on the query parameters; kept so existing
+    /// configs still deserialize.
     pub similarity_threshold: f32,
-    /// Enable intelligent prefetching
+    /// Ignored (prefetching was never implemented); kept for config compatibility.
     pub enable_prefetching: bool,
-    /// Maximum number of query variations to prefetch
+    /// Ignored (prefetching was never implemented); kept for config compatibility.
     pub max_prefetch_variations: usize,
     /// Enable cache statistics collection
     pub enable_stats: bool,
@@ -64,123 +75,98 @@ impl Default for QueryCacheConfig {
     }
 }
 
-/// A cached query with atomic access tracking
-#[derive(Debug, Serialize, Deserialize)]
+/// Which sessions a cached result was computed from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CacheScope {
+    /// Searched every session: any write invalidates it.
+    Global,
+    /// Searched one session.
+    Session(Uuid),
+    /// Searched exactly these sessions.
+    Sessions(Arc<[Uuid]>),
+}
+
+impl CacheScope {
+    /// Whether a write to `session_id` can change this entry's results.
+    pub fn covers(&self, session_id: Uuid) -> bool {
+        match self {
+            Self::Global => true,
+            Self::Session(id) => *id == session_id,
+            Self::Sessions(ids) => ids.contains(&session_id),
+        }
+    }
+}
+
+/// A cached query result with atomic access tracking
+#[derive(Debug)]
 pub struct CachedQuery {
-    /// Unique identifier for the query
-    pub id: Uuid,
-    /// Original query text
+    /// Original query text (guards against hash collisions)
     pub query_text: String,
-    /// Query embedding vector
-    pub query_vector: Vec<f32>,
-    /// Cached search results
-    pub results: Vec<SemanticSearchResult>,
-    /// Timestamp when cached
-    pub cached_at: DateTime<Utc>,
-    /// Last access timestamp (atomic)
-    last_accessed: AtomicU64,
-    /// Number of times this query was accessed (atomic)
-    access_count: AtomicU64,
-    /// Query parameters hash for exact matching
+    /// Cached search results, shared with every hit
+    pub results: Arc<[SemanticSearchResult]>,
+    /// Sessions the results were computed from
+    pub scope: CacheScope,
+    /// Query parameters hash (the map key)
     pub params_hash: u64,
-    /// Session ID that created this query (optional)
-    pub session_id: Option<Uuid>,
-    /// Cache hit efficiency score stored as u32 bits for atomic operations
-    efficiency_score_bits: AtomicU64,
+    cached_at: Instant,
+    access_count: AtomicU64,
+    estimated_bytes: usize,
 }
 
 impl CachedQuery {
     /// Create a new cached query
     pub fn new(
         query_text: String,
-        query_vector: Vec<f32>,
-        results: Vec<SemanticSearchResult>,
+        results: Arc<[SemanticSearchResult]>,
         params_hash: u64,
-        session_id: Option<Uuid>,
+        scope: CacheScope,
     ) -> Self {
-        let now = Utc::now();
-        let now_timestamp = now.timestamp() as u64;
-
+        let estimated_bytes = estimate_entry_bytes(&query_text, &results);
         Self {
-            id: Uuid::new_v4(),
             query_text,
-            query_vector,
             results,
-            cached_at: now,
-            last_accessed: AtomicU64::new(now_timestamp),
-            access_count: AtomicU64::new(0),
+            scope,
             params_hash,
-            session_id,
-            efficiency_score_bits: AtomicU64::new(1.0f32.to_bits() as u64),
+            cached_at: Instant::now(),
+            access_count: AtomicU64::new(0),
+            estimated_bytes,
         }
     }
 
     /// Check if the cached query has expired
     pub fn is_expired(&self, ttl_minutes: i64) -> bool {
-        let ttl_duration = Duration::minutes(ttl_minutes);
-        Utc::now() - self.cached_at > ttl_duration
+        let ttl = Duration::from_secs(u64::try_from(ttl_minutes.max(0)).unwrap_or(0) * 60);
+        self.cached_at.elapsed() >= ttl
     }
 
-    /// Update access statistics (via CAS)
+    /// Record one access
     pub fn mark_accessed(&self) {
-        let now = Utc::now();
-        let now_timestamp = now.timestamp() as u64;
-        self.last_accessed.store(now_timestamp, Ordering::Relaxed);
         self.access_count.fetch_add(1, Ordering::Relaxed);
-
-        // Update efficiency score using CAS loop for atomicity
-        // Reuse `now` to avoid double syscall
-        let hours_since_cached = (now - self.cached_at).num_hours().max(1) as f32;
-        let recency_factor = 1.0 / (1.0 + hours_since_cached / 24.0); // Decay over days
-
-        loop {
-            let old_bits = self.efficiency_score_bits.load(Ordering::Relaxed);
-            let count = self.access_count.load(Ordering::Relaxed);
-            let frequency_factor = (count as f32).ln().max(1.0);
-            let score = recency_factor * frequency_factor;
-
-            if self
-                .efficiency_score_bits
-                .compare_exchange_weak(
-                    old_bits,
-                    score.to_bits() as u64,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                )
-                .is_ok()
-            {
-                break;
-            }
-        }
     }
 
-    /// Get efficiency score
+    /// Number of times this entry was served
+    pub fn access_count(&self) -> u64 {
+        self.access_count.load(Ordering::Relaxed)
+    }
+
+    /// Eviction score: frequently used, recent entries score higher.
     pub fn efficiency_score(&self) -> f32 {
-        f32::from_bits(self.efficiency_score_bits.load(Ordering::Relaxed) as u32)
+        let hours = (self.cached_at.elapsed().as_secs() / 3600).max(1) as f32;
+        let recency_factor = 1.0 / (1.0 + hours / 24.0);
+        let frequency_factor = (self.access_count() as f32).ln().max(1.0);
+        recency_factor * frequency_factor
     }
+}
 
-    /// Calculate similarity with another query vector
-    pub fn similarity_with(&self, other_vector: &[f32]) -> f32 {
-        if self.query_vector.len() != other_vector.len() {
-            return 0.0;
-        }
-
-        let dot_product: f32 = self
-            .query_vector
-            .iter()
-            .zip(other_vector.iter())
-            .map(|(a, b)| a * b)
-            .sum();
-
-        let norm_a: f32 = self.query_vector.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let norm_b: f32 = other_vector.iter().map(|x| x * x).sum::<f32>().sqrt();
-
-        if norm_a == 0.0 || norm_b == 0.0 {
-            0.0
-        } else {
-            dot_product / (norm_a * norm_b)
-        }
-    }
+/// Rough size of one entry (text + per-result estimate + overhead).
+fn estimate_entry_bytes(query_text: &str, results: &[SemanticSearchResult]) -> usize {
+    let results_bytes: usize = results
+        .iter()
+        .map(|r| {
+            std::mem::size_of::<SemanticSearchResult>() + r.content_id.len() + r.text_content.len()
+        })
+        .sum();
+    query_text.len() + results_bytes + std::mem::size_of::<CachedQuery>()
 }
 
 /// Cache statistics using atomic operations
@@ -196,16 +182,10 @@ pub struct QueryCacheStats {
     pub expired_removed: AtomicU64,
     /// Number of entries evicted due to size limit (atomic)
     pub evicted_entries: AtomicU64,
-    /// Average similarity score for cache hits stored as u32 bits
-    avg_hit_similarity_bits: AtomicU64,
     /// Current cache size (atomic)
     pub current_cache_size: AtomicUsize,
     /// Memory usage estimation in bytes (atomic)
     pub estimated_memory_bytes: AtomicUsize,
-    /// Hit rate percentage (computed)
-    pub hit_rate: f32,
-    /// Average query processing time saved (ms)
-    pub avg_time_saved_ms: f32,
 }
 
 impl Default for QueryCacheStats {
@@ -223,52 +203,9 @@ impl QueryCacheStats {
             cache_misses: AtomicU64::new(0),
             expired_removed: AtomicU64::new(0),
             evicted_entries: AtomicU64::new(0),
-            avg_hit_similarity_bits: AtomicU64::new(0.0f32.to_bits() as u64),
             current_cache_size: AtomicUsize::new(0),
             estimated_memory_bytes: AtomicUsize::new(0),
-            hit_rate: 0.0,
-            avg_time_saved_ms: 0.0,
         }
-    }
-
-    /// Record a cache hit (via CAS)
-    pub fn record_hit(&self, similarity: f32) {
-        self.cache_hits.fetch_add(1, Ordering::Relaxed);
-
-        // Update average hit similarity using CAS loop for atomicity
-        loop {
-            let old_bits = self.avg_hit_similarity_bits.load(Ordering::Relaxed);
-            let hits = self.cache_hits.load(Ordering::Relaxed);
-            let current_avg = f32::from_bits(old_bits as u32);
-            let new_avg = if hits == 1 {
-                similarity
-            } else {
-                ((current_avg * (hits as f32 - 1.0)) + similarity) / hits as f32
-            };
-
-            if self
-                .avg_hit_similarity_bits
-                .compare_exchange_weak(
-                    old_bits,
-                    new_avg.to_bits() as u64,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                )
-                .is_ok()
-            {
-                break;
-            }
-        }
-    }
-
-    /// Record a cache miss
-    pub fn record_miss(&self) {
-        self.cache_misses.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Get average hit similarity
-    pub fn avg_hit_similarity(&self) -> f32 {
-        f32::from_bits(self.avg_hit_similarity_bits.load(Ordering::Relaxed) as u32)
     }
 
     /// Get snapshot of current stats
@@ -288,7 +225,8 @@ impl QueryCacheStats {
             cache_misses: self.cache_misses.load(Ordering::Relaxed),
             expired_removed: self.expired_removed.load(Ordering::Relaxed),
             evicted_entries: self.evicted_entries.load(Ordering::Relaxed),
-            avg_hit_similarity: self.avg_hit_similarity(),
+            // Hits are exact parameter matches.
+            avg_hit_similarity: if hits > 0 { 1.0 } else { 0.0 },
             current_cache_size: self.current_cache_size.load(Ordering::Relaxed),
             estimated_memory_bytes: self.estimated_memory_bytes.load(Ordering::Relaxed),
             hit_rate,
@@ -322,29 +260,19 @@ pub struct QueryCacheStatsSnapshot {
     pub avg_time_saved_ms: f32,
 }
 
-/// Query pattern for prefetching (simplified)
-#[derive(Debug)]
-struct QueryPattern {
-    frequency: AtomicU64,
-    last_seen: AtomicU64,
-}
-
 /// Query cache using DashMap and atomic operations
 pub struct QueryCache {
-    /// Cache storage - DashMap
-    cache: Arc<DashMap<Uuid, CachedQuery>>,
+    /// Entries keyed by query-parameter hash
+    cache: DashMap<u64, Arc<CachedQuery>>,
 
     /// Cache configuration - immutable after creation
     config: QueryCacheConfig,
 
     /// Performance statistics using atomics
-    stats: Arc<QueryCacheStats>,
+    stats: QueryCacheStats,
 
-    /// Query patterns for prefetching - DashMap
-    patterns: Arc<DashMap<String, QueryPattern>>,
-
-    /// Recent queries for pattern detection - DashMap
-    recent_queries: Arc<DashMap<String, AtomicU64>>,
+    /// Inserts since creation; drives the periodic expiry sweep
+    inserts: AtomicU64,
 }
 
 impl QueryCache {
@@ -356,236 +284,178 @@ impl QueryCache {
         );
 
         Self {
-            cache: Arc::new(DashMap::new()),
+            cache: DashMap::new(),
             config,
-            stats: Arc::new(QueryCacheStats::new()),
-            patterns: Arc::new(DashMap::new()),
-            recent_queries: Arc::new(DashMap::new()),
+            stats: QueryCacheStats::new(),
+            inserts: AtomicU64::new(0),
         }
     }
 
-    /// Search for cached results for a query
-    pub fn search(
-        &self,
-        query_text: &str,
-        query_vector: &[f32],
-        params_hash: u64,
-    ) -> Option<Vec<SemanticSearchResult>> {
-        // Update total queries count
+    /// Look up cached results by parameter hash. O(1); an expired entry is
+    /// removed and reported as a miss.
+    pub fn get(&self, params_hash: u64, query_text: &str) -> Option<Arc<[SemanticSearchResult]>> {
         self.stats.total_queries.fetch_add(1, Ordering::Relaxed);
 
-        // First, try exact parameter match
-        if let Some(results) = self.find_exact_match(params_hash) {
-            self.stats.record_hit(1.0);
-            return Some(results);
-        }
+        let entry = self.cache.get(&params_hash).map(|e| Arc::clone(e.value()));
+        let hit = match entry {
+            Some(entry) if entry.is_expired(self.config.ttl_minutes) => {
+                self.remove_if_same(params_hash, &entry, true);
+                None
+            }
+            Some(entry) if entry.query_text == query_text => {
+                entry.mark_accessed();
+                Some(Arc::clone(&entry.results))
+            }
+            _ => None,
+        };
 
-        // Then try similarity-based matching
-        // Now checks params_hash to prevent cross-session result leakage
-        if let Some((results, similarity)) = self.find_similar_query(query_vector, params_hash) {
-            self.stats.record_hit(similarity);
-            return Some(results);
-        }
-
-        // Record cache miss
-        self.stats.record_miss();
-
-        // Update query patterns for future prefetching
-        if self.config.enable_prefetching {
-            self.update_query_patterns(query_text);
-        }
-
-        None
+        let counter = if hit.is_some() {
+            &self.stats.cache_hits
+        } else {
+            &self.stats.cache_misses
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+        hit
     }
 
     /// Cache query results
-    pub fn cache_results(
+    pub fn insert(
         &self,
         query_text: String,
-        query_vector: Vec<f32>,
-        results: Vec<SemanticSearchResult>,
+        results: Arc<[SemanticSearchResult]>,
         params_hash: u64,
-        session_id: Option<Uuid>,
-    ) -> Result<()> {
-        // Clean up expired entries first
-        self.cleanup_expired()?;
-
-        let cached_query = CachedQuery::new(
-            query_text.clone(),
-            query_vector,
-            results,
-            params_hash,
-            session_id,
-        );
-
-        let query_id = cached_query.id;
-
-        // Check if we need to evict before inserting
-        let current_size = self.cache.len();
-        if current_size >= self.config.max_cache_size {
-            self.evict_least_efficient();
+        scope: CacheScope,
+    ) {
+        let inserts = self.inserts.fetch_add(1, Ordering::Relaxed) + 1;
+        if inserts.is_multiple_of(EXPIRY_SWEEP_INTERVAL) {
+            self.cleanup_expired();
         }
 
-        // Insert new entry
-        self.cache.insert(query_id, cached_query);
+        if self.cache.len() >= self.config.max_cache_size.max(1)
+            && !self.cache.contains_key(&params_hash)
+        {
+            self.cleanup_expired();
+            if self.cache.len() >= self.config.max_cache_size.max(1) {
+                self.evict_least_efficient();
+            }
+        }
 
-        // Update statistics
+        let entry = Arc::new(CachedQuery::new(query_text, results, params_hash, scope));
+        let added = entry.estimated_bytes;
+        if let Some(old) = self.cache.insert(params_hash, entry) {
+            self.sub_bytes(old.estimated_bytes);
+        }
+        self.stats
+            .estimated_memory_bytes
+            .fetch_add(added, Ordering::Relaxed);
+        self.sync_size();
+    }
+
+    /// Remove `params_hash` only if it still maps to `entry` (a concurrent
+    /// insert may have replaced it).
+    fn remove_if_same(&self, params_hash: u64, entry: &Arc<CachedQuery>, expired: bool) {
+        if let Some((_, removed)) = self
+            .cache
+            .remove_if(&params_hash, |_, v| Arc::ptr_eq(v, entry))
+        {
+            self.account_removed(&removed);
+            if expired {
+                self.stats.expired_removed.fetch_add(1, Ordering::Relaxed);
+            }
+            self.sync_size();
+        }
+    }
+
+    fn account_removed(&self, removed: &CachedQuery) {
+        self.sub_bytes(removed.estimated_bytes);
+    }
+
+    /// Saturating: a concurrent `clear` may already have reset the counter.
+    fn sub_bytes(&self, bytes: usize) {
+        let counter = &self.stats.estimated_memory_bytes;
+        let mut current = counter.load(Ordering::Relaxed);
+        while let Err(actual) = counter.compare_exchange_weak(
+            current,
+            current.saturating_sub(bytes),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            current = actual;
+        }
+    }
+
+    fn sync_size(&self) {
         self.stats
             .current_cache_size
             .store(self.cache.len(), Ordering::Relaxed);
-        self.stats
-            .estimated_memory_bytes
-            .store(self.estimate_memory_usage(), Ordering::Relaxed);
-
-        debug!("Cached query results for: {}", query_text);
-        Ok(())
     }
 
-    /// Find exact parameter match
-    fn find_exact_match(&self, params_hash: u64) -> Option<Vec<SemanticSearchResult>> {
-        for entry in self.cache.iter() {
-            let cached_query = entry.value();
-            if cached_query.params_hash == params_hash
-                && !cached_query.is_expired(self.config.ttl_minutes)
-            {
-                // Update access statistics
-                cached_query.mark_accessed();
-                return Some(cached_query.results.clone());
+    /// Remove every entry matching `predicate`; returns how many went.
+    fn remove_where(&self, predicate: impl Fn(&CachedQuery) -> bool) -> usize {
+        let mut removed = 0usize;
+        let mut freed = 0usize;
+        self.cache.retain(|_, entry| {
+            if predicate(entry) {
+                removed += 1;
+                freed += entry.estimated_bytes;
+                false
+            } else {
+                true
             }
+        });
+        if removed > 0 {
+            self.sub_bytes(freed);
+            self.sync_size();
         }
-        None
-    }
-
-    /// Find similar query based on vector similarity
-    ///
-    /// CRITICAL: This method now checks params_hash to ensure cached results
-    /// match the current query parameters (session filter, date range, etc.)
-    fn find_similar_query(
-        &self,
-        query_vector: &[f32],
-        params_hash: u64,
-    ) -> Option<(Vec<SemanticSearchResult>, f32)> {
-        let mut best_match: Option<(Vec<SemanticSearchResult>, f32, Uuid)> = None;
-        let mut best_similarity = 0.0f32;
-
-        for entry in self.cache.iter() {
-            let cached_query = entry.value();
-
-            if cached_query.is_expired(self.config.ttl_minutes) {
-                continue;
-            }
-
-            // CRITICAL FIX: Check params_hash matches before considering similarity
-            // This prevents returning cached results from different sessions/filters
-            // Bug: Previously, similar queries with different session filters
-            // would return wrong cached results from other sessions
-            if cached_query.params_hash != params_hash {
-                continue;
-            }
-
-            let similarity = cached_query.similarity_with(query_vector);
-
-            if similarity >= self.config.similarity_threshold && similarity > best_similarity {
-                best_similarity = similarity;
-                best_match = Some((cached_query.results.clone(), similarity, cached_query.id));
-            }
-        }
-
-        if let Some((results, similarity, query_id)) = best_match {
-            // Update access statistics for the matched query
-            if let Some(entry) = self.cache.get(&query_id) {
-                entry.mark_accessed();
-            }
-            Some((results, similarity))
-        } else {
-            None
-        }
+        removed
     }
 
     /// Clean up expired cache entries
-    fn cleanup_expired(&self) -> Result<()> {
-        let mut removed_count = 0;
-
-        self.cache.retain(|_, cached_query| {
-            let expired = cached_query.is_expired(self.config.ttl_minutes);
-            if expired {
-                removed_count += 1;
-            }
-            !expired
-        });
-
-        if removed_count > 0 {
+    fn cleanup_expired(&self) {
+        let ttl = self.config.ttl_minutes;
+        let removed = self.remove_where(|entry| entry.is_expired(ttl));
+        if removed > 0 {
             self.stats
                 .expired_removed
-                .fetch_add(removed_count as u64, Ordering::Relaxed);
-            self.stats
-                .current_cache_size
-                .store(self.cache.len(), Ordering::Relaxed);
-            self.stats
-                .estimated_memory_bytes
-                .store(self.estimate_memory_usage(), Ordering::Relaxed);
-
-            debug!("Removed {} expired cache entries", removed_count);
+                .fetch_add(removed as u64, Ordering::Relaxed);
+            debug!("Removed {} expired cache entries", removed);
         }
-
-        Ok(())
     }
 
-    /// Evict least efficient cache entry
+    /// Evict the least efficient ~10% of the cache in one pass, so inserts
+    /// at capacity pay for a scan once per many inserts, not every time.
     fn evict_least_efficient(&self) {
-        if self.cache.is_empty() {
-            return;
-        }
-
-        // Find the least efficient entry
-        let mut worst_id: Option<Uuid> = None;
-        let mut worst_score = f32::INFINITY;
-
-        for entry in self.cache.iter() {
-            let score = entry.value().efficiency_score();
-            if score < worst_score {
-                worst_score = score;
-                worst_id = Some(*entry.key());
-            }
-        }
-
-        if let Some(id) = worst_id {
-            // Only increment counter if we actually removed the entry
-            // (another thread may have already removed it)
-            if self.cache.remove(&id).is_some() {
-                self.stats.evicted_entries.fetch_add(1, Ordering::Relaxed);
-
-                debug!(
-                    "Evicted cache entry with efficiency score: {:.3}",
-                    worst_score
-                );
-            }
-        }
-    }
-
-    /// Update query patterns for prefetching
-    fn update_query_patterns(&self, query_text: &str) {
-        let now = Utc::now().timestamp() as u64;
-        let query_lower = query_text.to_lowercase();
-
-        // Update recent queries
-        self.recent_queries
-            .insert(query_lower.clone(), AtomicU64::new(now));
-
-        // Update or create pattern
-        self.patterns
-            .entry(query_lower.clone())
-            .and_modify(|pattern| {
-                pattern.frequency.fetch_add(1, Ordering::Relaxed);
-                pattern.last_seen.store(now, Ordering::Relaxed);
+        let batch = (self.config.max_cache_size / 10).max(1);
+        let mut scored: Vec<(f32, u64, Arc<CachedQuery>)> = self
+            .cache
+            .iter()
+            .map(|e| {
+                (
+                    e.value().efficiency_score(),
+                    *e.key(),
+                    Arc::clone(e.value()),
+                )
             })
-            .or_insert_with(|| QueryPattern {
-                frequency: AtomicU64::new(1),
-                last_seen: AtomicU64::new(now),
-            });
+            .collect();
+        if scored.len() > batch {
+            scored.select_nth_unstable_by(batch - 1, |a, b| a.0.total_cmp(&b.0));
+            scored.truncate(batch);
+        }
 
-        // Clean up old patterns (simple implementation)
-        // In production, this could be done by a background task
+        let mut evicted = 0u64;
+        for (_, key, entry) in scored {
+            if let Some((_, removed)) = self.cache.remove_if(&key, |_, v| Arc::ptr_eq(v, &entry)) {
+                self.account_removed(&removed);
+                evicted += 1;
+            }
+        }
+        if evicted > 0 {
+            self.stats
+                .evicted_entries
+                .fetch_add(evicted, Ordering::Relaxed);
+            self.sync_size();
+            debug!("Evicted {} query cache entries", evicted);
+        }
     }
 
     /// Get cache statistics snapshot
@@ -607,57 +477,30 @@ impl QueryCache {
         Ok(())
     }
 
-    /// Invalidate all cache entries for a specific session
-    /// More efficient than clearing the entire cache when only one session changed
+    /// Invalidate every entry whose results a write to `session_id` can
+    /// change: that session's entries, multi-session entries including it,
+    /// and all global entries.
     pub fn invalidate_session(&self, session_id: Uuid) -> Result<()> {
-        let mut invalidated_count = 0;
-        let mut keys_to_remove = Vec::new();
-
-        // Collect keys to remove (entries associated with this session)
-        for entry in self.cache.iter() {
-            if entry.value().session_id == Some(session_id) {
-                keys_to_remove.push(*entry.key());
-            }
-        }
-
-        // Remove the collected keys
-        for key in keys_to_remove {
-            if self.cache.remove(&key).is_some() {
-                invalidated_count += 1;
-            }
-        }
-
-        // Update cache size
-        let new_size = self.cache.len();
-        self.stats
-            .current_cache_size
-            .store(new_size, Ordering::Relaxed);
-        self.stats
-            .estimated_memory_bytes
-            .store(self.estimate_memory_usage(), Ordering::Relaxed);
-
-        if invalidated_count > 0 {
+        let removed = self.remove_where(|entry| entry.scope.covers(session_id));
+        if removed > 0 {
             debug!(
                 "Invalidated {} cache entries for session {} (remaining: {})",
-                invalidated_count, session_id, new_size
+                removed,
+                session_id,
+                self.cache.len()
             );
         }
-
         Ok(())
     }
 
-    /// Estimate memory usage of the cache
-    fn estimate_memory_usage(&self) -> usize {
-        self.cache
-            .iter()
-            .map(|entry| {
-                let query = entry.value();
-                let text_size = query.query_text.len();
-                let vector_size = query.query_vector.len() * std::mem::size_of::<f32>();
-                let results_size = query.results.len() * 200; // Rough estimate per result
-                text_size + vector_size + results_size + 100 // Base overhead
-            })
-            .sum()
+    /// Number of cached entries
+    pub fn len(&self) -> usize {
+        self.cache.len()
+    }
+
+    /// Whether the cache is empty
+    pub fn is_empty(&self) -> bool {
+        self.cache.is_empty()
     }
 
     /// Get cache efficiency metrics
@@ -687,6 +530,25 @@ impl Default for QueryCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::content_vectorizer::ContentType;
+    use chrono::Utc;
+
+    fn result(session_id: Uuid, text: &str) -> SemanticSearchResult {
+        SemanticSearchResult {
+            content_id: Uuid::new_v4().to_string(),
+            session_id,
+            content_type: ContentType::UpdateContent,
+            text_content: text.to_string(),
+            similarity_score: 0.9,
+            importance_score: 0.7,
+            timestamp: Utc::now(),
+            combined_score: 0.84,
+        }
+    }
+
+    fn empty() -> Arc<[SemanticSearchResult]> {
+        Arc::from(Vec::new())
+    }
 
     #[test]
     fn test_query_cache_creation() {
@@ -701,59 +563,32 @@ mod tests {
     #[test]
     fn test_cache_and_retrieve() {
         let cache = QueryCache::default();
+        let sid = Uuid::new_v4();
+        let results: Arc<[SemanticSearchResult]> = Arc::from(vec![result(sid, "hello")]);
 
-        let query_text = "test query".to_string();
-        let query_vector = vec![0.1, 0.2, 0.3];
-        let results = vec![];
-        let params_hash = 12345u64;
+        cache.insert(
+            "test query".into(),
+            Arc::clone(&results),
+            12345,
+            CacheScope::Global,
+        );
 
-        // Cache the results
-        cache
-            .cache_results(
-                query_text.clone(),
-                query_vector.clone(),
-                results,
-                params_hash,
-                None,
-            )
-            .unwrap();
-
-        // Try to retrieve
-        let cached_results = cache.search(&query_text, &query_vector, params_hash);
-        assert!(cached_results.is_some());
+        let hit = cache.get(12345, "test query").expect("hit");
+        // Shared, not copied.
+        assert!(Arc::ptr_eq(&hit, &results));
+        let stats = cache.get_stats();
+        assert_eq!(stats.cache_hits, 1);
+        assert_eq!(stats.total_queries, 1);
     }
 
     #[test]
-    fn test_similarity_matching() {
+    fn test_different_params_miss() {
         let cache = QueryCache::default();
-
-        let query_vector1 = vec![1.0, 0.0, 0.0];
-        let query_vector2 = vec![0.9, 0.1, 0.0]; // Similar vector
-        let results = vec![];
-        let params_hash = 123; // Same params_hash for both queries
-
-        // Cache first query
-        cache
-            .cache_results(
-                "query1".to_string(),
-                query_vector1,
-                results,
-                params_hash,
-                None,
-            )
-            .unwrap();
-
-        // Search with similar vector and SAME params_hash
-        // After fix: similarity matching only works if params_hash matches
-        let cached_results = cache.search("query2", &query_vector2, params_hash);
-        assert!(cached_results.is_some());
-
-        // Search with different params_hash should NOT return cached results
-        let different_params = cache.search("query2", &query_vector2, 456);
-        assert!(
-            different_params.is_none(),
-            "Bug fix verification: different params_hash should not return cached results"
-        );
+        cache.insert("query".into(), empty(), 123, CacheScope::Global);
+        assert!(cache.get(456, "query").is_none());
+        // Same hash but different text (collision guard) misses too.
+        assert!(cache.get(123, "other").is_none());
+        assert_eq!(cache.get_stats().cache_misses, 2);
     }
 
     #[test]
@@ -764,13 +599,105 @@ mod tests {
         };
 
         let cache = QueryCache::new(config);
+        cache.insert("test".into(), empty(), 123, CacheScope::Global);
 
-        cache
-            .cache_results("test".to_string(), vec![1.0, 0.0], vec![], 123, None)
-            .unwrap();
+        // Should not find expired entry, and the lookup removes it.
+        assert!(cache.get(123, "test").is_none());
+        assert!(cache.is_empty());
+        assert_eq!(cache.get_stats().expired_removed, 1);
+    }
 
-        // Should not find expired entry
-        let cached_results = cache.search("test", &[1.0, 0.0], 123);
-        assert!(cached_results.is_none());
+    #[test]
+    fn test_invalidate_session_drops_covering_scopes() {
+        let cache = QueryCache::default();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+
+        cache.insert("q".into(), empty(), 1, CacheScope::Session(a));
+        cache.insert("q".into(), empty(), 2, CacheScope::Session(b));
+        cache.insert("q".into(), empty(), 3, CacheScope::Global);
+        cache.insert(
+            "q".into(),
+            empty(),
+            4,
+            CacheScope::Sessions(Arc::from(vec![a, b])),
+        );
+        cache.insert(
+            "q".into(),
+            empty(),
+            5,
+            CacheScope::Sessions(Arc::from(vec![b])),
+        );
+
+        cache.invalidate_session(a).unwrap();
+
+        assert!(cache.get(1, "q").is_none(), "own session entry");
+        assert!(
+            cache.get(3, "q").is_none(),
+            "global entry must not go stale"
+        );
+        assert!(cache.get(4, "q").is_none(), "multi-session entry with a");
+        assert!(cache.get(2, "q").is_some());
+        assert!(cache.get(5, "q").is_some());
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn test_capacity_is_enforced() {
+        let cache = QueryCache::new(QueryCacheConfig {
+            max_cache_size: 20,
+            ..Default::default()
+        });
+        for i in 0..100u64 {
+            cache.insert(format!("q{i}"), empty(), i, CacheScope::Global);
+            assert!(cache.len() <= 20);
+        }
+        assert!(cache.get_stats().evicted_entries > 0);
+        // The newest entry always survives its own insert.
+        assert!(cache.get(99, "q99").is_some());
+    }
+
+    #[test]
+    fn test_replacing_key_does_not_evict() {
+        let cache = QueryCache::new(QueryCacheConfig {
+            max_cache_size: 2,
+            ..Default::default()
+        });
+        cache.insert("a".into(), empty(), 1, CacheScope::Global);
+        cache.insert("b".into(), empty(), 2, CacheScope::Global);
+        cache.insert("b".into(), empty(), 2, CacheScope::Global);
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.get_stats().evicted_entries, 0);
+    }
+
+    #[test]
+    fn test_memory_estimate_is_incremental() {
+        let cache = QueryCache::default();
+        let sid = Uuid::new_v4();
+        let results: Arc<[SemanticSearchResult]> = Arc::from(vec![result(sid, "some text")]);
+
+        cache.insert(
+            "q".into(),
+            Arc::clone(&results),
+            1,
+            CacheScope::Session(sid),
+        );
+        let one = cache.get_stats().estimated_memory_bytes;
+        assert!(one > 0);
+
+        cache.insert(
+            "q".into(),
+            Arc::clone(&results),
+            1,
+            CacheScope::Session(sid),
+        );
+        assert_eq!(cache.get_stats().estimated_memory_bytes, one, "replace");
+
+        cache.insert("q".into(), results, 2, CacheScope::Session(sid));
+        assert_eq!(cache.get_stats().estimated_memory_bytes, 2 * one);
+
+        cache.invalidate_session(sid).unwrap();
+        assert_eq!(cache.get_stats().estimated_memory_bytes, 0);
+        assert_eq!(cache.get_stats().current_cache_size, 0);
     }
 }

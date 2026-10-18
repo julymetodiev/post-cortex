@@ -14,6 +14,7 @@
 
 use anyhow::Result;
 use rayon::prelude::*;
+use std::collections::HashMap;
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -22,7 +23,7 @@ use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_embeddings::VectorMetadata;
 
 use super::types::ContentType;
-use super::vectorizer::ContentVectorizer;
+use super::vectorizer::{ContentVectorizer, source_content_ids};
 
 /// Threshold for switching to parallel processing.
 /// Below this threshold, sequential processing is faster due to reduced overhead.
@@ -37,16 +38,25 @@ impl ContentVectorizer {
         info!("Vectorizing session: {}", session.id());
         let mut vectorized_count = 0;
 
-        let update_count = self.vectorize_context_updates(session).await?;
+        let (update_count, updates_complete) = self.vectorize_context_updates(session).await?;
         vectorized_count += update_count;
 
-        let entity_count = if self.config.enable_entity_vectorization {
-            let c = self.vectorize_entities(session).await?;
+        let (entity_count, entities_complete) = if self.config.enable_entity_vectorization {
+            let (c, complete) = self.vectorize_entities(session).await?;
             vectorized_count += c;
-            c
+            (c, complete)
         } else {
-            0
+            (0, true)
         };
+
+        if vectorized_count > 0 {
+            self.invalidate_cached(session.id());
+        }
+        // Only a run where nothing failed may let later searches skip this
+        // session; otherwise the next search retries.
+        if updates_complete && entities_complete {
+            self.mark_vectorized(session);
+        }
 
         info!(
             "Vectorized {} items for session {} (updates={}, entities={})",
@@ -61,7 +71,7 @@ impl ContentVectorizer {
     /// Vectorize only the most recent update (incremental vectorization).
     /// Much more efficient than re-vectorizing the entire session.
     pub async fn vectorize_latest_update(&self, session: &ActiveSession) -> Result<usize> {
-        match session.hot_context.back() {
+        match session.hot_context.back_arc() {
             Some(update) => self.vectorize_update(session, update.id).await,
             None => {
                 info!(
@@ -86,15 +96,18 @@ impl ContentVectorizer {
             debug!("vectorize_update: {} already vectorized", update_id);
             return Ok(0);
         }
-        let Some(update) = session
-            .hot_context
-            .iter()
-            .into_iter()
-            .rev()
-            .find(|u| u.id == update_id)
-        else {
+        // Hot context first (recent, no scan of the full history), then the
+        // complete update list for updates already evicted from it.
+        let Some(update) = session.hot_context.find(|u| u.id == update_id).or_else(|| {
+            session
+                .incremental_updates
+                .iter()
+                .rev()
+                .find(|u| u.id == update_id)
+                .cloned()
+        }) else {
             info!(
-                "vectorize_update: update {} not in hot_context of session {} (evicted?)",
+                "vectorize_update: update {} not found in session {}",
                 update_id,
                 session.id()
             );
@@ -143,29 +156,27 @@ impl ContentVectorizer {
         if self.add_and_persist(embedding, metadata).await {
             debug!("Successfully vectorized and persisted update {}", update.id);
             session.vectorized_update_ids.insert(update.id);
+            self.invalidate_cached(session.id());
             Ok(1)
         } else {
             Ok(0)
         }
     }
 
-    /// Vectorize context updates from a session.
-    pub(super) async fn vectorize_context_updates(&self, session: &ActiveSession) -> Result<usize> {
+    /// Vectorize context updates from a session. Returns how many were added
+    /// and whether every collected update was added.
+    pub(super) async fn vectorize_context_updates(
+        &self,
+        session: &ActiveSession,
+    ) -> Result<(usize, bool)> {
         // CRITICAL: vectorized_update_ids is persisted to RocksDB but vector_db is in-memory.
         // After daemon restart, vectorized_update_ids may contain IDs that are no longer in vector_db.
         // We must verify EACH update_id actually exists in vector_db, not just check if session has any.
-        let session_id_str = session.id().to_string();
-
-        let actual_vectorized: std::collections::HashSet<String> = self
-            .vector_db
-            .get_vectorized_update_ids(&session_id_str)
-            .into_iter()
-            .collect();
-
+        // Update ids are UUIDs, so the O(1) content-id index answers that.
         let stale_ids: Vec<Uuid> = session
             .vectorized_update_ids
             .iter()
-            .filter(|id| !actual_vectorized.contains(&id.to_string()))
+            .filter(|id| !self.vector_db.has_update_embedding(&id.to_string()))
             .map(|id| *id)
             .collect();
 
@@ -189,12 +200,11 @@ impl ContentVectorizer {
             .count();
 
         info!(
-            "vectorize_context_updates: session={}, total_updates={}, vectorized_ids={}, non_vectorized={}, actual_in_vector_db={}",
+            "vectorize_context_updates: session={}, total_updates={}, vectorized_ids={}, non_vectorized={}",
             session.id(),
             total_updates,
             vectorized_ids_count,
             non_vectorized_count,
-            actual_vectorized.len()
         );
 
         let (texts_to_embed, metadata_list) =
@@ -218,33 +228,36 @@ impl ContentVectorizer {
                 session.id(),
                 non_vectorized_count
             );
-            return Ok(0);
+            return Ok((0, true));
         }
 
-        let embeddings = self
-            .embedding_engine
-            .encode_batch(texts_to_embed.clone())
-            .await?;
+        let attempted = metadata_list.len();
+        let embeddings = self.embedding_engine.encode_batch(texts_to_embed).await?;
 
-        let mut added_count = 0;
-        for (embedding, metadata) in embeddings.into_iter().zip(metadata_list.iter()) {
-            if self.add_and_persist(embedding, metadata.clone()).await {
-                added_count += 1;
-                if let Ok(update_id) = Uuid::parse_str(&metadata.id) {
-                    session.vectorized_update_ids.insert(update_id);
-                }
+        let added = self
+            .add_and_persist_many(embeddings.into_iter().zip(metadata_list).collect())
+            .await;
+        for content_id in &added {
+            if let Ok(update_id) = Uuid::parse_str(content_id) {
+                session.vectorized_update_ids.insert(update_id);
             }
         }
 
         debug!(
             "Added {} context update vectors, marked as vectorized",
-            added_count
+            added.len()
         );
-        Ok(added_count)
+        Ok((added.len(), added.len() == attempted))
     }
 
-    /// Vectorize entity descriptions.
-    pub(super) async fn vectorize_entities(&self, session: &ActiveSession) -> Result<usize> {
+    /// Vectorize entity descriptions. An entity whose description is
+    /// already stored unchanged for this session is skipped; a changed one
+    /// replaces its old vector. Returns how many were added and whether
+    /// every one that needed (re-)embedding was added.
+    pub(super) async fn vectorize_entities(
+        &self,
+        session: &ActiveSession,
+    ) -> Result<(usize, bool)> {
         let entity_count = session.entity_graph.entities.len();
 
         let (texts_to_embed, metadata_list) = if entity_count >= PARALLEL_PROCESSING_THRESHOLD {
@@ -299,25 +312,55 @@ impl ContentVectorizer {
             (texts_to_embed, metadata_list)
         };
 
+        // Keep only entities that are new or whose description changed.
+        let source = session.id().to_string();
+        let mut replaced: HashMap<String, Vec<u32>> = HashMap::new();
+        let (texts_to_embed, metadata_list): (Vec<String>, Vec<VectorMetadata>) = texts_to_embed
+            .into_iter()
+            .zip(metadata_list)
+            .filter(|(_, metadata)| {
+                let existing = source_content_ids(&self.vector_db, &metadata.id, &source);
+                let unchanged = existing.len() == 1
+                    && self
+                        .vector_db
+                        .get_metadata(existing[0])
+                        .is_some_and(|m| m.text == metadata.text);
+                if !unchanged && !existing.is_empty() {
+                    replaced.insert(metadata.id.clone(), existing);
+                }
+                !unchanged
+            })
+            .unzip();
+
         if texts_to_embed.is_empty() {
-            debug!("No entity texts to vectorize for session {}", session.id());
-            return Ok(0);
+            debug!(
+                "No new or changed entity texts to vectorize for session {}",
+                session.id()
+            );
+            return Ok((0, true));
         }
 
-        let embeddings = self
-            .embedding_engine
-            .encode_batch(texts_to_embed.clone())
-            .await?;
+        let attempted = metadata_list.len();
+        let embeddings = self.embedding_engine.encode_batch(texts_to_embed).await?;
 
-        let mut added_count = 0;
-        for (embedding, metadata) in embeddings.into_iter().zip(metadata_list) {
-            if self.add_and_persist(embedding, metadata).await {
-                added_count += 1;
-            }
-        }
+        let added = self
+            .add_and_persist_many(embeddings.into_iter().zip(metadata_list).collect())
+            .await;
 
-        debug!("Added {} entity vectors", added_count);
-        Ok(added_count)
+        // Drop the superseded copies only once their replacement is stored.
+        let superseded: Vec<u32> = added
+            .iter()
+            .filter_map(|content_id| replaced.remove(content_id))
+            .flatten()
+            .collect();
+        self.vector_db.remove_vectors(&superseded);
+
+        debug!(
+            "Added {} entity vectors ({} superseded)",
+            added.len(),
+            superseded.len()
+        );
+        Ok((added.len(), added.len() == attempted))
     }
 
     /// Collect updates sequentially (for small sessions).
