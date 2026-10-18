@@ -28,7 +28,11 @@ use std::fs;
 use std::path::PathBuf;
 
 /// Daemon configuration loaded from file and environment
+///
+/// Every field is optional in `daemon.toml`; missing keys take their
+/// [`Default`] value.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DaemonConfig {
     /// Host to bind to (default: 127.0.0.1)
     pub host: String,
@@ -447,6 +451,20 @@ mod tests {
             ..Default::default()
         };
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn test_partial_toml_keeps_defaults() {
+        let parsed: DaemonConfig =
+            toml::from_str("host = \"0.0.0.0\"\nallowed_hosts = [\"100.64.0.7\"]\n").unwrap();
+        let defaults = DaemonConfig::default();
+        assert_eq!(parsed.host, "0.0.0.0");
+        assert_eq!(parsed.allowed_hosts, vec!["100.64.0.7"]);
+        assert_eq!(parsed.port, defaults.port);
+        assert_eq!(parsed.grpc_port, defaults.grpc_port);
+        assert_eq!(parsed.data_directory, defaults.data_directory);
+        assert_eq!(parsed.storage_backend, defaults.storage_backend);
+        assert_eq!(parsed.redact, defaults.redact);
     }
 
     #[test]
