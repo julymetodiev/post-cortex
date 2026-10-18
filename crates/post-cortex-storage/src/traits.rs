@@ -160,6 +160,26 @@ pub trait Storage: FreshnessStorage + Send + Sync {
         Ok(())
     }
 
+    /// [`save_session_with_updates`](Self::save_session_with_updates) that
+    /// also deletes the rows of the `removed` updates.
+    ///
+    /// Saves never infer deletions from what a snapshot lacks: a snapshot
+    /// taken before an update landed (an evicted or concurrent copy) would
+    /// otherwise delete an acknowledged update. Removing an update from a
+    /// session must name it here. The default implementation ignores
+    /// `removed`; the RocksDB and SurrealDB backends override it.
+    async fn save_session_with_changes(
+        &self,
+        session: &ActiveSession,
+        session_id: Uuid,
+        updates: Vec<ContextUpdate>,
+        removed: Vec<Uuid>,
+    ) -> Result<()> {
+        let _ = removed;
+        self.save_session_with_updates(session, session_id, updates)
+            .await
+    }
+
     /// Load all updates for a session
     async fn load_session_updates(&self, session_id: Uuid) -> Result<Vec<ContextUpdate>>;
 
@@ -570,6 +590,28 @@ impl Storage for StorageBackend {
             StorageBackend::SurrealDB(storage) => {
                 storage
                     .save_session_with_updates(session, session_id, updates)
+                    .await
+            }
+        }
+    }
+
+    async fn save_session_with_changes(
+        &self,
+        session: &ActiveSession,
+        session_id: Uuid,
+        updates: Vec<ContextUpdate>,
+        removed: Vec<Uuid>,
+    ) -> Result<()> {
+        match self {
+            StorageBackend::RocksDB(storage) => {
+                storage
+                    .save_session_with_changes(session, session_id, updates, removed)
+                    .await
+            }
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => {
+                storage
+                    .save_session_with_changes(session, session_id, updates, removed)
                     .await
             }
         }

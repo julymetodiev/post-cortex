@@ -49,17 +49,16 @@ use super::records::{
 };
 use super::{SurrealDBStorage, per_relation_table};
 
-/// Sessions tracked in [`PersistedStates`] before the map is reset; a reset
-/// only costs one full write per session afterwards.
+/// Sessions tracked in [`PersistedStates`]; past it one entry is dropped per
+/// new session, which only costs that session one full write later.
 const MAX_TRACKED_SESSIONS: usize = 4096;
 
 /// What this process knows to be stored for one session.
 #[derive(Default)]
 pub(crate) struct PersistedState {
-    /// Updates the session contained at the last load/save (their rows
-    /// exist). Only these are ever deleted when they leave the session, so
-    /// a save of an unrelated or freshly created snapshot never removes
-    /// rows it did not know about.
+    /// Updates known to have rows (as of the last load/save). Updates not
+    /// in here get their row written; rows are only deleted when a save
+    /// names them as removed.
     update_ids: HashSet<Uuid>,
     /// Fingerprint per entity name as last written or read.
     entities: HashMap<String, u64>,
@@ -173,7 +172,11 @@ impl SurrealDBStorage {
     fn persisted_slot(&self, session_id: Uuid) -> Arc<tokio::sync::Mutex<Option<PersistedState>>> {
         if self.persisted.len() >= MAX_TRACKED_SESSIONS && !self.persisted.contains_key(&session_id)
         {
-            self.persisted.clear();
+            // Drop one other session's knowledge, not everyone's.
+            let victim = self.persisted.iter().map(|e| *e.key()).next();
+            if let Some(victim) = victim {
+                self.persisted.remove(&victim);
+            }
         }
         self.persisted.entry(session_id).or_default().clone()
     }
@@ -232,51 +235,51 @@ impl SurrealDBStorage {
 
     /// Write `session` (metadata row), the `explicit` updates, session
     /// updates without a row, and changed entities/edges (all of them when
-    /// `full_graph`); delete rows of updates that left the session since
-    /// the last load/save.
+    /// `full_graph`); delete the rows of the `removed` updates. Rows are
+    /// never deleted because a snapshot lacks them: it may predate them.
     async fn persist(
         &self,
         session: &ActiveSession,
         explicit: Vec<ContextUpdate>,
+        removed_ids: Vec<Uuid>,
         full_graph: bool,
     ) -> Result<()> {
         let session_id = session.id();
         let slot = self.persisted_slot(session_id);
         let mut guard = slot.lock().await;
 
-        let previous = guard.take();
-        let (known_ids, known_entities, known_relations, trusted) = match previous {
-            Some(state) => (state.update_ids, state.entities, state.relations, true),
-            None => (
-                self.stored_update_ids(session_id).await?,
-                HashMap::new(),
-                HashMap::new(),
-                false,
-            ),
+        // Borrowed, not taken: a failed save keeps what was known before.
+        let fresh;
+        let (known_ids, known_entities, known_relations) = match guard.as_ref() {
+            Some(state) => (&state.update_ids, &state.entities, &state.relations),
+            None => {
+                fresh = PersistedState {
+                    update_ids: self.stored_update_ids(session_id).await?,
+                    ..Default::default()
+                };
+                (&fresh.update_ids, &fresh.entities, &fresh.relations)
+            }
         };
 
         // Updates.
-        let current_ids: HashSet<Uuid> = session.incremental_updates.iter().map(|u| u.id).collect();
+        let removed_set: HashSet<Uuid> = removed_ids.iter().copied().collect();
         let explicit_ids: HashSet<Uuid> = explicit.iter().map(|u| u.id).collect();
         let mut updates = Vec::with_capacity(explicit.len());
-        for update in &explicit {
+        let mut written_ids = Vec::with_capacity(explicit.len());
+        for update in explicit.iter().filter(|u| !removed_set.contains(&u.id)) {
             updates.push(update_record(session_id, update)?);
+            written_ids.push(update.id);
         }
         for update in session.incremental_updates.iter() {
-            if !known_ids.contains(&update.id) && !explicit_ids.contains(&update.id) {
+            if !known_ids.contains(&update.id)
+                && !explicit_ids.contains(&update.id)
+                && !removed_set.contains(&update.id)
+            {
                 updates.push(update_record(session_id, update)?);
+                written_ids.push(update.id);
             }
         }
-        // Without trusted knowledge (first save in this process) nothing is
-        // deleted: the rows may belong to updates this snapshot never saw.
-        let removed: Vec<String> = if trusted {
-            known_ids
-                .difference(&current_ids)
-                .map(Uuid::to_string)
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let removed: Vec<String> = removed_ids.iter().map(Uuid::to_string).collect();
 
         // Graph.
         let graph = &session.entity_graph;
@@ -361,7 +364,9 @@ impl SurrealDBStorage {
             .iter()
             .any(|i| errors.contains_key(i))
         {
-            // State stays unknown: the next save re-reads the stored rows.
+            // Rows of this save may be missing: forget the session's state
+            // so the next save re-reads which rows exist.
+            *guard = None;
             return Err(anyhow::anyhow!(
                 "Failed to save session {}: {} statement(s) failed",
                 session_id,
@@ -370,8 +375,13 @@ impl SurrealDBStorage {
         }
         let graph_ok =
             !errors.contains_key(&STMT_ENTITIES) && !errors.contains_key(&STMT_RELATIONS);
+        let mut update_ids = known_ids.clone();
+        update_ids.extend(written_ids);
+        for id in &removed_set {
+            update_ids.remove(id);
+        }
         *guard = Some(PersistedState {
-            update_ids: current_ids,
+            update_ids,
             entities: if graph_ok { entity_fps } else { HashMap::new() },
             relations: if graph_ok {
                 relation_fps
@@ -422,7 +432,7 @@ impl SurrealDBStorage {
 impl Storage for SurrealDBStorage {
     /// Full save: metadata, every update without a row, and the whole graph.
     async fn save_session(&self, session: &ActiveSession) -> Result<()> {
-        self.persist(session, Vec::new(), true).await
+        self.persist(session, Vec::new(), Vec::new(), true).await
     }
 
     /// Incremental save: metadata, `updates`, any other update without a
@@ -441,7 +451,25 @@ impl Storage for SurrealDBStorage {
                 session_id
             ));
         }
-        self.persist(session, updates, false).await
+        self.persist(session, updates, Vec::new(), false).await
+    }
+
+    /// Incremental save that also deletes the `removed` updates' rows.
+    async fn save_session_with_changes(
+        &self,
+        session: &ActiveSession,
+        session_id: Uuid,
+        updates: Vec<ContextUpdate>,
+        removed: Vec<Uuid>,
+    ) -> Result<()> {
+        if session.id() != session_id {
+            return Err(anyhow::anyhow!(
+                "Session id mismatch: blob {} vs updates for {}",
+                session.id(),
+                session_id
+            ));
+        }
+        self.persist(session, updates, removed, false).await
     }
 
     async fn load_session(&self, session_id: Uuid) -> Result<ActiveSession> {

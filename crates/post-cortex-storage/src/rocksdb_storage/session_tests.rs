@@ -167,7 +167,7 @@ async fn removed_updates_stay_removed_and_lose_their_rows() {
     let mut session = storage.load_session(id).await.unwrap();
     assert!(session.remove_update_by_id(&u2.id));
     storage
-        .save_session_with_updates(&session, id, vec![])
+        .save_session_with_changes(&session, id, vec![], vec![u2.id])
         .await
         .unwrap();
 
@@ -175,6 +175,34 @@ async fn removed_updates_stay_removed_and_lose_their_rows() {
     let loaded = storage.load_session(id).await.unwrap();
     assert_eq!(titles(&loaded), vec!["u1", "u3"]);
     assert_eq!(storage.load_session_updates(id).await.unwrap().len(), 2);
+}
+
+/// A snapshot taken before an update landed (an evicted copy, a concurrent
+/// writer) must not delete that update: deletions are explicit only.
+#[tokio::test]
+async fn stale_snapshot_never_deletes_an_acknowledged_update() {
+    let (_dir, storage) = open().await;
+    let id = Uuid::new_v4();
+    let (u1, u2, u3) = (update("u1"), update("u2"), update("u3"));
+    let stale = session_with(id, std::slice::from_ref(&u1));
+    storage
+        .save_session(&session_with(id, &[u1.clone(), u2.clone()]))
+        .await
+        .unwrap();
+
+    // The stale copy (without u2) gains u3 and is saved last.
+    let mut stale = stale;
+    stale.set_incremental_updates(vec![u1.clone(), u3.clone()]);
+    storage
+        .save_session_with_updates(&stale, id, vec![u3.clone()])
+        .await
+        .unwrap();
+
+    assert!(raw_get(&storage, &format!("session:{id}:update:{}", u2.id)).is_some());
+    assert_eq!(
+        titles(&storage.load_session(id).await.unwrap()),
+        vec!["u1", "u2", "u3"]
+    );
 }
 
 #[tokio::test]

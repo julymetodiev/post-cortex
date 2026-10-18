@@ -92,34 +92,34 @@ fn session_blob(session: &ActiveSession) -> Result<Vec<u8>> {
         .map_err(|e| anyhow::anyhow!("Failed to serialize session: {}", e))
 }
 
-/// Write `session` and bring its rows, update index and meta in line with
-/// it, in one `WriteBatch`. The caller holds the session's lock.
+/// Write `session` with its rows, update index and meta in one
+/// `WriteBatch`. The caller holds the session's lock.
 ///
 /// Rows are written for `explicit` updates and for every session update
 /// the stored index does not list yet (all of them for a session saved by
-/// an older version), and deleted for listed updates the session no
-/// longer contains. Returns the number of rows written.
+/// an older version). Only the `removed` updates lose their rows and index
+/// entries: an update the snapshot merely lacks stays, because the
+/// snapshot may predate it (an evicted or concurrent copy of the session).
+/// The index keeps its stored order and appends new ids in session order.
+/// Returns the number of rows written.
 fn persist_session(
     db: &DB,
     session: &ActiveSession,
     blob: &[u8],
     explicit: &[ContextUpdate],
+    removed: &[Uuid],
 ) -> Result<usize> {
     let session_id = session.id();
     let index_key = update_index_key(session_id);
     let old_index = db.get(index_key.as_bytes())?;
-    let stored: HashSet<Uuid> = old_index
-        .as_deref()
-        .map(decode_ids)
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
-    let current: HashSet<Uuid> = session.incremental_updates.iter().map(|u| u.id).collect();
+    let stored_order: Vec<Uuid> = old_index.as_deref().map(decode_ids).unwrap_or_default();
+    let stored: HashSet<Uuid> = stored_order.iter().copied().collect();
+    let removed: HashSet<Uuid> = removed.iter().copied().collect();
     let explicit_ids: HashSet<Uuid> = explicit.iter().map(|u| u.id).collect();
 
     let mut batch = WriteBatch::default();
     let mut rows = 0;
-    for update in explicit {
+    for update in explicit.iter().filter(|u| !removed.contains(&u.id)) {
         batch.put(
             update_key(session_id, update.id).as_bytes(),
             encode_update(update)?,
@@ -127,7 +127,10 @@ fn persist_session(
         rows += 1;
     }
     for update in session.incremental_updates.iter() {
-        if !stored.contains(&update.id) && !explicit_ids.contains(&update.id) {
+        if !stored.contains(&update.id)
+            && !explicit_ids.contains(&update.id)
+            && !removed.contains(&update.id)
+        {
             batch.put(
                 update_key(session_id, update.id).as_bytes(),
                 encode_update(update)?,
@@ -135,11 +138,19 @@ fn persist_session(
             rows += 1;
         }
     }
-    for removed in stored.difference(&current) {
-        batch.delete(update_key(session_id, *removed).as_bytes());
+    for id in &removed {
+        batch.delete(update_key(session_id, *id).as_bytes());
     }
 
-    let index = encode_ids(session.incremental_updates.iter().map(|u| &u.id));
+    let mut indexed: HashSet<Uuid> = HashSet::with_capacity(stored.len());
+    let index_ids: Vec<Uuid> = stored_order
+        .iter()
+        .copied()
+        .chain(session.incremental_updates.iter().map(|u| u.id))
+        .chain(explicit.iter().map(|u| u.id))
+        .filter(|id| !removed.contains(id) && indexed.insert(*id))
+        .collect();
+    let index = encode_ids(index_ids.iter());
     if old_index.as_deref() != Some(index.as_slice()) {
         batch.put(index_key.as_bytes(), &index);
     }
@@ -210,7 +221,18 @@ fn backfill_legacy(
     if db.get(session_key(session_id).as_bytes())?.as_deref() != Some(legacy_blob) {
         return Ok(());
     }
-    let rows = persist_session(db, session, &blob, &[])?;
+    // The embedded list is authoritative here (see `read_session`): index
+    // entries it lacks are updates its writer removed.
+    let embedded: HashSet<Uuid> = session.incremental_updates.iter().map(|u| u.id).collect();
+    let removed: Vec<Uuid> = db
+        .get(update_index_key(session_id).as_bytes())?
+        .as_deref()
+        .map(decode_ids)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|id| !embedded.contains(id))
+        .collect();
+    let rows = persist_session(db, session, &blob, &[], &removed)?;
     info!(
         "RealRocksDBStorage: Migrated session {} to row-backed updates ({} rows backfilled, blob {} -> {} bytes)",
         session_id,
@@ -333,7 +355,7 @@ impl RealRocksDBStorage {
     /// stored index does not list yet gets its row in the same batch, and
     /// rows of updates the session no longer contains are deleted.
     pub async fn save_session(&self, session: &ActiveSession) -> Result<()> {
-        self.persist(session, Vec::new()).await
+        self.persist(session, Vec::new(), Vec::new()).await
     }
 
     /// Save session blob and context updates in a single atomic WriteBatch.
@@ -354,10 +376,36 @@ impl RealRocksDBStorage {
                 session_id
             ));
         }
-        self.persist(session, updates).await
+        self.save_session_with_changes(session, session_id, updates, Vec::new())
+            .await
     }
 
-    async fn persist(&self, session: &ActiveSession, updates: Vec<ContextUpdate>) -> Result<()> {
+    /// [`Self::save_session_with_updates`] that also deletes the rows (and
+    /// index entries) of the `removed` updates. Saves never delete rows
+    /// otherwise; see `persist_session`.
+    pub async fn save_session_with_changes(
+        &self,
+        session: &ActiveSession,
+        session_id: Uuid,
+        updates: Vec<ContextUpdate>,
+        removed: Vec<Uuid>,
+    ) -> Result<()> {
+        if session.id() != session_id {
+            return Err(anyhow::anyhow!(
+                "Session id mismatch: blob {} vs updates for {}",
+                session.id(),
+                session_id
+            ));
+        }
+        self.persist(session, updates, removed).await
+    }
+
+    async fn persist(
+        &self,
+        session: &ActiveSession,
+        updates: Vec<ContextUpdate>,
+        removed: Vec<Uuid>,
+    ) -> Result<()> {
         let db = self.db.clone();
         let locks = self.session_locks.clone();
         let session = session.clone();
@@ -365,7 +413,7 @@ impl RealRocksDBStorage {
         blocking(move || {
             let blob = session_blob(&session)?;
             let _guard = locks.lock(session.id());
-            let rows = persist_session(&db, &session, &blob, &updates)?;
+            let rows = persist_session(&db, &session, &blob, &updates, &removed)?;
             debug!(
                 "RealRocksDBStorage: Saved session {} ({} bytes, {} update rows written)",
                 session.id(),
@@ -744,6 +792,17 @@ impl Storage for RealRocksDBStorage {
         updates: Vec<ContextUpdate>,
     ) -> Result<()> {
         RealRocksDBStorage::save_session_with_updates(self, session, session_id, updates).await
+    }
+
+    async fn save_session_with_changes(
+        &self,
+        session: &ActiveSession,
+        session_id: Uuid,
+        updates: Vec<ContextUpdate>,
+        removed: Vec<Uuid>,
+    ) -> Result<()> {
+        RealRocksDBStorage::save_session_with_changes(self, session, session_id, updates, removed)
+            .await
     }
 
     async fn load_session_updates(&self, session_id: Uuid) -> Result<Vec<ContextUpdate>> {

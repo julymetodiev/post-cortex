@@ -128,8 +128,14 @@ async fn incremental_persist_writes_missing_rows_and_deletes_removed() {
     let mut loaded = storage.load_session(id).await.unwrap();
     assert_eq!(update_titles(&loaded), vec!["u1", "u2", "u3"]);
     assert!(loaded.remove_update_by_id(&u2.id));
+    // Lacking u2 is not enough: deletions are named.
     storage
         .save_session_with_updates(&loaded, id, vec![])
+        .await
+        .unwrap();
+    assert_eq!(count_where(&storage, "context_update", id).await, 3);
+    storage
+        .save_session_with_changes(&loaded, id, vec![], vec![u2.id])
         .await
         .unwrap();
     assert_eq!(count_where(&storage, "context_update", id).await, 2);
@@ -149,6 +155,26 @@ async fn incremental_persist_writes_missing_rows_and_deletes_removed() {
         .await
         .unwrap();
     assert_eq!(count_where(&storage, "context_update", id).await, 2);
+
+    // A named removal works without prior knowledge of the session (it was
+    // silently skipped before) and the row does not come back from a later
+    // snapshot that never saw it.
+    let fresh = SurrealDBStorage {
+        persisted: Default::default(),
+        ..storage.clone()
+    };
+    let mut only_u1 = ActiveSession::new(id, Some("s".into()), None);
+    only_u1.set_incremental_updates(vec![u1.clone()]);
+    fresh
+        .save_session_with_changes(&only_u1, id, vec![], vec![u3.id])
+        .await
+        .unwrap();
+    assert_eq!(count_where(&storage, "context_update", id).await, 1);
+    fresh.save_session(&only_u1).await.unwrap();
+    assert_eq!(
+        update_titles(&fresh.load_session(id).await.unwrap()),
+        vec!["u1"]
+    );
 }
 
 /// The incremental path only sends changed entities, but new and changed
