@@ -99,9 +99,15 @@ async fn main() -> Result<(), String> {
         }
 
         Some(Commands::Start { daemon, port, host }) => {
+            // Flags override daemon.toml / env only when given; clap defaults
+            // used to clobber both, so `host` in daemon.toml was ignored.
             let mut config = DaemonConfig::load();
-            config.port = port;
-            config.host = host;
+            if let Some(port) = port {
+                config.port = port;
+            }
+            if let Some(host) = host {
+                config.host = host;
+            }
 
             if daemon {
                 // Background daemon mode - log to file only

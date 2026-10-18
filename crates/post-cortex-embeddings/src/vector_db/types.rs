@@ -132,6 +132,8 @@ impl VectorDbStats {
     }
 
     /// Record a vector removal with saturating subtraction to prevent underflow
+    // `fetch_update` is `try_update` from Rust 1.99; the MSRV is 1.90.
+    #[allow(deprecated)]
     pub fn record_vector_removed(&self, vector_size_bytes: usize) {
         // Use fetch_update with saturating_sub to prevent underflow on double-remove
         let _ = self

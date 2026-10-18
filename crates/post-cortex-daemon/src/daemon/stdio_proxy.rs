@@ -34,9 +34,9 @@ pub fn start_daemon_background(config: &DaemonConfig) -> Result<(), String> {
 
     let child = Command::new(&current_exe)
         .args(["start", "--daemon"])
-        .env("PCX_PORT", config.port.to_string())
-        .env("PCX_HOST", &config.host)
-        .env("PCX_DATA_DIR", &config.data_directory)
+        .env("PC_PORT", config.port.to_string())
+        .env("PC_HOST", &config.host)
+        .env("PC_DATA_DIR", &config.data_directory)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -84,7 +84,7 @@ pub async fn run_stdio_proxy(config: DaemonConfig) -> Result<(), String> {
     ensure_daemon_running(&config).await?;
 
     let mcp_url = format!("http://{}:{}/mcp", config.host, config.port);
-    let client = reqwest::Client::new();
+    let client = config.http_client();
 
     info!("Connecting to daemon at {}", mcp_url);
 

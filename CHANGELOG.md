@@ -5,6 +5,47 @@ All notable changes to Post-Cortex will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Bearer-token auth** for the daemon: `auth_token` / `PC_AUTH_TOKEN`.
+  Required on every HTTP route except `/health` and on every gRPC call
+  (constant-time compare). The `pcx` CLI and stdio proxy send it from the
+  same config. A non-loopback bind without a token logs a warning.
+- **Redaction on the canonical write path** (`post_cortex_core::redact`):
+  credentials, e-mail addresses, phone numbers and public IPv4 addresses
+  become `[REDACTED:<kind>]` before storage, for every transport. On by
+  default; `redact = false` / `PC_REDACT=0` disables, `redact_patterns`
+  adds regexes. `Redactor::redact_json` covers imported documents.
+- **Namespace-level SurrealDB users**: any `surrealdb_username` other than
+  `root` signs in as a user of `surrealdb_namespace`.
+
+### Fixed
+
+- **Lost embeddings on back-to-back writes.** Background vectorization
+  (pipeline worker and the legacy spawn) embedded "the latest update" at
+  the time the job ran, not the update that queued it: two quick writes
+  embedded the second twice and never the first, so it was unsearchable.
+  Jobs now vectorize their own update id (`ContentVectorizer::vectorize_update`)
+  and skip ids already vectorized.
+- **`pcx start` ignored `daemon.toml` host/port and `PC_HOST`/`PC_PORT`**:
+  the clap defaults always overwrote them. Flags now override only when
+  given. The stdio proxy's background start also passed `PCX_*` instead of
+  the `PC_*` variables the config reads.
+- Stale tests: `delete` is a valid session action; the RocksDB lock test
+  ran its daemon on SurrealDB; similarity tests asserted BERT-era absolute
+  scores (now: the question-bearing update must rank first and beat an
+  answer-only control).
+- Clippy 1.99: `double_must_use` (from `async_trait`) allowed workspace-wide;
+  `fetch_update` deprecation allowed where the MSRV (1.90) lacks `try_update`.
+
+### Changed
+
+- **SurrealDB SDK 3.0 → 3.3.4.** Verified against a SurrealDB 3.3.4 server
+  upgraded in place from 3.0 (record counts identical, HNSW `REBUILD INDEX`
+  and kNN OK). Not tested against 3.0 servers — upgrade the server first.
+
 ## [0.3.1] - 2026-05-17 — Daemon Potion default fix + CI cleanup
 
 Patch release on top of 0.3.0. No public-API changes; this clears the

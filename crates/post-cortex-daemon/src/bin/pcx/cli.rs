@@ -29,13 +29,13 @@ pub enum Commands {
         #[arg(long)]
         daemon: bool,
 
-        /// Port to listen on (default: 3737)
-        #[arg(long, short, default_value = "3737")]
-        port: u16,
+        /// Port to listen on (default: daemon.toml / PC_PORT, else 3737)
+        #[arg(long, short)]
+        port: Option<u16>,
 
-        /// Host to bind to (default: 127.0.0.1)
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
+        /// Host to bind to (default: daemon.toml / PC_HOST, else 127.0.0.1)
+        #[arg(long)]
+        host: Option<String>,
     },
 
     /// Check if daemon is running
