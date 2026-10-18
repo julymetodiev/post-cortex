@@ -364,23 +364,12 @@ impl ConversationMemorySystem {
             description.or_else(|| Some("New conversation session".to_string()));
 
         let session = ActiveSession::new(session_id, session_name, session_description);
-        let session_arc = Arc::new(ArcSwap::new(Arc::new(session.clone())));
 
         // Save to storage first
-        match self.storage_actor.save_session(session).await {
+        match self.storage_actor.save_session(session.clone()).await {
             Ok(_) => {
                 // Add to cache and active sessions only if storage save succeeded
-                self.session_manager
-                    .sessions
-                    .put(session_id, Arc::clone(&session_arc));
-
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("System time before UNIX epoch")
-                    .as_secs();
-                self.session_manager
-                    .active_sessions
-                    .insert(session_id, Arc::new(AtomicU64::new(now)));
+                self.session_manager.install(session_id, session);
                 self.session_manager
                     .session_count
                     .fetch_add(1, Ordering::Relaxed);
@@ -456,14 +445,17 @@ impl ConversationMemorySystem {
     /// `session action=load`) would still hand out the cached ActiveSession
     /// after the underlying storage row was already gone.
     pub async fn delete_session(&self, session_id: Uuid) -> Result<bool, String> {
-        let live = self.session_manager.sessions.remove(&session_id);
-        self.session_manager.active_sessions.remove(&session_id);
-
-        let deleted = self.storage_actor.delete_session(session_id, live).await?;
-
-        // A load racing the delete may have cached the session again.
-        self.session_manager.sessions.remove(&session_id);
-        self.session_manager.active_sessions.remove(&session_id);
+        // Under the loading gate: a load cannot read the session before the
+        // delete and cache it after. Every handle loaded so far is retired,
+        // so none of them (cached or held by a worker) can write it back.
+        let deleted = self
+            .session_manager
+            .with_load_gate(session_id, async {
+                let live = self.session_manager.sessions.remove(&session_id);
+                self.session_manager.active_sessions.remove(&session_id);
+                self.storage_actor.delete_session(session_id, live).await
+            })
+            .await?;
 
         #[cfg(feature = "embeddings")]
         if let Some(vectorizer) = self.content_vectorizer.get() {
@@ -527,8 +519,9 @@ impl ConversationMemorySystem {
 
         // Shared set: drop the id before the snapshot is persisted.
         new_arc.vectorized_update_ids.remove(&entry_id);
+        // Named: storage never infers a removal from the snapshot.
         self.storage_actor
-            .persist_session_nowait(&session_arc, vec![]);
+            .persist_session_removals_nowait(&session_arc, vec![entry_id]);
 
         self.drop_content_vectors(session_id, &[entry_id.to_string()])
             .await;
@@ -1103,11 +1096,12 @@ impl ConversationMemorySystem {
         }
 
         // Remove expired sessions
-        let expired_count = expired_sessions.len();
+        let mut expired_count = 0;
         for session_id in expired_sessions {
-            self.session_manager.active_sessions.remove(&session_id);
-            self.session_manager.sessions.remove(&session_id);
-            debug!("Cleaned up expired session: {}", session_id);
+            if self.evict_session(session_id).await {
+                expired_count += 1;
+                debug!("Cleaned up expired session: {}", session_id);
+            }
         }
 
         if expired_count > 0 {
@@ -1142,11 +1136,12 @@ impl ConversationMemorySystem {
         session_times.sort_by_key(|(_, time)| *time);
 
         // Evict the oldest sessions
-        let evicted_count = session_times.iter().take(count).count();
+        let mut evicted_count = 0;
         for (session_id, _) in session_times.iter().take(count) {
-            self.session_manager.active_sessions.remove(session_id);
-            self.session_manager.sessions.remove(session_id);
-            debug!("Evicted session {} from cache (memory limit)", session_id);
+            if self.evict_session(*session_id).await {
+                evicted_count += 1;
+                debug!("Evicted session {} from cache (memory limit)", session_id);
+            }
         }
 
         if evicted_count > 0 {
@@ -1157,6 +1152,51 @@ impl ConversationMemorySystem {
                 MAX_ACTIVE_SESSIONS
             );
         }
+    }
+
+    /// Drop a session from the in-memory caches unless that could lose
+    /// committed data: queued writes and a failed last write are flushed
+    /// first, and the session stays cached when that fails. Returns whether
+    /// it was evicted.
+    async fn evict_session(&self, session_id: Uuid) -> bool {
+        if self.storage_actor.has_unflushed(session_id) {
+            match self.session_manager.sessions.get(&session_id) {
+                Some(handle) => {
+                    if let Err(e) = self
+                        .storage_actor
+                        .persist_session_and_wait(&handle, vec![])
+                        .await
+                    {
+                        warn!(
+                            "Keeping session {} in memory: its changes are not persisted ({})",
+                            session_id, e
+                        );
+                        return false;
+                    }
+                }
+                None => self.storage_actor.wait_persisted(session_id).await,
+            }
+        }
+        self.session_manager.active_sessions.remove(&session_id);
+        self.session_manager.sessions.remove(&session_id);
+        true
+    }
+
+    /// Write every queued session persist and retry failed ones, waiting at
+    /// most `limit`; returns how many sessions could not be written. Call
+    /// before a graceful shutdown: background persists are otherwise lost
+    /// with the process.
+    pub async fn flush_all(&self, limit: std::time::Duration) -> usize {
+        let unwritten = self.storage_actor.flush_all(limit).await;
+        if unwritten > 0 {
+            warn!(
+                "{} session(s) could not be persisted before shutdown",
+                unwritten
+            );
+        } else {
+            info!("All session changes persisted");
+        }
+        unwritten
     }
 
     /// Force cleanup to reduce memory usage immediately

@@ -344,7 +344,42 @@ impl StorageActorHandle {
         updates: Vec<post_cortex_core::core::context_update::ContextUpdate>,
     ) {
         let session_id = session.load().id();
-        self.persister.enqueue(session_id, session, updates, None);
+        self.persister
+            .enqueue(session_id, session, updates, vec![], None);
+    }
+
+    /// Like [`Self::persist_session_nowait`], and delete the rows of the
+    /// `removed` updates. Saves never delete an update row otherwise, so
+    /// every path that removes updates from a session must name them here.
+    pub fn persist_session_removals_nowait(&self, session: &SessionHandle, removed: Vec<Uuid>) {
+        let session_id = session.load().id();
+        self.persister
+            .enqueue(session_id, session, vec![], removed, None);
+    }
+
+    /// Register a handle just loaded or created as the session's current
+    /// one. Persists through older handles of the session then write the
+    /// newest one instead of their own (older) snapshot.
+    pub fn register_session_handle(&self, session_id: Uuid, session: &SessionHandle) {
+        self.persister.register(session_id, session);
+    }
+
+    /// Whether the session has writes queued or running, or its last write
+    /// failed. Such a session must be flushed before it leaves memory.
+    pub fn has_unflushed(&self, session_id: Uuid) -> bool {
+        self.persister.has_unflushed(session_id)
+    }
+
+    /// Wait until the writes queued for the session so far are done.
+    pub async fn wait_persisted(&self, session_id: Uuid) {
+        self.persister.wait_idle(session_id).await;
+    }
+
+    /// Write every queued session persist and retry failed ones, waiting
+    /// at most `limit`. Returns how many sessions could not be written.
+    /// Call on graceful shutdown.
+    pub async fn flush_all(&self, limit: Duration) -> usize {
+        self.persister.flush_all(limit).await
     }
 
     /// Like [`Self::persist_session_nowait`], but wait until a write that
@@ -357,7 +392,7 @@ impl StorageActorHandle {
         let session_id = session.load().id();
         let (tx, rx) = oneshot::channel();
         self.persister
-            .enqueue(session_id, session, updates, Some(tx));
+            .enqueue(session_id, session, updates, vec![], Some(tx));
         let limit = OperationType::Medium.timeout();
         match timeout(limit, rx).await {
             Ok(Ok(result)) => result,

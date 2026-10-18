@@ -2,7 +2,6 @@
 
 use crate::{MCPToolResult, get_memory_system, string_to_anyhow};
 use anyhow::Result;
-use arc_swap::ArcSwap;
 use post_cortex_core::core::timeout_utils::with_storage_timeout;
 use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_memory::ConversationMemorySystem;
@@ -72,10 +71,7 @@ pub async fn load_session_checkpoint_with_system(
     eprintln!("Loading checkpoint - step 12: Entity graph restored");
 
     eprintln!("Loading checkpoint - step 13: Adding session to session manager");
-    system
-        .session_manager
-        .sessions
-        .put(session_id, Arc::new(ArcSwap::new(Arc::new(session))));
+    system.session_manager.install(session_id, session);
 
     eprintln!("Loading checkpoint - step 14: Updated session manager");
 
@@ -146,10 +142,7 @@ pub async fn load_session_checkpoint(
         session.code_references = Arc::new(checkpoint.code_references);
         session.set_change_history(checkpoint.change_history);
 
-        system
-            .session_manager
-            .sessions
-            .put(session_id, Arc::new(ArcSwap::new(Arc::new(session))));
+        system.session_manager.install(session_id, session);
 
         Ok(MCPToolResult::success(
             "Session loaded from checkpoint successfully".to_string(),

@@ -111,6 +111,23 @@ impl SessionManager {
         // Single flight: the first miss loads, concurrent misses wait for
         // it and then find the session cached. Without this each would
         // install its own handle and writes to the losing one would vanish.
+        self.with_load_gate(session_id, async {
+            match self.cached(session_id) {
+                Some(session_arc) => Ok(Some(session_arc)),
+                None => self.load_uncached(session_id, create).await,
+            }
+        })
+        .await
+    }
+
+    /// Run `f` holding the session's loading gate: no load of the session
+    /// runs meanwhile. Deletes take it so a load cannot read the session
+    /// before the delete and install it after.
+    pub async fn with_load_gate<T>(
+        &self,
+        session_id: Uuid,
+        f: impl std::future::Future<Output = T>,
+    ) -> T {
         let gate = Arc::clone(
             &self
                 .loading
@@ -119,10 +136,7 @@ impl SessionManager {
         );
         let result = {
             let _guard = gate.lock().await;
-            match self.cached(session_id) {
-                Some(session_arc) => Ok(Some(session_arc)),
-                None => self.load_uncached(session_id, create).await,
-            }
+            f.await
         };
         // Drop the gate once nobody else waits on it (map + this clone).
         self.loading.remove_if(&session_id, |_, g| {
@@ -138,6 +152,9 @@ impl SessionManager {
         session_id: Uuid,
         create: bool,
     ) -> Result<Option<Arc<ArcSwap<ActiveSession>>>, String> {
+        // Writes still queued from an evicted copy must land first, or the
+        // load would miss them.
+        self.storage_actor.wait_persisted(session_id).await;
         let stored = self
             .storage_actor
             .load_session(session_id)
@@ -168,9 +185,13 @@ impl SessionManager {
         Ok(Some(self.install(session_id, session)))
     }
 
-    /// Put a session in the cache and mark it active.
-    fn install(&self, session_id: Uuid, session: ActiveSession) -> Arc<ArcSwap<ActiveSession>> {
+    /// Put a session in the cache as its current handle (registered with
+    /// the persister, so older handles of it are superseded) and mark it
+    /// active.
+    pub fn install(&self, session_id: Uuid, session: ActiveSession) -> Arc<ArcSwap<ActiveSession>> {
         let session_arc = Arc::new(ArcSwap::new(Arc::new(session)));
+        self.storage_actor
+            .register_session_handle(session_id, &session_arc);
         self.sessions.put(session_id, Arc::clone(&session_arc));
         self.active_sessions
             .insert(session_id, Arc::new(AtomicU64::new(now_secs())));

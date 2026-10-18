@@ -427,3 +427,160 @@ async fn delete_removes_vectors_and_late_work_cannot_resurrect_the_session() {
     assert!(sys.storage_actor.load_session(sid).await.unwrap().is_none());
     assert!(sys.get_session(sid).await.is_err());
 }
+
+#[tokio::test]
+async fn a_handle_held_outside_the_cache_cannot_resurrect_a_deleted_session() {
+    let (sys, _dir) = system(false).await;
+    let sid = sys.create_session(None, None).await.unwrap();
+
+    // A worker loaded the session, then it left the cache (live = None at
+    // delete time).
+    let held = sys.get_session(sid).await.unwrap();
+    sys.session_manager.sessions.remove(&sid);
+    assert!(sys.delete_session(sid).await.unwrap());
+
+    let mut next = (**held.load()).clone();
+    next.set_name(Some("ghost".into()));
+    held.store(Arc::new(next));
+    assert!(
+        sys.storage_actor
+            .persist_session_and_wait(&held, vec![])
+            .await
+            .is_err()
+    );
+    assert!(sys.storage_actor.load_session(sid).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn loads_racing_a_delete_never_bring_the_session_back() {
+    let (sys, _dir) = system(false).await;
+    for round in 0..20 {
+        let sid = sys.create_session(None, None).await.unwrap();
+        sys.add_incremental_update(sid, format!("round {round}"), None)
+            .await
+            .unwrap();
+        let live = sys.get_session(sid).await.unwrap();
+        sys.storage_actor
+            .persist_session_and_wait(&live, vec![])
+            .await
+            .unwrap();
+        sys.session_manager.sessions.remove(&sid);
+
+        // Pipeline-worker-like tasks: load (cache miss), modify, persist.
+        let workers: Vec<_> = (0..4)
+            .map(|_| {
+                let sys = Arc::clone(&sys);
+                tokio::spawn(async move {
+                    if let Ok(Some(h)) = sys.session_manager.get_session(sid).await {
+                        let mut next = (**h.load()).clone();
+                        next.set_name(Some("worker".into()));
+                        h.store(Arc::new(next));
+                        let _ = sys.storage_actor.persist_session_and_wait(&h, vec![]).await;
+                    }
+                })
+            })
+            .collect();
+        tokio::task::yield_now().await;
+        assert!(sys.delete_session(sid).await.unwrap());
+        for w in workers {
+            w.await.unwrap();
+        }
+
+        assert!(
+            sys.storage_actor.load_session(sid).await.unwrap().is_none(),
+            "round {round}: session written back after its delete"
+        );
+    }
+}
+
+// ----- Eviction and reload never lose or delete acknowledged updates -----
+
+#[tokio::test]
+async fn reload_after_eviction_sees_queued_writes_and_stale_copies_delete_nothing() {
+    let (sys, _dir) = system(false).await;
+    let sid = sys.create_session(None, None).await.unwrap();
+
+    // Queued, not yet written; then the cache drops the handle (capacity
+    // eviction does not flush).
+    let first = sys
+        .add_incremental_update_deferred(sid, "first".into(), Some(update_metadata("a")), false)
+        .await
+        .unwrap();
+    let stale = sys.get_session(sid).await.unwrap();
+    sys.session_manager.sessions.remove(&sid);
+
+    let reloaded = sys.get_session(sid).await.unwrap();
+    assert!(!Arc::ptr_eq(&stale, &reloaded));
+    assert!(
+        reloaded
+            .load()
+            .incremental_updates
+            .iter()
+            .any(|u| u.id == first.entry_id),
+        "the reload waited for the evicted copy's queued write"
+    );
+
+    // A new update on the reloaded copy, then a late persist of the stale
+    // copy (which lacks it): the update must survive.
+    let second = sys
+        .add_incremental_update_deferred(sid, "second".into(), None, true)
+        .await
+        .unwrap();
+    assert!(second.durable);
+    let _ = sys
+        .storage_actor
+        .persist_session_and_wait(&stale, vec![])
+        .await;
+    let stored = sys.storage_actor.load_session(sid).await.unwrap().unwrap();
+    let ids: Vec<Uuid> = stored.incremental_updates.iter().map(|u| u.id).collect();
+    assert!(ids.contains(&first.entry_id) && ids.contains(&second.entry_id));
+
+    // Explicit removal still deletes.
+    assert!(sys.delete_update(sid, first.entry_id).await.unwrap());
+    let live = sys.get_session(sid).await.unwrap();
+    sys.storage_actor
+        .persist_session_and_wait(&live, vec![])
+        .await
+        .unwrap();
+    let stored = sys.storage_actor.load_session(sid).await.unwrap().unwrap();
+    assert!(
+        !stored
+            .incremental_updates
+            .iter()
+            .any(|u| u.id == first.entry_id)
+    );
+}
+
+#[tokio::test]
+async fn eviction_and_shutdown_flush_pending_writes() {
+    let (sys, _dir) = system(false).await;
+    let a = sys.create_session(None, None).await.unwrap();
+    let b = sys.create_session(None, None).await.unwrap();
+
+    let ua = sys
+        .add_incremental_update_deferred(a, "a".into(), None, false)
+        .await
+        .unwrap();
+    sys.force_memory_cleanup(0).await;
+    let stored = sys.storage_actor.load_session(a).await.unwrap().unwrap();
+    assert!(
+        stored
+            .incremental_updates
+            .iter()
+            .any(|u| u.id == ua.entry_id),
+        "evicting flushed the session first"
+    );
+
+    let ub = sys
+        .add_incremental_update_deferred(b, "b".into(), None, false)
+        .await
+        .unwrap();
+    assert_eq!(sys.flush_all(Duration::from_secs(10)).await, 0);
+    let stored = sys.storage_actor.load_session(b).await.unwrap().unwrap();
+    assert!(
+        stored
+            .incremental_updates
+            .iter()
+            .any(|u| u.id == ub.entry_id)
+    );
+}

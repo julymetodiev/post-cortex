@@ -718,13 +718,16 @@ impl ConversationMemorySystem {
                     let new_arc = Arc::new(new_session);
                     let prev = session_arc.compare_and_swap(&current, Arc::clone(&new_arc));
                     if Arc::ptr_eq(&prev, &current) {
-                        for id in &removed_ids {
-                            if let Ok(id) = Uuid::parse_str(id) {
-                                new_arc.vectorized_update_ids.remove(&id);
-                            }
+                        let removed_uuids: Vec<Uuid> = removed_ids
+                            .iter()
+                            .filter_map(|id| Uuid::parse_str(id).ok())
+                            .collect();
+                        for id in &removed_uuids {
+                            new_arc.vectorized_update_ids.remove(id);
                         }
+                        // Named: storage never infers a removal.
                         self.storage_actor
-                            .persist_session_nowait(&session_arc, vec![]);
+                            .persist_session_removals_nowait(&session_arc, removed_uuids);
                         self.drop_content_vectors(session_id, &removed_ids).await;
                     } else {
                         warn!(
