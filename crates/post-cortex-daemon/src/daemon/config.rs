@@ -80,6 +80,14 @@ pub struct DaemonConfig {
     /// Extra redaction regexes; matches become `[REDACTED:custom]`
     #[serde(default)]
     pub redact_patterns: Vec<String>,
+
+    /// Extra `Host` header values the HTTP endpoints accept (DNS rebinding
+    /// protection). Each entry is `host` (any port) or `host:port`; `"*"`
+    /// disables the check. Always added to the defaults: `localhost`,
+    /// `127.0.0.1`, `::1` and `host` when it is not a wildcard address.
+    /// See [`crate::daemon::host_allowlist`].
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
 }
 
 fn default_redact() -> bool {
@@ -118,6 +126,7 @@ impl Default for DaemonConfig {
             auth_token: None,
             redact: default_redact(),
             redact_patterns: Vec::new(),
+            allowed_hosts: Vec::new(),
         }
     }
 }
@@ -219,6 +228,11 @@ impl DaemonConfig {
             tracing::debug!("Overriding auth_token from PC_AUTH_TOKEN environment variable");
         }
 
+        if let Ok(hosts) = std::env::var("PC_ALLOWED_HOSTS") {
+            config.allowed_hosts = parse_host_list(&hosts);
+            tracing::debug!("Overriding allowed_hosts from PC_ALLOWED_HOSTS environment variable");
+        }
+
         if let Ok(redact) = std::env::var("PC_REDACT") {
             config.redact = !matches!(redact.as_str(), "0" | "false" | "no" | "off");
             tracing::debug!("Overriding redact from PC_REDACT environment variable");
@@ -279,6 +293,14 @@ impl DaemonConfig {
              #   PC_SURREALDB_PASS - SurrealDB password\n\
              #   PC_AUTH_TOKEN - Bearer token required by HTTP/gRPC clients\n\
              #   PC_REDACT - \"0\" disables redaction of secrets/personal data\n\
+             #   PC_ALLOWED_HOSTS - Comma-separated extra allowed Host headers\n\
+             # \n\
+             # allowed_hosts: Host header values accepted on /mcp and /api/*\n\
+             # (DNS rebinding protection). localhost, 127.0.0.1, ::1 and a\n\
+             # non-wildcard `host` are always allowed; other requests get 403.\n\
+             # When binding to 0.0.0.0, list the names remote clients use:\n\
+             #   allowed_hosts = [\"my-mac.tailnet.ts.net\", \"100.64.0.7:3737\"]\n\
+             # Entries are host (any port) or host:port; [\"*\"] disables the check.\n\
              # \n\
              # Priority: Environment > Config file > Defaults\n\n\
              {}",
@@ -308,8 +330,19 @@ impl DaemonConfig {
             return Err("Data directory cannot be empty".to_string());
         }
 
+        crate::daemon::host_allowlist::HostPolicy::from_config(self)?;
+
         Ok(())
     }
+}
+
+/// Splits a comma-separated host list, dropping empty items.
+fn parse_host_list(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Get default config file path: ~/.post-cortex/daemon.toml
@@ -385,6 +418,35 @@ mod tests {
             env::remove_var("PC_PORT");
             env::remove_var("PC_DATA_DIR");
         }
+    }
+
+    #[test]
+    fn test_host_list_parsing() {
+        assert_eq!(
+            parse_host_list(" a.example , b.example:3737,,"),
+            vec!["a.example", "b.example:3737"]
+        );
+        assert!(parse_host_list("").is_empty());
+    }
+
+    #[test]
+    fn test_allowed_hosts_toml() {
+        let parsed: DaemonConfig = toml::from_str(
+            "host = \"0.0.0.0\"\nport = 3737\ndata_directory = \"/d\"\n\
+             allowed_hosts = [\"my-mac.tailnet.ts.net\", \"100.64.0.7:3737\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.allowed_hosts,
+            vec!["my-mac.tailnet.ts.net", "100.64.0.7:3737"]
+        );
+        assert!(parsed.validate().is_ok());
+
+        let invalid = DaemonConfig {
+            allowed_hosts: vec!["http://x".into()],
+            ..Default::default()
+        };
+        assert!(invalid.validate().is_err());
     }
 
     #[test]

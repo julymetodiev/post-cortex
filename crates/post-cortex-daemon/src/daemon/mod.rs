@@ -29,6 +29,7 @@ pub mod coerce;
 pub mod config;
 pub mod format_helpers;
 pub mod grpc_service;
+pub mod host_allowlist;
 pub mod mcp_service;
 pub mod observability;
 pub mod rmcp_server;

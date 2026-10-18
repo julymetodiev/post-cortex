@@ -5,6 +5,7 @@
 //!
 //! Provides SSE transport using rmcp library following official shuttle patterns.
 
+use crate::daemon::host_allowlist::{HostPolicy, require_allowed_host};
 use crate::daemon::{DaemonConfig, PostCortexService};
 use axum::{
     Json, Router,
@@ -29,10 +30,13 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
         .parse()
         .map_err(|e| format!("Invalid address: {}", e))?;
 
+    let host_policy = HostPolicy::from_config(&config)?;
+
     info!("Initializing Post-Cortex daemon with RMCP SSE transport");
     info!("  Host: {}", config.host);
     info!("  Port: {}", config.port);
     info!("  Data Directory: {}", config.data_directory);
+    log_host_policy(&host_policy, &addr, config.allowed_hosts.is_empty());
 
     // Create memory system with embeddings enabled
     let mut system_config = post_cortex_memory::SystemConfig {
@@ -132,54 +136,15 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
     // Create cancellation token for graceful shutdown
     let ct = CancellationToken::new();
 
-    // Create MCP service using streamable HTTP transport
-    let mcp_service = StreamableHttpService::new(
-        {
-            let memory_system = memory_system.clone();
-            move || Ok(PostCortexService::new(memory_system.clone()))
-        },
-        LocalSessionManager::default().into(),
-        StreamableHttpServerConfig::default().with_cancellation_token(ct.child_token()),
+    let router = build_router(
+        memory_system.clone(),
+        &host_policy,
+        config.auth_token.clone(),
+        &ct,
     );
-
     info!("MCP endpoint configured: http://{}/mcp", addr);
-
-    // Create API state
-    let api_state = Arc::new(ApiState {
-        memory_system: memory_system.clone(),
-    });
-
-    // Create API router with its own state
-    let api_router = Router::new()
-        .route("/health", get(api_health))
-        .route(
-            "/api/sessions",
-            get(api_list_sessions).post(api_create_session),
-        )
-        .route("/api/sessions/{id}", delete(api_delete_session))
-        .route(
-            "/api/workspaces",
-            get(api_list_workspaces).post(api_create_workspace),
-        )
-        .route("/api/workspaces/{id}", delete(api_delete_workspace))
-        .route(
-            "/api/workspaces/{workspace_id}/sessions/{session_id}",
-            post(api_attach_session),
-        )
-        .with_state(api_state);
-
-    // Create router with MCP service and API routes
-    let mut router = Router::new()
-        .nest_service("/mcp", mcp_service)
-        .merge(api_router);
     match &config.auth_token {
-        Some(token) => {
-            router = router.layer(axum::middleware::from_fn_with_state(
-                Arc::new(token.clone()),
-                crate::daemon::auth::require_bearer,
-            ));
-            info!("  Auth: bearer token required (HTTP except /health, gRPC)");
-        }
+        Some(_) => info!("  Auth: bearer token required (HTTP except /health, gRPC)"),
         None if !addr.ip().is_loopback() => {
             warn!(
                 "  Auth: NONE on non-loopback bind {} — set auth_token / PC_AUTH_TOKEN",
@@ -253,6 +218,86 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
         .await;
     info!("Post-Cortex daemon stopped");
     Ok(())
+}
+
+/// Builds the HTTP app: rmcp's Streamable HTTP service on `/mcp`, the REST
+/// API on `/api/*` and `/health`.
+///
+/// `host_policy` is enforced by rmcp on `/mcp` and by
+/// [`require_allowed_host`] on `/api/*`; `/health` accepts any `Host`. With
+/// `auth_token` set every route but `/health` also needs the bearer token.
+pub fn build_router(
+    memory_system: Arc<ConversationMemorySystem>,
+    host_policy: &HostPolicy,
+    auth_token: Option<String>,
+    ct: &CancellationToken,
+) -> Router {
+    let mcp_service = StreamableHttpService::new(
+        {
+            let memory_system = memory_system.clone();
+            move || Ok(PostCortexService::new(memory_system.clone()))
+        },
+        LocalSessionManager::default().into(),
+        host_policy
+            .apply(StreamableHttpServerConfig::default().with_cancellation_token(ct.child_token())),
+    );
+
+    let api_state = Arc::new(ApiState { memory_system });
+    let api_router = Router::new()
+        .route("/health", get(api_health))
+        .route(
+            "/api/sessions",
+            get(api_list_sessions).post(api_create_session),
+        )
+        .route("/api/sessions/{id}", delete(api_delete_session))
+        .route(
+            "/api/workspaces",
+            get(api_list_workspaces).post(api_create_workspace),
+        )
+        .route("/api/workspaces/{id}", delete(api_delete_workspace))
+        .route(
+            "/api/workspaces/{workspace_id}/sessions/{session_id}",
+            post(api_attach_session),
+        )
+        .with_state(api_state)
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::new(host_policy.clone()),
+            require_allowed_host,
+        ));
+
+    let router = Router::new()
+        .nest_service("/mcp", mcp_service)
+        .merge(api_router);
+    match auth_token {
+        Some(token) => router.layer(axum::middleware::from_fn_with_state(
+            Arc::new(token),
+            crate::daemon::auth::require_bearer,
+        )),
+        None => router,
+    }
+}
+
+/// Logs the effective `Host` allowlist, warning when it will turn remote
+/// clients away or is switched off.
+fn log_host_policy(policy: &HostPolicy, addr: &SocketAddr, using_defaults: bool) {
+    match policy {
+        HostPolicy::Any => warn!(
+            "  Allowed hosts: ANY (allowed_hosts = [\"*\"]) — Host validation is off, \
+             the daemon is exposed to DNS rebinding from any web page"
+        ),
+        HostPolicy::Only(hosts) => {
+            info!("  Allowed hosts: {}", hosts.join(", "));
+            if addr.ip().is_unspecified() && using_defaults {
+                warn!(
+                    "  Bound to {} but allowed_hosts only lists loopback names: remote \
+                     clients get 403 on /mcp and /api/* until allowed_hosts (or \
+                     PC_ALLOWED_HOSTS) lists the host names they connect with, e.g. a \
+                     tailnet hostname or IP",
+                    addr
+                );
+            }
+        }
+    }
 }
 
 /// Resolves on SIGTERM (what launchd, systemd and `kill` send); never on
@@ -518,4 +563,130 @@ async fn api_attach_session(
         .add_session_to_workspace(&ws_id, sess_id, role);
 
     Ok(StatusCode::OK)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::{Body, to_bytes};
+    use axum::http::{Request, header};
+    use tower::ServiceExt;
+
+    const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"host-test","version":"0"}}}"#;
+
+    async fn memory_system(dir: &tempfile::TempDir) -> Arc<ConversationMemorySystem> {
+        let config = post_cortex_memory::SystemConfig {
+            data_directory: dir.path().to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        Arc::new(ConversationMemorySystem::new(config).await.unwrap())
+    }
+
+    fn policy(host: &str, allowed: &[&str]) -> HostPolicy {
+        HostPolicy::from_config(&DaemonConfig {
+            host: host.to_string(),
+            allowed_hosts: allowed.iter().map(|s| (*s).to_string()).collect(),
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    fn initialize(host: &str) -> Request<Body> {
+        Request::post("/mcp")
+            .header(header::HOST, host)
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCEPT, "application/json, text/event-stream")
+            .body(Body::from(INITIALIZE))
+            .unwrap()
+    }
+
+    fn get(path: &str, host: &str) -> Request<Body> {
+        Request::get(path)
+            .header(header::HOST, host)
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    async fn status_and_body(router: &Router, req: Request<Body>) -> (StatusCode, String) {
+        let resp = router.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        // Initialize answers on an SSE stream that stays open; the first
+        // frame holds the result.
+        let body = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            to_bytes(resp.into_body(), 64 * 1024),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default();
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn host_allowlist_guards_mcp_and_api() {
+        let dir = tempfile::tempdir().unwrap();
+        let memory = memory_system(&dir).await;
+        let ct = CancellationToken::new();
+        let router = build_router(
+            memory,
+            &policy("0.0.0.0", &["pc.tailnet.example", "100.64.0.7:3737"]),
+            None,
+            &ct,
+        );
+
+        // DNS rebinding: foreign Host gets 403 on /mcp and /api/*.
+        for host in ["evil.example", "evil.example:3737", "100.64.0.7:80"] {
+            let (status, body) = status_and_body(&router, initialize(host)).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "/mcp with Host {host}");
+            assert!(body.contains("Host header is not allowed"), "{body}");
+            let (status, _) = status_and_body(&router, get("/api/sessions", host)).await;
+            assert_eq!(
+                status,
+                StatusCode::FORBIDDEN,
+                "/api/sessions with Host {host}"
+            );
+        }
+
+        // Loopback and configured hosts are served.
+        for host in [
+            "localhost:3737",
+            "127.0.0.1:3737",
+            "[::1]:3737",
+            "pc.tailnet.example:3737",
+            "100.64.0.7:3737",
+        ] {
+            let (status, body) = status_and_body(&router, initialize(host)).await;
+            assert_eq!(status, StatusCode::OK, "/mcp with Host {host}");
+            assert!(
+                body.contains("\"protocolVersion\":\"2024-11-05\""),
+                "{body}"
+            );
+            let (status, _) = status_and_body(&router, get("/api/sessions", host)).await;
+            assert_eq!(status, StatusCode::OK, "/api/sessions with Host {host}");
+        }
+
+        // Liveness probe stays open.
+        let (status, _) = status_and_body(&router, get("/health", "evil.example")).await;
+        assert_eq!(status, StatusCode::OK);
+        ct.cancel();
+    }
+
+    #[tokio::test]
+    async fn star_disables_host_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let ct = CancellationToken::new();
+        let router = build_router(
+            memory_system(&dir).await,
+            &policy("0.0.0.0", &["*"]),
+            None,
+            &ct,
+        );
+        let (status, _) = status_and_body(&router, initialize("evil.example")).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = status_and_body(&router, get("/api/sessions", "evil.example")).await;
+        assert_eq!(status, StatusCode::OK);
+        ct.cancel();
+    }
 }
