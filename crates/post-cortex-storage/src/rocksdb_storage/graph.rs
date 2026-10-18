@@ -25,6 +25,7 @@ use post_cortex_core::core::context_update::{EntityData, EntityRelationship, Rel
 use post_cortex_core::graph::entity_graph::EntityNetwork;
 
 use super::RealRocksDBStorage;
+use super::core::scan_prefix;
 use super::types::{StoredEntity, StoredRelationship};
 
 impl RealRocksDBStorage {
@@ -106,10 +107,7 @@ impl RealRocksDBStorage {
 
         tokio::task::spawn_blocking(move || -> Result<Vec<StoredEntity>> {
             let mut entities = Vec::new();
-            let iter = db.iterator(rocksdb::IteratorMode::From(
-                prefix.as_bytes(),
-                rocksdb::Direction::Forward,
-            ));
+            let iter = scan_prefix(&db, prefix.as_bytes());
 
             for item in iter {
                 let (key, value) = item?;
@@ -239,10 +237,7 @@ impl RealRocksDBStorage {
 
         tokio::task::spawn_blocking(move || -> Result<Vec<StoredRelationship>> {
             let mut relationships = Vec::new();
-            let iter = db.iterator(rocksdb::IteratorMode::From(
-                prefix.as_bytes(),
-                rocksdb::Direction::Forward,
-            ));
+            let iter = scan_prefix(&db, prefix.as_bytes());
 
             for item in iter {
                 let (key, value) = item?;

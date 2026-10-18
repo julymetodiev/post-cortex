@@ -26,6 +26,7 @@
 use crate::rocksdb_storage::{SessionCheckpoint, StoredWorkspace};
 use anyhow::Result;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use post_cortex_core::core::context_update::{
     ContextUpdate, EntityData, EntityRelationship, RelationType,
 };
@@ -55,6 +56,44 @@ pub struct StaleEntryInfo {
     /// Symbol type (e.g. `"fn"`, `"struct"`) associated with the entry.
     pub symbol_type: Option<String>,
 }
+
+/// Listing row for a stored session: its metadata without the context.
+///
+/// Returned by [`Storage::list_session_summaries`] so callers can list and
+/// filter sessions without loading (and deserialising) every session.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SessionSummary {
+    /// Session ID.
+    pub id: Uuid,
+    /// Display name, if set.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Description, if set.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Creation timestamp.
+    pub created_at: DateTime<Utc>,
+    /// Last modification timestamp as of the last save.
+    pub last_updated: DateTime<Utc>,
+    /// Number of context updates (`incremental_updates`) in the session.
+    #[serde(default)]
+    pub update_count: usize,
+}
+
+impl SessionSummary {
+    /// Summary of an in-memory session.
+    pub fn from_session(session: &ActiveSession) -> Self {
+        let meta = &*session.metadata;
+        Self {
+            id: meta.id,
+            name: meta.name.clone(),
+            description: meta.description.clone(),
+            created_at: meta.created_at,
+            last_updated: session.last_updated,
+            update_count: session.incremental_updates.len(),
+        }
+    }
+}
 ///
 /// This trait defines the fundamental storage operations required for
 /// session management, context updates, and workspace persistence.
@@ -78,6 +117,23 @@ pub trait Storage: FreshnessStorage + Send + Sync {
 
     /// List all session IDs
     async fn list_sessions(&self) -> Result<Vec<Uuid>>;
+
+    /// List every stored session's metadata (no particular order) without
+    /// loading the sessions themselves.
+    ///
+    /// The default implementation loads each session and is only meant for
+    /// backends without a metadata index; sessions that fail to load are
+    /// skipped with a warning.
+    async fn list_session_summaries(&self) -> Result<Vec<SessionSummary>> {
+        let mut summaries = Vec::new();
+        for session_id in self.list_sessions().await? {
+            match self.load_session(session_id).await {
+                Ok(session) => summaries.push(SessionSummary::from_session(&session)),
+                Err(e) => tracing::warn!("Skipping session {} in listing: {:#}", session_id, e),
+            }
+        }
+        Ok(summaries)
+    }
 
     /// Check if a session exists
     async fn session_exists(&self, session_id: Uuid) -> Result<bool>;
@@ -260,8 +316,22 @@ pub trait VectorStorage: Send + Sync {
         content_type: &str,
     ) -> Result<Vec<SearchMatch>>;
 
-    /// Remove a vector by ID
+    /// Remove the vectors stored under content id `id`, in every session.
+    ///
+    /// Content ids are not unique across sessions (e.g. `entity:<name>`);
+    /// use [`remove_session_vector`](Self::remove_session_vector) to remove
+    /// one session's vector.
     async fn remove_vector(&self, id: &str) -> Result<bool>;
+
+    /// Remove the vector `content_id` of session `session_id` only.
+    /// Returns whether it existed.
+    ///
+    /// The default implementation falls back to the unscoped
+    /// [`remove_vector`](Self::remove_vector).
+    async fn remove_session_vector(&self, session_id: &str, content_id: &str) -> Result<bool> {
+        let _ = session_id;
+        self.remove_vector(content_id).await
+    }
 
     /// Check if a session has any embeddings
     async fn has_session_embeddings(&self, session_id: &str) -> bool;
@@ -452,6 +522,14 @@ impl Storage for StorageBackend {
         }
     }
 
+    async fn list_session_summaries(&self) -> Result<Vec<SessionSummary>> {
+        match self {
+            StorageBackend::RocksDB(storage) => storage.list_session_summaries().await,
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => storage.list_session_summaries().await,
+        }
+    }
+
     async fn session_exists(&self, session_id: Uuid) -> Result<bool> {
         match self {
             StorageBackend::RocksDB(storage) => storage.session_exists(session_id).await,
@@ -489,13 +567,10 @@ impl Storage for StorageBackend {
                     .await
             }
             #[cfg(feature = "surrealdb-storage")]
-            StorageBackend::SurrealDB(_) => {
-                // Use default sequential implementation for SurrealDB
-                self.save_session(session).await?;
-                if !updates.is_empty() {
-                    self.batch_save_updates(session_id, updates).await?;
-                }
-                Ok(())
+            StorageBackend::SurrealDB(storage) => {
+                storage
+                    .save_session_with_updates(session, session_id, updates)
+                    .await
             }
         }
     }

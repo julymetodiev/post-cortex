@@ -839,3 +839,144 @@ async fn test_load_session_with_null_name_and_description() {
     assert_eq!(session.id(), id);
     assert!(session.name().is_none());
 }
+
+fn graph_entity(name: &str) -> EntityData {
+    EntityData {
+        name: name.to_string(),
+        entity_type: EntityType::Concept,
+        first_mentioned: Utc::now(),
+        last_mentioned: Utc::now(),
+        mention_count: 2,
+        importance_score: 0.5,
+        description: None,
+    }
+}
+
+fn graph_rel(from: &str, to: &str, relation_type: RelationType) -> EntityRelationship {
+    EntityRelationship {
+        from_entity: from.to_string(),
+        to_entity: to.to_string(),
+        relation_type,
+        context: format!("{from} -> {to}"),
+    }
+}
+
+/// Graph traversal over entity names that need escaping inside a SurrealQL
+/// record id (`` ` ``, quotes, `;`): they must be bound, not interpolated.
+#[tokio::test]
+async fn test_graph_traversal_with_hostile_entity_names() {
+    let storage = SurrealDBStorage::new("mem://", None, None, None, None)
+        .await
+        .unwrap();
+    let sid = Uuid::new_v4();
+    let a = "a` ; DELETE entity; --";
+    let b = "b'\"name";
+    let c = "c\\path";
+    for name in [a, b, c, "lonely"] {
+        storage
+            .upsert_entity(sid, &graph_entity(name))
+            .await
+            .unwrap();
+    }
+    storage
+        .create_relationship(sid, &graph_rel(a, b, RelationType::DependsOn))
+        .await
+        .unwrap();
+    storage
+        .create_relationship(sid, &graph_rel(b, c, RelationType::LeadsTo))
+        .await
+        .unwrap();
+
+    let names: Vec<String> = storage
+        .list_entities(sid)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    assert_eq!(names.len(), 4, "entities: {names:?}");
+    assert!(storage.get_entity(sid, a).await.unwrap().is_some());
+
+    let mut related = storage.find_related_entities(sid, b).await.unwrap();
+    related.sort();
+    let mut expected = vec![a.to_string(), c.to_string()];
+    expected.sort();
+    assert_eq!(related, expected);
+    assert_eq!(
+        storage
+            .find_related_by_type(sid, b, &RelationType::LeadsTo)
+            .await
+            .unwrap(),
+        vec![c.to_string()]
+    );
+    let network = storage.get_entity_network(sid, b, 2).await.unwrap();
+    assert!(network.entities.contains_key(a) && network.entities.contains_key(c));
+    assert_eq!(network.relationships.len(), 2);
+
+    assert_eq!(storage.load_all_relationships(sid).await.unwrap().len(), 2);
+
+    storage.delete_entity(sid, b).await.unwrap();
+    assert!(storage.get_entity(sid, b).await.unwrap().is_none());
+    assert!(
+        storage
+            .load_all_relationships(sid)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(storage.list_entities(sid).await.unwrap().len(), 3);
+}
+
+/// Same traversals with plain names, to pin the pre-existing behaviour.
+#[tokio::test]
+async fn test_graph_traversal_plain_names() {
+    let storage = SurrealDBStorage::new("mem://", None, None, None, None)
+        .await
+        .unwrap();
+    let sid = Uuid::new_v4();
+    for name in ["A", "B", "C", "D"] {
+        storage
+            .upsert_entity(sid, &graph_entity(name))
+            .await
+            .unwrap();
+    }
+    storage
+        .create_relationship(sid, &graph_rel("A", "B", RelationType::DependsOn))
+        .await
+        .unwrap();
+    storage
+        .create_relationship(sid, &graph_rel("B", "C", RelationType::LeadsTo))
+        .await
+        .unwrap();
+
+    let mut related = storage.find_related_entities(sid, "B").await.unwrap();
+    related.sort();
+    assert_eq!(related, vec!["A", "C"]);
+    assert_eq!(
+        storage
+            .find_related_by_type(sid, "B", &RelationType::LeadsTo)
+            .await
+            .unwrap(),
+        vec!["C"]
+    );
+    let path = storage.find_shortest_path(sid, "A", "C").await.unwrap();
+    assert_eq!(
+        path,
+        Some(vec!["A".to_string(), "B".to_string(), "C".to_string()])
+    );
+    assert_eq!(
+        storage.find_shortest_path(sid, "A", "D").await.unwrap(),
+        None
+    );
+    let network = storage.get_entity_network(sid, "B", 2).await.unwrap();
+    assert!(network.entities.contains_key("A") && network.entities.contains_key("C"));
+    assert_eq!(storage.load_all_relationships(sid).await.unwrap().len(), 2);
+    storage.delete_entity(sid, "B").await.unwrap();
+    assert!(
+        storage
+            .load_all_relationships(sid)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

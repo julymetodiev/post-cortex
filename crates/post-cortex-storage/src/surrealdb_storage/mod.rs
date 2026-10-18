@@ -36,6 +36,8 @@ mod sessions;
 mod vectors;
 
 #[cfg(test)]
+mod persist_tests;
+#[cfg(test)]
 mod tests;
 
 /// Minimum embedding dimension. Storage doesn't enforce a specific dim —
@@ -54,4 +56,36 @@ pub struct SurrealDBStorage {
     pub(super) namespace: String,
     #[allow(dead_code)]
     pub(super) database: String,
+    /// What this process last wrote or read per session; lets saves send
+    /// only what changed. See [`sessions::PersistedState`].
+    pub(super) persisted: Arc<sessions::PersistedStates>,
+}
+
+/// The eight relation (edge) tables, one per [`RelationType`].
+///
+/// [`RelationType`]: post_cortex_core::core::context_update::RelationType
+pub(super) const RELATION_TABLES: [(&str, post_cortex_core::core::context_update::RelationType);
+    8] = {
+    use post_cortex_core::core::context_update::RelationType;
+    [
+        ("required_by", RelationType::RequiredBy),
+        ("leads_to", RelationType::LeadsTo),
+        ("related_to", RelationType::RelatedTo),
+        ("conflicts_with", RelationType::ConflictsWith),
+        ("depends_on", RelationType::DependsOn),
+        ("implements", RelationType::Implements),
+        ("caused_by", RelationType::CausedBy),
+        ("solves", RelationType::Solves),
+    ]
+};
+
+/// One SurrealQL statement per relation table, built from `template` with
+/// `{table}` replaced by the (static) table name. Lets callers touch all
+/// eight tables in a single round trip.
+pub(super) fn per_relation_table(template: &str) -> String {
+    RELATION_TABLES
+        .iter()
+        .map(|(table, _)| template.replace("{table}", table))
+        .collect::<Vec<_>>()
+        .join(" ")
 }

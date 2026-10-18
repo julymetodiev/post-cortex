@@ -24,7 +24,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-/// Required embedding dimension for vector storage (must match model output)
+/// Output dimension of the legacy MultilingualMiniLM model (384).
+///
+/// No longer enforced by default: [`RealRocksDBStorage::new`] accepts any
+/// non-empty vector, and [`RealRocksDBStorage::new_with_dimension`] enforces
+/// the configured model's dimension.
+///
+/// [`RealRocksDBStorage::new`]: super::RealRocksDBStorage::new
+/// [`RealRocksDBStorage::new_with_dimension`]: super::RealRocksDBStorage::new_with_dimension
 pub const EMBEDDING_DIMENSION: usize = 384;
 
 /// Workspace record persisted in RocksDB.

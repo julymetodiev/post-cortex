@@ -17,7 +17,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use surrealdb::types::SurrealValue;
 use tracing::debug;
 
@@ -27,6 +27,58 @@ use post_cortex_embeddings::{SearchMatch, VectorMetadata};
 use super::MIN_VECTOR_LEN;
 use super::SurrealDBStorage;
 use super::records::{EmbeddingRecord, KnnResult};
+
+pub(super) fn embedding_record(vector: Vec<f32>, metadata: VectorMetadata) -> EmbeddingRecord {
+    EmbeddingRecord {
+        content_id: metadata.id,
+        session_id: metadata.source,
+        vector,
+        text: metadata.text,
+        content_type: metadata.content_type,
+        timestamp: metadata.timestamp.to_rfc3339(),
+        metadata: metadata.metadata,
+    }
+}
+
+/// Embedding row for the batched upsert.
+#[derive(Serialize, SurrealValue)]
+struct KeyedEmbedding {
+    /// `{session_id}_{content_id}`: content ids repeat across sessions.
+    key: String,
+    record: EmbeddingRecord,
+}
+
+impl SurrealDBStorage {
+    /// Upsert embeddings under session-scoped record ids, in one query.
+    ///
+    /// Records written before ids were session-scoped are keyed by the bare
+    /// content id; the same session's legacy record is dropped first (the
+    /// `(session_id, content_id)` index is unique), other sessions' records
+    /// are left alone.
+    pub(super) async fn upsert_embeddings(&self, records: Vec<EmbeddingRecord>) -> Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        let rows: Vec<KeyedEmbedding> = records
+            .into_iter()
+            .map(|record| KeyedEmbedding {
+                key: format!("{}_{}", record.session_id, record.content_id),
+                record,
+            })
+            .collect();
+        self.db
+            .query(
+                "FOR $e IN $rows { \
+                 DELETE type::record('embedding', $e.record.content_id) \
+                     WHERE session_id = $e.record.session_id; \
+                 UPSERT type::record('embedding', $e.key) CONTENT $e.record; };",
+            )
+            .bind(("rows", rows))
+            .await?
+            .check()?;
+        Ok(())
+    }
+}
 
 #[async_trait]
 impl VectorStorage for SurrealDBStorage {
@@ -44,36 +96,30 @@ impl VectorStorage for SurrealDBStorage {
             metadata.id
         );
 
-        let record = EmbeddingRecord {
-            content_id: metadata.id.clone(),
-            session_id: metadata.source.clone(),
-            vector,
-            text: metadata.text,
-            content_type: metadata.content_type,
-            timestamp: metadata.timestamp.to_rfc3339(),
-            metadata: metadata.metadata,
-        };
-
-        let _: Option<EmbeddingRecord> = self
-            .db
-            .upsert(("embedding", metadata.id.clone()))
-            .content(record)
+        let id = metadata.id.clone();
+        self.upsert_embeddings(vec![embedding_record(vector, metadata)])
             .await?;
-
-        Ok(metadata.id)
+        Ok(id)
     }
 
+    /// All vectors in one query.
     async fn add_vectors_batch(
         &self,
         vectors: Vec<(Vec<f32>, VectorMetadata)>,
     ) -> Result<Vec<String>> {
-        let mut ids = Vec::new();
-
-        for (vector, metadata) in vectors {
-            let id = self.add_vector(vector, metadata).await?;
-            ids.push(id);
+        if let Some((v, _)) = vectors.iter().find(|(v, _)| v.len() < MIN_VECTOR_LEN) {
+            return Err(anyhow::anyhow!(
+                "Vector too short: got {} dims, need at least {}",
+                v.len(),
+                MIN_VECTOR_LEN,
+            ));
         }
-
+        let ids = vectors.iter().map(|(_, m)| m.id.clone()).collect();
+        let records = vectors
+            .into_iter()
+            .map(|(vector, metadata)| embedding_record(vector, metadata))
+            .collect();
+        self.upsert_embeddings(records).await?;
         Ok(ids)
     }
 
@@ -251,9 +297,30 @@ impl VectorStorage for SurrealDBStorage {
         Ok(matches)
     }
 
+    /// Removes the vectors stored under content id `id` in every session.
     async fn remove_vector(&self, id: &str) -> Result<bool> {
-        let result: Option<EmbeddingRecord> = self.delete("embedding", id).await?;
-        Ok(result.is_some())
+        let mut response = self
+            .db
+            .query("DELETE embedding WHERE content_id = $content_id RETURN BEFORE")
+            .bind(("content_id", id.to_string()))
+            .await?;
+        let removed: Vec<EmbeddingRecord> = response.take(0)?;
+        Ok(!removed.is_empty())
+    }
+
+    /// Removes one session's vector, under its current or legacy record id.
+    async fn remove_session_vector(&self, session_id: &str, content_id: &str) -> Result<bool> {
+        let mut response = self
+            .db
+            .query(
+                "DELETE embedding WHERE session_id = $session_id AND content_id = $content_id \
+                 RETURN BEFORE",
+            )
+            .bind(("session_id", session_id.to_string()))
+            .bind(("content_id", content_id.to_string()))
+            .await?;
+        let removed: Vec<EmbeddingRecord> = response.take(0)?;
+        Ok(!removed.is_empty())
     }
 
     async fn has_session_embeddings(&self, session_id: &str) -> bool {

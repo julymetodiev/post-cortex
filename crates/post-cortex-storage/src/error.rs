@@ -67,6 +67,23 @@ impl From<bincode::error::DecodeError> for Error {
     }
 }
 
+/// `anyhow` error for a missing session: displays as `Session not found`
+/// (the message callers have always matched on) and downcasts to
+/// [`Error::NotFound`].
+pub fn session_not_found(session_id: uuid::Uuid) -> anyhow::Error {
+    anyhow::Error::new(Error::NotFound {
+        kind: "session",
+        id: session_id.to_string(),
+    })
+    .context("Session not found")
+}
+
+/// Whether `err` (from a [`Storage`](crate::traits::Storage) method) means
+/// the record does not exist, as opposed to a backend or decoding failure.
+pub fn is_not_found(err: &anyhow::Error) -> bool {
+    matches!(err.downcast_ref::<Error>(), Some(Error::NotFound { .. }))
+}
+
 impl Error {
     /// A stable discriminant for metrics / structured logs.
     #[must_use]

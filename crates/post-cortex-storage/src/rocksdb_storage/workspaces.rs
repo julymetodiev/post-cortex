@@ -21,6 +21,7 @@ use uuid::Uuid;
 use post_cortex_core::workspace::SessionRole;
 
 use super::RealRocksDBStorage;
+use super::core::scan_prefix;
 use super::types::{StoredWorkspace, StoredWorkspaceSession};
 
 impl RealRocksDBStorage {
@@ -33,10 +34,7 @@ impl RealRocksDBStorage {
 
             // First pass: Load all workspaces using iterator with seek
             // (prefix_iterator doesn't work with our 16-byte prefix extractor)
-            let workspace_iter = db.iterator(rocksdb::IteratorMode::From(
-                b"workspace:",
-                rocksdb::Direction::Forward,
-            ));
+            let workspace_iter = scan_prefix(&db, b"workspace:");
             for item in workspace_iter {
                 let (key, value) = item?;
                 let key_str = String::from_utf8_lossy(&key);
@@ -59,10 +57,7 @@ impl RealRocksDBStorage {
             }
 
             // Second pass: Load all workspace-session associations using iterator with seek
-            let ws_session_iter = db.iterator(rocksdb::IteratorMode::From(
-                b"ws_session:",
-                rocksdb::Direction::Forward,
-            ));
+            let ws_session_iter = scan_prefix(&db, b"ws_session:");
             for item in ws_session_iter {
                 let (key, value) = item?;
                 let key_str = String::from_utf8_lossy(&key);
@@ -151,10 +146,7 @@ impl RealRocksDBStorage {
 
             // Also delete all workspace-session associations
             let ws_session_prefix = format!("ws_session:{}:", workspace_id);
-            let iter = db.iterator(rocksdb::IteratorMode::From(
-                ws_session_prefix.as_bytes(),
-                rocksdb::Direction::Forward,
-            ));
+            let iter = scan_prefix(&db, ws_session_prefix.as_bytes());
             let mut keys_to_delete = Vec::new();
 
             for item in iter {

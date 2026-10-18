@@ -13,89 +13,398 @@
 //! Session, checkpoint, and context-update persistence plus the [`Storage`]
 //! trait implementation (which dispatches to inherent helpers across this
 //! module).
+//!
+//! Key families for a session `{id}`:
+//! - `session:{id}` -> JSON session blob. Written with an empty
+//!   `incremental_updates` array; blobs from older versions embed them all.
+//! - `session:{id}:update:{update_id}` -> bincode [`ContextUpdate`], one row
+//!   per update.
+//! - `session_updates:{id}` -> ids of the session's updates in session
+//!   order, 16 raw bytes each. Its presence means the updates live in the
+//!   rows; invariant: every listed id has a row.
+//! - `session_meta:{id}` -> JSON [`SessionSummary`] for listings.
+//!
+//! All of a save is one `WriteBatch`, so blob, rows, index and meta never
+//! disagree on disk.
 
 use anyhow::Result;
 use async_trait::async_trait;
-use rocksdb::WriteBatch;
-use tracing::{debug, info};
+use rocksdb::{DB, WriteBatch};
+use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::traits::Storage;
+use crate::error::session_not_found;
+use crate::traits::{SessionSummary, Storage};
 use post_cortex_core::core::context_update::ContextUpdate;
 use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_core::workspace::SessionRole;
 
 use super::RealRocksDBStorage;
-use super::types::{SessionCheckpoint, StoredWorkspace};
+use super::core::{SessionLocks, blocking, keys_with_prefix, prefix_read_opts, scan_prefix};
+use super::types::{SessionCheckpoint, StoredWorkspace, StoredWorkspaceSession};
+
+const SESSION_PREFIX: &str = "session:";
+const META_PREFIX: &str = "session_meta:";
+/// `session:` + hyphenated UUID.
+const SESSION_KEY_LEN: usize = SESSION_PREFIX.len() + 36;
+
+fn session_key(session_id: Uuid) -> String {
+    format!("session:{}", session_id)
+}
+
+fn update_key(session_id: Uuid, update_id: Uuid) -> String {
+    format!("session:{}:update:{}", session_id, update_id)
+}
+
+fn update_index_key(session_id: Uuid) -> String {
+    format!("session_updates:{}", session_id)
+}
+
+fn meta_key(session_id: Uuid) -> String {
+    format!("session_meta:{}", session_id)
+}
+
+fn encode_ids<'a>(ids: impl Iterator<Item = &'a Uuid>) -> Vec<u8> {
+    ids.flat_map(|id| *id.as_bytes()).collect()
+}
+
+fn decode_ids(bytes: &[u8]) -> Vec<Uuid> {
+    let (chunks, _) = bytes.as_chunks::<16>();
+    chunks.iter().map(|c| Uuid::from_bytes(*c)).collect()
+}
+
+fn encode_update(update: &ContextUpdate) -> Result<Vec<u8>> {
+    bincode::serde::encode_to_vec(update, bincode::config::standard())
+        .map_err(|e| anyhow::anyhow!("Failed to serialize update: {}", e))
+}
+
+fn decode_update(bytes: &[u8]) -> Option<ContextUpdate> {
+    bincode::serde::decode_from_slice::<ContextUpdate, _>(bytes, bincode::config::standard())
+        .ok()
+        .map(|(u, _)| u)
+}
+
+/// Session blob as written by this version: everything but the updates.
+fn session_blob(session: &ActiveSession) -> Result<Vec<u8>> {
+    serde_json::to_vec(&session.serializable_view().without_incremental_updates())
+        .map_err(|e| anyhow::anyhow!("Failed to serialize session: {}", e))
+}
+
+/// Write `session` and bring its rows, update index and meta in line with
+/// it, in one `WriteBatch`. The caller holds the session's lock.
+///
+/// Rows are written for `explicit` updates and for every session update
+/// the stored index does not list yet (all of them for a session saved by
+/// an older version), and deleted for listed updates the session no
+/// longer contains. Returns the number of rows written.
+fn persist_session(
+    db: &DB,
+    session: &ActiveSession,
+    blob: &[u8],
+    explicit: &[ContextUpdate],
+) -> Result<usize> {
+    let session_id = session.id();
+    let index_key = update_index_key(session_id);
+    let old_index = db.get(index_key.as_bytes())?;
+    let stored: HashSet<Uuid> = old_index
+        .as_deref()
+        .map(decode_ids)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    let current: HashSet<Uuid> = session.incremental_updates.iter().map(|u| u.id).collect();
+    let explicit_ids: HashSet<Uuid> = explicit.iter().map(|u| u.id).collect();
+
+    let mut batch = WriteBatch::default();
+    let mut rows = 0;
+    for update in explicit {
+        batch.put(
+            update_key(session_id, update.id).as_bytes(),
+            encode_update(update)?,
+        );
+        rows += 1;
+    }
+    for update in session.incremental_updates.iter() {
+        if !stored.contains(&update.id) && !explicit_ids.contains(&update.id) {
+            batch.put(
+                update_key(session_id, update.id).as_bytes(),
+                encode_update(update)?,
+            );
+            rows += 1;
+        }
+    }
+    for removed in stored.difference(&current) {
+        batch.delete(update_key(session_id, *removed).as_bytes());
+    }
+
+    let index = encode_ids(session.incremental_updates.iter().map(|u| &u.id));
+    if old_index.as_deref() != Some(index.as_slice()) {
+        batch.put(index_key.as_bytes(), &index);
+    }
+    let meta = serde_json::to_vec(&SessionSummary::from_session(session))?;
+    batch.put(meta_key(session_id).as_bytes(), &meta);
+    batch.put(session_key(session_id).as_bytes(), blob);
+
+    db.write(batch)?;
+    Ok(rows)
+}
+
+/// A session read from disk.
+struct LoadedSession {
+    session: ActiveSession,
+    /// Raw blob when it came from an older writer (updates embedded, or no
+    /// update index yet) and still needs its rows/index/meta backfilled.
+    legacy_blob: Option<Vec<u8>>,
+}
+
+/// Read blob, index and rows from one snapshot so a concurrent save cannot
+/// be observed half-applied.
+fn read_session(db: &DB, session_id: Uuid) -> Result<Option<LoadedSession>> {
+    let snapshot = db.snapshot();
+    let Some(blob) = snapshot.get(session_key(session_id).as_bytes())? else {
+        return Ok(None);
+    };
+    let mut session: ActiveSession = serde_json::from_slice(&blob)
+        .map_err(|e| anyhow::anyhow!("Failed to deserialize session: {}", e))?;
+    let index = snapshot.get(update_index_key(session_id).as_bytes())?;
+
+    // An embedded list wins: it was written by a version that keeps the
+    // blob authoritative (possibly after this one, on a downgrade).
+    let Some(index) = index.filter(|_| session.incremental_updates.is_empty()) else {
+        return Ok(Some(LoadedSession {
+            session,
+            legacy_blob: Some(blob),
+        }));
+    };
+
+    let ids = decode_ids(&index);
+    let keys: Vec<String> = ids.iter().map(|id| update_key(session_id, *id)).collect();
+    let mut updates = Vec::with_capacity(ids.len());
+    for (id, value) in ids.iter().zip(snapshot.multi_get(&keys)) {
+        match value?.as_deref().map(decode_update) {
+            Some(Some(update)) => updates.push(update),
+            Some(None) => warn!("Session {}: undecodable update row {}", session_id, id),
+            None => warn!("Session {}: update row {} is missing", session_id, id),
+        }
+    }
+    session.set_incremental_updates(updates);
+    Ok(Some(LoadedSession {
+        session,
+        legacy_blob: None,
+    }))
+}
+
+/// Rewrite a legacy-format session in the current format, unless another
+/// writer replaced the blob since it was read.
+fn backfill_legacy(
+    db: &DB,
+    locks: &SessionLocks,
+    session: &ActiveSession,
+    legacy_blob: &[u8],
+) -> Result<()> {
+    let session_id = session.id();
+    let blob = session_blob(session)?;
+    let _guard = locks.lock(session_id);
+    if db.get(session_key(session_id).as_bytes())?.as_deref() != Some(legacy_blob) {
+        return Ok(());
+    }
+    let rows = persist_session(db, session, &blob, &[])?;
+    info!(
+        "RealRocksDBStorage: Migrated session {} to row-backed updates ({} rows backfilled, blob {} -> {} bytes)",
+        session_id,
+        rows,
+        legacy_blob.len(),
+        blob.len()
+    );
+    Ok(())
+}
+
+/// Ids of every `session:{id}` blob, skipping over each session's rows
+/// with a seek instead of walking them.
+fn list_session_ids(db: &DB) -> Result<Vec<Uuid>> {
+    let mut sessions = Vec::new();
+    let mut it = db.raw_iterator_opt(prefix_read_opts(SESSION_PREFIX.as_bytes()));
+    it.seek(SESSION_PREFIX.as_bytes());
+    while let Some(key) = it.key() {
+        if key.len() < SESSION_KEY_LEN {
+            it.next();
+            continue;
+        }
+        if key.len() == SESSION_KEY_LEN
+            && let Ok(id) = std::str::from_utf8(&key[SESSION_PREFIX.len()..])
+                .map_err(|_| ())
+                .and_then(|s| Uuid::parse_str(s).map_err(|_| ()))
+        {
+            sessions.push(id);
+        }
+        // `session:{id};` sorts right after every `session:{id}:...` row.
+        let mut next = key[..SESSION_KEY_LEN].to_vec();
+        next.push(b';');
+        it.seek(&next);
+    }
+    it.status()?;
+    Ok(sessions)
+}
+
+/// Element count of a JSON array without materialising it.
+struct SeqLen(usize);
+
+impl<'de> Deserialize<'de> for SeqLen {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Counter;
+        impl<'de> serde::de::Visitor<'de> for Counter {
+            type Value = SeqLen;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a sequence")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<SeqLen, A::Error> {
+                let mut n = 0;
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                    n += 1;
+                }
+                Ok(SeqLen(n))
+            }
+        }
+        deserializer.deserialize_seq(Counter)
+    }
+}
+
+/// The listing fields of a session blob.
+#[derive(Deserialize)]
+struct BlobHead {
+    id: Uuid,
+    name: Option<String>,
+    description: Option<String>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    last_updated: chrono::DateTime<chrono::Utc>,
+    #[serde(default)]
+    incremental_updates: Option<SeqLen>,
+}
+
+/// Summary for a session without a meta record (saved by an older
+/// version), stored as its meta record for next time.
+fn summarize_without_meta(
+    db: &DB,
+    locks: &SessionLocks,
+    session_id: Uuid,
+) -> Result<Option<SessionSummary>> {
+    let _guard = locks.lock(session_id);
+    if let Some(meta) = db.get(meta_key(session_id).as_bytes())?
+        && let Ok(summary) = serde_json::from_slice(&meta)
+    {
+        return Ok(Some(summary));
+    }
+    let Some(blob) = db.get(session_key(session_id).as_bytes())? else {
+        return Ok(None);
+    };
+    let head: BlobHead = serde_json::from_slice(&blob)
+        .map_err(|e| anyhow::anyhow!("Failed to read session {} header: {}", session_id, e))?;
+    let embedded = head.incremental_updates.map_or(0, |n| n.0);
+    let update_count = if embedded > 0 {
+        embedded
+    } else {
+        db.get(update_index_key(session_id).as_bytes())?
+            .map_or(0, |index| index.len() / 16)
+    };
+    let summary = SessionSummary {
+        id: head.id,
+        name: head.name,
+        description: head.description,
+        created_at: head.created_at,
+        last_updated: head.last_updated,
+        update_count,
+    };
+    db.put(
+        meta_key(session_id).as_bytes(),
+        serde_json::to_vec(&summary)?,
+    )?;
+    Ok(Some(summary))
+}
 
 impl RealRocksDBStorage {
-    /// Save session to RocksDB
+    /// Save session to RocksDB.
+    ///
+    /// The blob is written without `incremental_updates`; every update the
+    /// stored index does not list yet gets its row in the same batch, and
+    /// rows of updates the session no longer contains are deleted.
     pub async fn save_session(&self, session: &ActiveSession) -> Result<()> {
-        info!(
-            "RealRocksDBStorage: Saving session with ID: {}",
-            session.id()
-        );
+        self.persist(session, Vec::new()).await
+    }
 
+    /// Save session blob and context updates in a single atomic WriteBatch.
+    ///
+    /// `updates` are written (or rewritten) as rows; any other session
+    /// update without a row is written as well, so the session never
+    /// references a missing row.
+    pub async fn save_session_with_updates(
+        &self,
+        session: &ActiveSession,
+        session_id: Uuid,
+        updates: Vec<ContextUpdate>,
+    ) -> Result<()> {
+        if session.id() != session_id {
+            return Err(anyhow::anyhow!(
+                "Session id mismatch: blob {} vs updates for {}",
+                session.id(),
+                session_id
+            ));
+        }
+        self.persist(session, updates).await
+    }
+
+    async fn persist(&self, session: &ActiveSession, updates: Vec<ContextUpdate>) -> Result<()> {
         let db = self.db.clone();
+        let locks = self.session_locks.clone();
         let session = session.clone();
 
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            // Serialize session data with serde_json (bincode doesn't support deserialize_any)
-            let session_data = serde_json::to_vec(&session)
-                .map_err(|e| anyhow::anyhow!("Failed to serialize session: {}", e))?;
-
-            info!(
-                "RealRocksDBStorage: Session data serialized, size: {} bytes",
-                session_data.len()
+        blocking(move || {
+            let blob = session_blob(&session)?;
+            let _guard = locks.lock(session.id());
+            let rows = persist_session(&db, &session, &blob, &updates)?;
+            debug!(
+                "RealRocksDBStorage: Saved session {} ({} bytes, {} update rows written)",
+                session.id(),
+                blob.len(),
+                rows
             );
-
-            // Use binary key for better performance
-            let key = format!("session:{}", session.id());
-
-            // Write to RocksDB
-            db.put(key.as_bytes(), &session_data)?;
-
-            info!("RealRocksDBStorage: Session saved to RocksDB");
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))??;
-
-        Ok(())
     }
 
-    /// Load session from RocksDB
+    /// Load session from RocksDB, rebuilding `incremental_updates` from the
+    /// update rows. Sessions written by older versions (updates embedded in
+    /// the blob) load as-is and are migrated to the row format on the way.
     pub async fn load_session(&self, session_id: Uuid) -> Result<ActiveSession> {
-        info!(
-            "RealRocksDBStorage: Loading session with ID: {}",
-            session_id
-        );
-
         let db = self.db.clone();
-        let key = format!("session:{}", session_id);
+        let locks = self.session_locks.clone();
 
-        tokio::task::spawn_blocking(move || -> Result<ActiveSession> {
-            match db.get(key.as_bytes())? {
-                Some(data) => {
-                    info!(
-                        "RealRocksDBStorage: Session data found, size: {} bytes",
-                        data.len()
-                    );
-
-                    let session: ActiveSession = serde_json::from_slice(&data)
-                        .map_err(|e| anyhow::anyhow!("Failed to deserialize session: {}", e))?;
-
-                    info!("RealRocksDBStorage: Session deserialized successfully");
-                    Ok(session)
-                }
-                None => {
-                    info!("RealRocksDBStorage: Session not found");
-                    Err(anyhow::anyhow!("Session not found"))
-                }
+        blocking(move || {
+            let Some(loaded) = read_session(&db, session_id)? else {
+                debug!("RealRocksDBStorage: Session {} not found", session_id);
+                return Err(session_not_found(session_id));
+            };
+            if let Some(legacy_blob) = &loaded.legacy_blob
+                && let Err(e) = backfill_legacy(&db, &locks, &loaded.session, legacy_blob)
+            {
+                warn!(
+                    "RealRocksDBStorage: Could not migrate session {} to row-backed updates: {:#}",
+                    session_id, e
+                );
             }
+            debug!(
+                "RealRocksDBStorage: Loaded session {} ({} updates)",
+                session_id,
+                loaded.session.incremental_updates.len()
+            );
+            Ok(loaded.session)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
     }
 
     /// Save checkpoint to RocksDB
@@ -156,19 +465,8 @@ impl RealRocksDBStorage {
 
         tokio::task::spawn_blocking(move || -> Result<Vec<SessionCheckpoint>> {
             let mut checkpoints = Vec::new();
-            let iter = db.iterator(rocksdb::IteratorMode::From(
-                b"checkpoint:",
-                rocksdb::Direction::Forward,
-            ));
-
-            for item in iter {
-                let (key, value) = item?;
-                let key_str = String::from_utf8_lossy(&key);
-
-                if !key_str.starts_with("checkpoint:") {
-                    break;
-                }
-
+            for item in scan_prefix(&db, b"checkpoint:") {
+                let (_, value) = item?;
                 if let Ok((checkpoint, _)) =
                     bincode::serde::decode_from_slice::<SessionCheckpoint, _>(
                         &value,
@@ -186,226 +484,222 @@ impl RealRocksDBStorage {
         .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
     }
 
-    /// Batch save multiple updates efficiently
+    /// Write update rows for a session.
+    ///
+    /// If the session is stored in the row-backed format, updates it does
+    /// not contain yet are appended to it (they show up on the next load).
+    /// For a session saved by an older version only the rows are written,
+    /// as before.
     pub async fn batch_save_updates(
         &self,
         session_id: Uuid,
         updates: Vec<ContextUpdate>,
     ) -> Result<()> {
+        if updates.is_empty() {
+            return Ok(());
+        }
         let db = self.db.clone();
-        let updates_len = updates.len();
+        let locks = self.session_locks.clone();
 
-        tokio::task::spawn_blocking(move || -> Result<()> {
+        blocking(move || {
             let mut batch = WriteBatch::default();
-
             for update in &updates {
-                let key = format!("session:{}:update:{}", session_id, update.id);
-                let update_data =
-                    bincode::serde::encode_to_vec(update, bincode::config::standard())
-                        .map_err(|e| anyhow::anyhow!("Failed to serialize update: {}", e))?;
-
-                batch.put(key.as_bytes(), &update_data);
+                batch.put(
+                    update_key(session_id, update.id).as_bytes(),
+                    encode_update(update)?,
+                );
             }
 
-            db.write(batch)?;
-
-            info!(
-                "RealRocksDBStorage: Batch saved {} updates for session {}",
-                updates_len, session_id
-            );
-
-            Ok(())
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))??;
-
-        Ok(())
-    }
-
-    /// Save session blob and context updates in a single atomic WriteBatch.
-    /// Combines save_session + batch_save_updates into one spawn_blocking call.
-    pub async fn save_session_with_updates(
-        &self,
-        session: &ActiveSession,
-        session_id: Uuid,
-        updates: Vec<ContextUpdate>,
-    ) -> Result<()> {
-        let db = self.db.clone();
-        let session = session.clone();
-
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut batch = rocksdb::WriteBatch::default();
-
-            // Session blob (serde_json — required due to serde_json::Value fields)
-            let session_key = format!("session:{}", session.id());
-            let session_data = serde_json::to_vec(&session)
-                .map_err(|e| anyhow::anyhow!("Failed to serialize session: {}", e))?;
-            batch.put(session_key.as_bytes(), &session_data);
-
-            // Context update records (bincode)
-            for update in &updates {
-                let update_key = format!("session:{}:update:{}", session_id, update.id);
-                let update_data =
-                    bincode::serde::encode_to_vec(update, bincode::config::standard())
-                        .map_err(|e| anyhow::anyhow!("Failed to serialize update: {}", e))?;
-                batch.put(update_key.as_bytes(), &update_data);
+            let _guard = locks.lock(session_id);
+            let index_key = update_index_key(session_id);
+            if let Some(index) = db.get(index_key.as_bytes())? {
+                let mut ids = decode_ids(&index);
+                let mut known: HashSet<Uuid> = ids.iter().copied().collect();
+                let before = ids.len();
+                ids.extend(updates.iter().map(|u| u.id).filter(|id| known.insert(*id)));
+                if ids.len() != before {
+                    batch.put(index_key.as_bytes(), encode_ids(ids.iter()));
+                    // Keep the listing count in step with the index.
+                    if let Some(meta) = db.get(meta_key(session_id).as_bytes())?
+                        && let Ok(mut summary) = serde_json::from_slice::<SessionSummary>(&meta)
+                    {
+                        summary.update_count = ids.len();
+                        batch.put(
+                            meta_key(session_id).as_bytes(),
+                            serde_json::to_vec(&summary)?,
+                        );
+                    }
+                }
             }
-
             db.write(batch)?;
 
             debug!(
-                "RealRocksDBStorage: Combined save - session {} + {} updates ({} bytes)",
-                session_id,
+                "RealRocksDBStorage: Batch saved {} updates for session {}",
                 updates.len(),
-                session_data.len()
+                session_id
             );
-
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))??;
-
-        Ok(())
     }
 
     /// List all session IDs
     pub async fn list_sessions(&self) -> Result<Vec<Uuid>> {
         let db = self.db.clone();
-
-        tokio::task::spawn_blocking(move || -> Result<Vec<Uuid>> {
-            let mut sessions = Vec::new();
-
-            // Use iterator with seek - prefix_iterator doesn't work correctly
-            // when prefix_extractor size (16 bytes) doesn't match our prefix (8 bytes "session:")
-            let iter = db.iterator(rocksdb::IteratorMode::From(
-                b"session:",
-                rocksdb::Direction::Forward,
-            ));
-            for item in iter {
-                let (key, _) = item?;
-                let key_str = String::from_utf8_lossy(&key);
-
-                // Stop when we've passed the "session:" prefix
-                if !key_str.starts_with("session:") {
-                    break;
-                }
-
-                // Skip update keys (format: "session:{id}:update:{update_id}")
-                if key_str.contains(":update:") {
-                    continue;
-                }
-
-                // Extract UUID from "session:{uuid}" format
-                if let Some(uuid_str) = key_str.strip_prefix("session:")
-                    && let Ok(uuid) = Uuid::parse_str(uuid_str)
-                {
-                    sessions.push(uuid);
-                }
-            }
-
-            info!("RealRocksDBStorage: Found {} sessions", sessions.len());
-            Ok(sessions)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
+        let sessions = blocking(move || list_session_ids(&db)).await?;
+        debug!("RealRocksDBStorage: Found {} sessions", sessions.len());
+        Ok(sessions)
     }
 
-    /// Delete session and all related data
+    /// Metadata of every stored session from the `session_meta:` records;
+    /// sessions saved before those existed are summarised from their blob
+    /// header once and get a meta record.
+    pub async fn list_session_summaries(&self) -> Result<Vec<SessionSummary>> {
+        let db = self.db.clone();
+        let locks = self.session_locks.clone();
+
+        blocking(move || {
+            let mut metas: HashMap<Uuid, SessionSummary> = HashMap::new();
+            for item in scan_prefix(&db, META_PREFIX.as_bytes()) {
+                let (_, value) = item?;
+                if let Ok(summary) = serde_json::from_slice::<SessionSummary>(&value) {
+                    metas.insert(summary.id, summary);
+                }
+            }
+
+            let ids = list_session_ids(&db)?;
+            let mut summaries = Vec::with_capacity(ids.len());
+            for session_id in ids {
+                if let Some(summary) = metas.remove(&session_id) {
+                    summaries.push(summary);
+                    continue;
+                }
+                match summarize_without_meta(&db, &locks, session_id) {
+                    Ok(Some(summary)) => summaries.push(summary),
+                    Ok(None) => {}
+                    Err(e) => warn!("Skipping session {} in listing: {:#}", session_id, e),
+                }
+            }
+            Ok(summaries)
+        })
+        .await
+    }
+
+    /// Delete a session and everything stored under its id: blob, update
+    /// rows and index, meta, embeddings, entities, relationships and
+    /// workspace memberships.
     pub async fn delete_session(&self, session_id: Uuid) -> Result<()> {
         let db = self.db.clone();
+        let locks = self.session_locks.clone();
 
-        tokio::task::spawn_blocking(move || -> Result<()> {
+        blocking(move || {
+            let _guard = locks.lock(session_id);
             let mut batch = WriteBatch::default();
 
-            // Delete main session
-            let session_key = format!("session:{}", session_id);
-            batch.delete(session_key.as_bytes());
+            batch.delete(session_key(session_id).as_bytes());
+            batch.delete(update_index_key(session_id).as_bytes());
+            batch.delete(meta_key(session_id).as_bytes());
 
-            // Delete all updates for this session
-            // Key format: "session:{session_id}:update:{update_id}"
-            let update_prefix = format!("session:{}:update:", session_id);
-            let iter = db.iterator(rocksdb::IteratorMode::From(
-                update_prefix.as_bytes(),
-                rocksdb::Direction::Forward,
-            ));
-            let mut keys_to_delete = Vec::new();
-
-            for item in iter {
-                let (key, _) = item?;
-                let key_str = String::from_utf8_lossy(&key);
-
-                // Stop when we've passed our prefix (prefix_iterator may continue)
-                if !key_str.starts_with(&update_prefix) {
-                    break;
+            let mut deleted = 0usize;
+            for prefix in [
+                format!("session:{}:", session_id),
+                format!("embedding:{}:", session_id),
+                format!("entity:{}:", session_id),
+                format!("relationship:{}:", session_id),
+            ] {
+                for key in keys_with_prefix(&db, prefix.as_bytes())? {
+                    batch.delete(&key);
+                    deleted += 1;
                 }
-                keys_to_delete.push(key.to_vec());
             }
 
-            // Batch delete all related keys
-            for key in keys_to_delete {
-                batch.delete(&key);
+            for item in scan_prefix(&db, b"ws_session:") {
+                let (key, value) = item?;
+                if let Ok((membership, _)) = bincode::serde::decode_from_slice::<
+                    StoredWorkspaceSession,
+                    _,
+                >(&value, bincode::config::standard())
+                    && membership.session_id == session_id
+                {
+                    batch.delete(&key);
+                }
             }
+
             db.write(batch)?;
-
             info!(
-                "RealRocksDBStorage: Deleted session {} and related data",
-                session_id
+                "RealRocksDBStorage: Deleted session {} and {} related records",
+                session_id, deleted
             );
             Ok(())
         })
         .await
-        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
+    }
+
+    /// Delete all entity and relationship records of a session.
+    pub async fn clear_session_entities(&self, session_id: Uuid) -> Result<()> {
+        let db = self.db.clone();
+        blocking(move || {
+            let mut batch = WriteBatch::default();
+            for prefix in [
+                format!("entity:{}:", session_id),
+                format!("relationship:{}:", session_id),
+            ] {
+                for key in keys_with_prefix(&db, prefix.as_bytes())? {
+                    batch.delete(&key);
+                }
+            }
+            db.write(batch)?;
+            Ok(())
+        })
+        .await
     }
 
     /// Check if session exists
     pub async fn session_exists(&self, session_id: Uuid) -> Result<bool> {
         let db = self.db.clone();
-        let key = format!("session:{}", session_id);
-
-        tokio::task::spawn_blocking(move || -> Result<bool> {
-            Ok(db.get(key.as_bytes())?.is_some())
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
+        let key = session_key(session_id);
+        blocking(move || Ok(db.get(key.as_bytes())?.is_some())).await
     }
 
-    /// Load all updates for a session
+    /// Load the updates of a session in session order. For a session saved
+    /// by an older version (no update index), every stored row is returned.
     pub async fn load_session_updates(&self, session_id: Uuid) -> Result<Vec<ContextUpdate>> {
         let db = self.db.clone();
-        let update_prefix = format!("session:{}:update:", session_id);
 
-        tokio::task::spawn_blocking(move || -> Result<Vec<ContextUpdate>> {
-            let mut updates = Vec::new();
-            let iter = db.iterator(rocksdb::IteratorMode::From(
-                update_prefix.as_bytes(),
-                rocksdb::Direction::Forward,
-            ));
-
-            for item in iter {
-                let (key, value) = item?;
-                let key_str = String::from_utf8_lossy(&key);
-
-                if !key_str.starts_with(&update_prefix) {
-                    break;
+        let updates = blocking(move || {
+            let snapshot = db.snapshot();
+            if let Some(index) = snapshot.get(update_index_key(session_id).as_bytes())? {
+                let keys: Vec<String> = decode_ids(&index)
+                    .into_iter()
+                    .map(|id| update_key(session_id, id))
+                    .collect();
+                let mut updates = Vec::with_capacity(keys.len());
+                for value in snapshot.multi_get(&keys) {
+                    if let Some(update) = value?.as_deref().and_then(decode_update) {
+                        updates.push(update);
+                    }
                 }
+                return Ok(updates);
+            }
 
-                if let Ok((update, _)) = bincode::serde::decode_from_slice::<ContextUpdate, _>(
-                    &value,
-                    bincode::config::standard(),
-                ) {
+            let prefix = format!("session:{}:update:", session_id);
+            let mut updates = Vec::new();
+            for item in scan_prefix(&db, prefix.as_bytes()) {
+                let (_, value) = item?;
+                if let Some(update) = decode_update(&value) {
                     updates.push(update);
                 }
             }
-
-            info!(
-                "RealRocksDBStorage: Loaded {} updates for session {}",
-                updates.len(),
-                session_id
-            );
             Ok(updates)
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
+        .await?;
+
+        debug!(
+            "RealRocksDBStorage: Loaded {} updates for session {}",
+            updates.len(),
+            session_id
+        );
+        Ok(updates)
     }
 }
 
@@ -425,6 +719,10 @@ impl Storage for RealRocksDBStorage {
 
     async fn list_sessions(&self) -> Result<Vec<Uuid>> {
         RealRocksDBStorage::list_sessions(self).await
+    }
+
+    async fn list_session_summaries(&self) -> Result<Vec<SessionSummary>> {
+        RealRocksDBStorage::list_session_summaries(self).await
     }
 
     async fn session_exists(&self, session_id: Uuid) -> Result<bool> {
@@ -519,10 +817,6 @@ impl Storage for RealRocksDBStorage {
     }
 
     async fn clear_session_entities(&self, session_id: Uuid) -> Result<()> {
-        let entities = self.load_session_entities(session_id).await?;
-        for entity in &entities {
-            self.delete_stored_entity(session_id, &entity.name).await?;
-        }
-        Ok(())
+        RealRocksDBStorage::clear_session_entities(self, session_id).await
     }
 }
