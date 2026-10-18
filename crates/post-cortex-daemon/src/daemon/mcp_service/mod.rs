@@ -26,8 +26,8 @@ use rmcp::{
     handler::server::router::tool::ToolRouter,
     handler::server::wrapper::Parameters,
     model::{
-        CallToolRequestParam, CallToolResult, Content, ErrorData as McpError, ListToolsResult,
-        PaginatedRequestParam, *,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+        ErrorData as McpError, ListToolsResult, PaginatedRequestParams, *,
     },
     service::RequestContext,
     tool, tool_router,
@@ -65,15 +65,31 @@ pub struct PostCortexService {
 // Helper Functions (shared across tool submodules)
 // =============================================================================
 
+/// JSON Schema for a tool's input, in the shape the daemon has always
+/// published: draft 2020-12 with optional fields as `"nullable": true`.
+///
+/// rmcp 3's `schema_for_type` dropped schemars' `AddNullable` transform and
+/// emits `"type": ["string", "null"]` instead; generating the schema here
+/// keeps `tools/list` byte-for-byte compatible for existing MCP clients.
+fn tool_input_schema<T: schemars::JsonSchema>() -> Arc<JsonObject> {
+    let mut settings = schemars::generate::SchemaSettings::draft2020_12();
+    settings.transforms = vec![Box::new(schemars::transform::AddNullable::default())];
+    let schema = settings.into_generator().into_root_schema_for::<T>();
+    match serde_json::to_value(schema) {
+        Ok(serde_json::Value::Object(object)) => Arc::new(object),
+        _ => Arc::new(JsonObject::new()),
+    }
+}
+
 /// Emit an MCPToolResult through CallToolResult, preserving structured data.
 ///
 /// When `result.data` is present, the structured JSON payload is appended as a
-/// second `Content::text` item so MCP clients keep access to scores, snippets
+/// second `ContentBlock::text` item so MCP clients keep access to scores, snippets
 /// and entity tags instead of the human-readable summary alone.
 pub(crate) fn mcp_result_to_call_result(result: MCPToolResult) -> CallToolResult {
-    let mut contents = vec![Content::text(result.message)];
+    let mut contents = vec![ContentBlock::text(result.message)];
     if let Some(data) = result.data {
-        contents.push(Content::text(format!(
+        contents.push(ContentBlock::text(format!(
             "\n\nResults:\n{}",
             serde_json::to_string(&data).unwrap_or_default()
         )));
@@ -161,7 +177,7 @@ impl PostCortexService {
 
     #[tool(
         description = "Manage sessions. Actions: create, list, load, search, update_metadata, delete.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<SessionRequest>()
+        input_schema = tool_input_schema::<SessionRequest>()
     )]
     async fn session(
         &self,
@@ -172,7 +188,7 @@ impl PostCortexService {
 
     #[tool(
         description = "Add context updates to conversation. Supports single update or bulk mode with updates array.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<UpdateConversationContextRequest>()
+        input_schema = tool_input_schema::<UpdateConversationContextRequest>()
     )]
     async fn update_conversation_context(
         &self,
@@ -183,7 +199,7 @@ impl PostCortexService {
 
     #[tool(
         description = "Universal semantic search. Scope: session (requires scope_id), workspace (requires scope_id), or global (default).",
-        input_schema = rmcp::handler::server::common::schema_for_type::<SemanticSearchRequest>()
+        input_schema = tool_input_schema::<SemanticSearchRequest>()
     )]
     async fn semantic_search(
         &self,
@@ -194,7 +210,7 @@ impl PostCortexService {
 
     #[tool(
         description = "Get session summary. Use 'include' to specify sections: decisions, insights, entities, or all (default).",
-        input_schema = rmcp::handler::server::common::schema_for_type::<GetStructuredSummaryRequest>()
+        input_schema = tool_input_schema::<GetStructuredSummaryRequest>()
     )]
     async fn get_structured_summary(
         &self,
@@ -205,7 +221,7 @@ impl PostCortexService {
 
     #[tool(
         description = "Query session data. Types include: find_related_entities, get_entity_context, search_updates, entity_importance, entity_network, find_related_content, key_decisions, key_insights, session_statistics, structured_summary, decisions, open_questions, assemble_context.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<QueryConversationContextRequest>()
+        input_schema = tool_input_schema::<QueryConversationContextRequest>()
     )]
     async fn query_conversation_context(
         &self,
@@ -216,7 +232,7 @@ impl PostCortexService {
 
     #[tool(
         description = "Manage workspaces. Actions: create, list, get, delete, add_session, remove_session",
-        input_schema = rmcp::handler::server::common::schema_for_type::<ManageWorkspaceRequest>()
+        input_schema = tool_input_schema::<ManageWorkspaceRequest>()
     )]
     async fn manage_workspace(
         &self,
@@ -227,7 +243,7 @@ impl PostCortexService {
 
     #[tool(
         description = "Graph-aware context assembly (no embeddings): finds graph entities named in the query, expands them one hop through the entity graph, runs impact analysis, and ranks recent session updates by entity matches and recency. For embedding-based similarity use semantic_search. Returns ranked items, entity neighbourhood, dependency impact, and an LLM-ready formatted block. Scope: session or workspace.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<AssembleContextRequest>()
+        input_schema = tool_input_schema::<AssembleContextRequest>()
     )]
     async fn assemble_context(
         &self,
@@ -238,7 +254,7 @@ impl PostCortexService {
 
     #[tool(
         description = "Manage entities and context entries in a session. Actions: delete (remove entity + cascade typed edges; requires entity_name), delete_update (remove a single context entry by entry_id).",
-        input_schema = rmcp::handler::server::common::schema_for_type::<ManageEntityRequest>()
+        input_schema = tool_input_schema::<ManageEntityRequest>()
     )]
     async fn manage_entity(
         &self,
@@ -249,7 +265,7 @@ impl PostCortexService {
 
     #[tool(
         description = "Daemon administration. Actions: health, vectorize_session (session_id), vectorize_stats, create_checkpoint (session_id).",
-        input_schema = rmcp::handler::server::common::schema_for_type::<AdminRequest>()
+        input_schema = tool_input_schema::<AdminRequest>()
     )]
     async fn admin(
         &self,
@@ -263,25 +279,24 @@ impl PostCortexService {
 // to strip $schema from tool input schemas for broader MCP client compatibility.
 // Many clients (Cursor, Windsurf, Continue.dev) don't support JSON Schema draft/2020-12.
 impl ServerHandler for PostCortexService {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_protocol_version(ProtocolVersion::V_2024_11_05)
+            .with_server_info(Implementation::from_build_env())
+            .with_instructions(
                 "Post-Cortex: Intelligent conversation memory system with 9 consolidated MCP tools. \
                  Tools: session, update_conversation_context, semantic_search, get_structured_summary, \
                  query_conversation_context, manage_workspace, assemble_context, manage_entity, admin. \
-                 All use shared RocksDB for centralized knowledge management.".to_string()
-            ),
-        }
+                 All use shared RocksDB for centralized knowledge management.",
+            )
     }
 
     async fn initialize(
         &self,
-        _request: InitializeRequestParam,
+        request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
+        context.peer.set_peer_info(request);
         if let Some(parts) = context.extensions.get::<axum::http::request::Parts>() {
             info!("Client initialized from {}", parts.uri);
         }
@@ -291,7 +306,7 @@ impl ServerHandler for PostCortexService {
     // Custom list_tools that strips $schema from input schemas for client compatibility
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         let tools = self.tool_router.list_all();
@@ -318,20 +333,33 @@ impl ServerHandler for PostCortexService {
             })
             .collect();
 
-        Ok(ListToolsResult {
-            tools,
-            meta: None,
-            next_cursor: None,
-        })
+        Ok(ListToolsResult::with_all_items(tools))
     }
 
     // Route tool calls to the tool router
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<CallToolResponse, McpError> {
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         self.tool_router.call(tcc).await
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    #[test]
+    fn optional_fields_stay_nullable() {
+        let schema = serde_json::Value::Object((*tool_input_schema::<SessionRequest>()).clone());
+        let text = schema.to_string();
+        assert!(text.contains("\"nullable\":true"), "{text}");
+        assert!(
+            !text.contains("\"null\""),
+            "no type arrays with null: {text}"
+        );
+        assert_eq!(schema["type"], "object");
     }
 }

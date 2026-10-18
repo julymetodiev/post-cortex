@@ -139,10 +139,7 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
             move || Ok(PostCortexService::new(memory_system.clone()))
         },
         LocalSessionManager::default().into(),
-        StreamableHttpServerConfig {
-            cancellation_token: ct.child_token(),
-            ..Default::default()
-        },
+        StreamableHttpServerConfig::default().with_cancellation_token(ct.child_token()),
     );
 
     info!("MCP endpoint configured: http://{}/mcp", addr);

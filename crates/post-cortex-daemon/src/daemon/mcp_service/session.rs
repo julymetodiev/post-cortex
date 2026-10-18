@@ -9,7 +9,7 @@ use post_cortex_mcp::MCPToolResult;
 use post_cortex_memory::ConversationMemorySystem;
 use rmcp::{
     handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content, ErrorData as McpError},
+    model::{CallToolResult, ContentBlock, ErrorData as McpError},
 };
 use std::sync::Arc;
 use uuid::Uuid;
@@ -54,7 +54,7 @@ pub(super) async fn handle(
                 .create_session(req.name.clone(), req.description.clone())
                 .await
             {
-                Ok(session_id) => Ok(CallToolResult::success(vec![Content::text(format!(
+                Ok(session_id) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                     "Created session: {}{}{}",
                     session_id,
                     req.name
@@ -150,7 +150,7 @@ pub(super) async fn handle(
                 .update_session_metadata(session_id, req.name.clone(), req.description.clone())
                 .await
             {
-                Ok(()) => Ok(CallToolResult::success(vec![Content::text(format!(
+                Ok(()) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                     "Updated metadata for session {}",
                     session_id
                 ))])),
@@ -160,11 +160,11 @@ pub(super) async fn handle(
         "delete" => {
             let session_id = require_session_id(&req, "delete")?;
             match memory_system.delete_session(session_id).await {
-                Ok(true) => Ok(CallToolResult::success(vec![Content::text(format!(
+                Ok(true) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                     "Deleted session {}",
                     session_id
                 ))])),
-                Ok(false) => Ok(CallToolResult::success(vec![Content::text(format!(
+                Ok(false) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                     "Session {} was not present (no-op)",
                     session_id
                 ))])),

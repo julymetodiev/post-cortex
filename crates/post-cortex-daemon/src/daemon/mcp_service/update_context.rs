@@ -10,7 +10,7 @@ use crate::daemon::validate::{
 use post_cortex_memory::ConversationMemorySystem;
 use rmcp::{
     handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content, ErrorData as McpError},
+    model::{CallToolResult, ContentBlock, ErrorData as McpError},
 };
 use std::sync::Arc;
 
@@ -89,7 +89,7 @@ pub(super) async fn handle(
 
             check_session_exists_for_dry_run(memory_system, uuid).await?;
 
-            return Ok(CallToolResult::success(vec![Content::text(format!(
+            return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                 "✅ Dry run - Bulk update validation successful\n\
                  Session ID: {}\n\
                  Total updates: {}\n\n\
@@ -153,7 +153,7 @@ pub(super) async fn handle(
         if req.dry_run.unwrap_or(false) {
             check_session_exists_for_dry_run(memory_system, uuid).await?;
 
-            return Ok(CallToolResult::success(vec![Content::text(format!(
+            return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                 "✅ Dry run - Request validation successful\n\
                  Session ID: {}\n\
                  Interaction Type: {}\n\

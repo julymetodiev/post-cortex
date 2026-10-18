@@ -8,7 +8,7 @@ use crate::daemon::validate::{validate_limits, validate_session_id};
 use post_cortex_memory::ConversationMemorySystem;
 use rmcp::{
     handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content, ErrorData as McpError},
+    model::{CallToolResult, ContentBlock, ErrorData as McpError},
 };
 use std::sync::Arc;
 
@@ -137,7 +137,7 @@ pub(super) async fn handle(
         }
     }
 
-    Ok(CallToolResult::success(vec![Content::text(
+    Ok(CallToolResult::success(vec![ContentBlock::text(
         result_parts.join("\n\n"),
     )]))
 }
