@@ -16,7 +16,9 @@ documentation = "https://docs.rs/post-cortex-memory"
 post-cortex-core.workspace = true
 post-cortex-proto.workspace = true
 post-cortex-storage.workspace = true
-post-cortex-embeddings = { workspace = true, features = ["bert", "model2vec"] }
+# model2vec (the default embedding backend) is always on; the heavy BERT
+# stack (candle + tokenizers) is opt-in via this crate's `bert` feature.
+post-cortex-embeddings = { workspace = true, features = ["model2vec"] }
 
 # Observability — OTel exporter is gated behind the `otel` feature so
 # library users that don't want it pay zero cost. The `tracing` crate
@@ -65,11 +67,15 @@ tokio-stream.workspace = true
 # `embeddings` and `surrealdb-storage` mirror the legacy single-crate feature
 # names so the ~60 `#[cfg(feature = "...")]` annotations in the moved code
 # resolve without rewriting. memory always pulls in post-cortex-embeddings
-# (with `bert`) — the feature flag here is purely a compile-time toggle for
+# (with `model2vec`) — the feature flag here is purely a compile-time toggle for
 # the *alternative* paths that fire when the legacy embeddings module was
 # disabled in the old single-crate build.
 default = ["embeddings"]
 embeddings = []
+# BERT embedding backend (MiniLM / MultilingualMiniLM / TinyBERT / BGESmall).
+# Off by default: it pulls candle plus a second tokenizers stack. Selecting a
+# BERT model without it fails at engine load with a clear error.
+bert = ["post-cortex-embeddings/bert"]
 surrealdb-storage = ["post-cortex-storage/surrealdb-storage"]
 # Pulls the OpenTelemetry exporter stack — see services::observability.
 # When disabled, every `#[tracing::instrument]` macro compiles to a

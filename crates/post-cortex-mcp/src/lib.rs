@@ -347,8 +347,9 @@ pub async fn get_memory_system() -> Result<Arc<ConversationMemorySystem>> {
 
     #[cfg(feature = "embeddings")]
     {
+        // Model + dimension inherit `SystemConfig::default()` (model2vec),
+        // matching the daemon; BERT models need the opt-in `bert` feature.
         config.enable_embeddings = true;
-        config.embeddings_model_type = "MultilingualMiniLM".to_string();
         config.auto_vectorize_on_update = true;
         config.cross_session_search_enabled = true;
         info!("MCP-TOOLS: Embeddings enabled in config");

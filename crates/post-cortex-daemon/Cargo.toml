@@ -17,7 +17,7 @@ post-cortex-core.workspace = true
 post-cortex-proto.workspace = true
 post-cortex-memory.workspace = true
 post-cortex-storage.workspace = true
-post-cortex-embeddings = { workspace = true, features = ["bert"] }
+post-cortex-embeddings.workspace = true
 post-cortex-mcp.workspace = true
 
 # HTTP / gRPC / SSE
@@ -84,6 +84,8 @@ path = "src/bin/pcx.rs"
 default = ["embeddings"]
 embeddings = ["post-cortex-memory/embeddings", "post-cortex-mcp/embeddings"]
 surrealdb-storage = ["post-cortex-memory/surrealdb-storage"]
+# Opt-in BERT embedding backend (see post-cortex-memory's `bert` feature).
+bert = ["post-cortex-memory/bert"]
 surrealdb-tikv = ["surrealdb-storage", "post-cortex-storage/surrealdb-tikv"]
 # Wires the OpenTelemetry OTLP exporter into observability::init().
 # Forwards to post-cortex-memory so trait-method spans are also
