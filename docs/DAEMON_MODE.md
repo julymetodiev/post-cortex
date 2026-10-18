@@ -176,7 +176,7 @@ Set a token before binding to anything but loopback (tailnet, LAN):
 
 ```toml
 # ~/.post-cortex/daemon.toml
-host = "100.125.13.76"
+host = "100.64.0.7"   # your tailnet IP
 auth_token = "<long random string>"   # or PC_AUTH_TOKEN
 ```
 

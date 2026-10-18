@@ -289,14 +289,14 @@ mod tests {
     fn credentials_are_redacted() {
         let (out, c) = red(
             "Bearer abcdefghijklmnopqrstuvwxyz012345 and password: hunter2pass and \
-             postgres://equal:FjpWJ7OZ781y@postgres-ha-rw:5432/equal",
+             postgres://app:not-a-real-pass@db.example:5432/app",
         );
         assert!(!out.contains("abcdefghijklmnop"));
         assert!(!out.contains("hunter2pass"));
-        assert!(!out.contains("FjpWJ7OZ781y"));
+        assert!(!out.contains("not-a-real-pass"));
         assert!(out.contains("Bearer [REDACTED:bearer]"));
         assert!(
-            out.contains("postgres://equal:[REDACTED:url_password]@postgres-ha-rw"),
+            out.contains("postgres://app:[REDACTED:url_password]@db.example"),
             "{out}"
         );
         assert_eq!(c["url_password"], 1);
@@ -304,10 +304,12 @@ mod tests {
 
     #[test]
     fn tokens_and_keys_are_redacted() {
+        // Fake values are assembled at run time so secret scanners don't
+        // flag the test source as a leaked credential.
         let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyMTIzIn0.c2lnbmF0dXJlLXZhbHVl";
-        let (out, c) = red(&format!(
-            "jwt {jwt} key sk-ant-api03-abcdefghijklmnopqrstuv bot 1234567890:AAH1bcdefghijklmnopqrstuvwxyz012345"
-        ));
+        let api_key = format!("sk-ant-{}", "x".repeat(24));
+        let bot = format!("{}:{}", "1".repeat(10), "x".repeat(35));
+        let (out, c) = red(&format!("jwt {jwt} key {api_key} bot {bot}"));
         assert!(!out.contains(jwt), "{out}");
         assert_eq!(c["jwt"], 1);
         assert_eq!(c["api_key"], 1);
@@ -324,11 +326,11 @@ mod tests {
     #[test]
     fn private_and_tailnet_ips_are_kept() {
         let (out, c) =
-            red("ml 100.125.13.76, node 10.254.0.101, lan 192.168.1.11, client 46.225.211.8");
-        assert!(out.contains("100.125.13.76"));
-        assert!(out.contains("10.254.0.101"));
-        assert!(out.contains("192.168.1.11"));
-        assert!(!out.contains("46.225.211.8"));
+            red("tailnet 100.64.0.7, node 10.0.0.5, lan 192.168.0.10, client 203.0.113.7");
+        assert!(out.contains("100.64.0.7"));
+        assert!(out.contains("10.0.0.5"));
+        assert!(out.contains("192.168.0.10"));
+        assert!(!out.contains("203.0.113.7"));
         assert_eq!(c["ip"], 1);
     }
 
