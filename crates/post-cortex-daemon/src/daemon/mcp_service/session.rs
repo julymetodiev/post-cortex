@@ -116,24 +116,22 @@ pub(super) async fn handle(
                 ));
             }
 
-            let session_ids = memory_system
-                .find_sessions_by_name_or_description(query)
+            // Metadata records only: searching never loads sessions.
+            let entries: Vec<_> = memory_system
+                .find_session_summaries(query)
                 .await
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-            let mut entries = Vec::with_capacity(session_ids.len());
-            for sid in &session_ids {
-                if let Ok(session_arc) = memory_system.get_session(*sid).await {
-                    let session = session_arc.load();
-                    entries.push(serde_json::json!({
-                        "session_id": sid.to_string(),
-                        "name": session.name().unwrap_or_default(),
-                        "description": session.description().unwrap_or_default(),
-                        "created_at_unix": session.created_at().timestamp(),
-                        "update_count": session.incremental_updates.len(),
-                    }));
-                }
-            }
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                .into_iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "session_id": s.id.to_string(),
+                        "name": s.name.unwrap_or_default(),
+                        "description": s.description.unwrap_or_default(),
+                        "created_at_unix": s.created_at.timestamp(),
+                        "update_count": s.update_count,
+                    })
+                })
+                .collect();
 
             Ok(mcp_result_to_call_result(MCPToolResult::success(
                 format!("Found {} matching sessions", entries.len()),

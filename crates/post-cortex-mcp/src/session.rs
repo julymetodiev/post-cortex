@@ -210,36 +210,13 @@ pub async fn mark_important(session_id: Uuid, update_id: String) -> Result<MCPTo
 pub async fn list_sessions_with_storage(
     storage: &post_cortex_storage::rocksdb_storage::RealRocksDBStorage,
 ) -> Result<MCPToolResult> {
-    match storage.list_sessions().await {
-        Ok(session_ids) => {
-            let mut sessions_info = Vec::new();
-
-            for session_id in session_ids {
-                match storage.load_session(session_id).await {
-                    Ok(session) => {
-                        sessions_info.push(serde_json::json!({
-                            "id": session_id.to_string(),
-                            "name": session.name(),
-                            "description": session.description(),
-                            "created_at": session.created_at().to_rfc3339(),
-                            "last_updated": session.last_updated.to_rfc3339(),
-                            "update_count": session.incremental_updates.len(),
-                            "entity_count": session.entity_graph.entities.len()
-                        }));
-                    }
-                    Err(_) => {
-                        sessions_info.push(serde_json::json!({
-                            "id": session_id.to_string(),
-                            "name": null,
-                            "description": null,
-                            "created_at": "unknown",
-                            "last_updated": "unknown",
-                            "update_count": 0,
-                            "entity_count": 0
-                        }));
-                    }
-                }
-            }
+    // Metadata records only: listing never loads a session.
+    match storage.list_session_summaries().await {
+        Ok(summaries) => {
+            let sessions_info: Vec<_> = summaries
+                .iter()
+                .map(|summary| summary_json(summary, None))
+                .collect();
             Ok(MCPToolResult::success(
                 format!("Found {} sessions", sessions_info.len()),
                 Some(serde_json::json!({
@@ -253,6 +230,22 @@ pub async fn list_sessions_with_storage(
     }
 }
 
+/// Listing row for a session; `entity_count` is null when unknown.
+fn summary_json(
+    summary: &post_cortex_storage::traits::SessionSummary,
+    entity_count: Option<usize>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": summary.id.to_string(),
+        "name": summary.name,
+        "description": summary.description,
+        "created_at": summary.created_at.to_rfc3339(),
+        "last_updated": summary.last_updated.to_rfc3339(),
+        "update_count": summary.update_count,
+        "entity_count": entity_count
+    })
+}
+
 /// List all sessions via the global memory system.
 pub async fn list_sessions() -> Result<MCPToolResult> {
     info!("MCP-TOOLS: list_sessions() called");
@@ -260,36 +253,24 @@ pub async fn list_sessions() -> Result<MCPToolResult> {
         info!("MCP-TOOLS: Getting memory system for list_sessions");
         let system = get_memory_system().await?;
         info!("MCP-TOOLS: Got memory system, listing sessions");
-        let session_ids = system.list_sessions().await.map_err(string_to_anyhow)?;
-
-        let mut sessions_info = Vec::new();
-        for session_id in session_ids {
-            match system.get_session(session_id).await {
-                Ok(session_arc) => {
-                    let session = session_arc.load();
-                    sessions_info.push(serde_json::json!({
-                        "id": session_id.to_string(),
-                        "name": session.name(),
-                        "description": session.description(),
-                        "created_at": session.created_at().to_rfc3339(),
-                        "last_updated": session.last_updated.to_rfc3339(),
-                        "update_count": session.incremental_updates.len(),
-                        "entity_count": session.entity_graph.entities.len()
-                    }));
-                }
-                Err(_) => {
-                    sessions_info.push(serde_json::json!({
-                        "id": session_id.to_string(),
-                        "name": null,
-                        "description": null,
-                        "created_at": "unknown",
-                        "last_updated": "unknown",
-                        "update_count": 0,
-                        "entity_count": 0
-                    }));
-                }
-            }
-        }
+        // Metadata records only: listing neither loads sessions nor fills
+        // the session cache. Entity counts are only known for sessions
+        // that are already in memory.
+        let summaries = system
+            .list_session_summaries()
+            .await
+            .map_err(string_to_anyhow)?;
+        let sessions_info: Vec<_> = summaries
+            .iter()
+            .map(|summary| {
+                let entity_count = system
+                    .session_manager
+                    .sessions
+                    .get(&summary.id)
+                    .map(|s| s.load().entity_graph.entities.len());
+                summary_json(summary, entity_count)
+            })
+            .collect();
 
         Ok(MCPToolResult::success(
             format!("Found {} sessions", sessions_info.len()),
@@ -370,22 +351,19 @@ pub async fn load_session(session_id: Uuid) -> Result<MCPToolResult> {
 pub async fn search_sessions(query: String) -> Result<MCPToolResult> {
     let result = with_storage_timeout(async {
         let system = get_memory_system().await?;
-        let session_ids = system
-            .find_sessions_by_name_or_description(&query)
+        let sessions: Vec<_> = system
+            .find_session_summaries(&query)
             .await
-            .map_err(string_to_anyhow)?;
-
-        let mut sessions = Vec::new();
-        for session_id in session_ids {
-            if let Ok(session_arc) = system.get_session(session_id).await {
-                let session = session_arc.load();
-                sessions.push(serde_json::json!({
-                    "id": session_id.to_string(),
-                    "name": session.name(),
-                    "description": session.description()
-                }));
-            }
-        }
+            .map_err(string_to_anyhow)?
+            .into_iter()
+            .map(|s| {
+                serde_json::json!({
+                    "id": s.id.to_string(),
+                    "name": s.name,
+                    "description": s.description
+                })
+            })
+            .collect();
 
         Ok(MCPToolResult::success(
             format!("Found {} sessions matching '{}'", sessions.len(), query),

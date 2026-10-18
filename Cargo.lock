@@ -4351,6 +4351,7 @@ dependencies = [
  "rand 0.9.4",
  "rayon",
  "regex",
+ "rocksdb",
  "schemars",
  "serde",
  "serde_json",

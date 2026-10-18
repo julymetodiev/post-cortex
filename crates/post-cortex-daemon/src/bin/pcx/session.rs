@@ -46,7 +46,7 @@ pub async fn handle_session_action(action: SessionAction) -> Result<(), String> 
             } else {
                 let uuid = Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {}", e))?;
                 let system = init_admin_system().await?;
-                system.get_storage().delete_session(uuid).await?;
+                system.delete_session(uuid).await?;
             }
             println!("Session {} deleted", id);
             Ok(())
@@ -65,7 +65,7 @@ pub async fn handle_session_action(action: SessionAction) -> Result<(), String> 
                 }
             } else {
                 let system = init_admin_system().await?;
-                let ids = system.list_sessions().await?;
+                let summaries = system.list_session_summaries().await?;
 
                 let workspaces = system.workspace_manager.list_workspaces();
                 let mut session_workspace_map = std::collections::HashMap::new();
@@ -76,23 +76,17 @@ pub async fn handle_session_action(action: SessionAction) -> Result<(), String> 
                     }
                 }
 
-                println!("Sessions ({})", ids.len());
+                println!("Sessions ({})", summaries.len());
                 println!("{:<38} {:<20} Name", "ID", "Workspace");
                 println!("{:-<38} {:-<20} {:-<30}", "", "", "");
 
-                for id in ids {
+                for summary in summaries {
                     let workspace_name = session_workspace_map
-                        .get(&id)
+                        .get(&summary.id)
                         .map(|s| s.as_str())
                         .unwrap_or("-");
-                    let session_name = match system.get_session(id).await {
-                        Ok(session_arc) => {
-                            let session = session_arc.load();
-                            session.name().unwrap_or("Unnamed".to_string())
-                        }
-                        Err(_) => "Error loading".to_string(),
-                    };
-                    println!("{:<38} {:<20} {}", id, workspace_name, session_name);
+                    let session_name = summary.name.as_deref().unwrap_or("Unnamed");
+                    println!("{:<38} {:<20} {}", summary.id, workspace_name, session_name);
                 }
             }
             Ok(())

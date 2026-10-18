@@ -15,11 +15,9 @@ use crate::memory_system::ConversationMemorySystem;
 
 /// One unit of embedding work.
 ///
-/// `session_id` is the canonical identifier; the worker re-derives the
-/// "latest update to vectorise" from the session's hot context (matching
-/// the legacy `spawn_background_vectorization` path). `entry_id` names the
-/// update to vectorize (`ContentVectorizer::vectorize_update`); `text` is
-/// kept for observability.
+/// `session_id` names the session and `entry_id` the update to vectorize
+/// (`ContentVectorizer::vectorize_update`); `text` is kept for
+/// observability.
 #[derive(Debug, Clone)]
 pub struct EmbeddingWorkItem {
     /// Session that owns the content.

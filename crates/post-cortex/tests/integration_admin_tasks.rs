@@ -80,7 +80,7 @@ async fn test_full_admin_lifecycle() {
     // 4. Delete Session
     // Using the newly added delete_session method on StorageActorHandle
     let deleted = storage
-        .delete_session(session_id)
+        .delete_session(session_id, None)
         .await
         .expect("Failed to execute delete_session");
 
@@ -156,7 +156,7 @@ async fn test_multiple_sessions_management() {
 
     // Delete 3 sessions
     for i in 0..3 {
-        storage.delete_session(session_ids[i]).await.unwrap();
+        storage.delete_session(session_ids[i], None).await.unwrap();
     }
 
     // Verify remaining sessions

@@ -1,32 +1,45 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use dashmap::DashMap;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::{Semaphore, oneshot};
 use tokio::time::timeout;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{error, info, trace};
 use uuid::Uuid;
 
 use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_proto::pb::{CascadeInvalidateReport, FreshnessEntry, SourceReference, SymbolId};
+use post_cortex_storage::traits::SessionSummary;
 
 use super::config::OperationType;
+use super::persister::{PersistSink, SessionHandle, SessionPersister, StorageSink};
 
-/// Storage actor for handling all storage operations asynchronously
+/// Requests queued for the actor before senders wait for room.
+const REQUEST_QUEUE_CAPACITY: usize = 1024;
+/// Requests the actor runs at the same time.
+const MAX_CONCURRENT_REQUESTS: usize = 32;
+
+/// Storage actor: runs storage requests off the caller's task.
+///
+/// Requests are handled concurrently (up to [`MAX_CONCURRENT_REQUESTS`]);
+/// writes that touch one session are ordered by the per-session writer in
+/// [`SessionPersister`], which also coalesces background session persists.
 pub struct StorageActor {
+    receiver: Receiver<StorageMessage>,
+    ctx: Arc<ActorContext>,
+}
+
+/// State shared by the actor's request tasks.
+struct ActorContext {
     storage: Arc<dyn post_cortex_storage::traits::GraphStorage>,
-    receiver: UnboundedReceiver<StorageMessage>,
-    /// Per-session locks for background persists. Ensures `PersistSessionAndUpdate`
-    /// writes for the same session are serialized even though each runs in its
-    /// own spawned task, preventing out-of-order session-blob writes.
-    persist_locks: Arc<DashMap<Uuid, Arc<Mutex<()>>>>,
+    persister: Arc<SessionPersister>,
 }
 
 /// Handle for communicating with storage actor
 #[derive(Clone)]
 pub struct StorageActorHandle {
-    sender: UnboundedSender<StorageMessage>,
+    sender: Sender<StorageMessage>,
+    persister: Arc<SessionPersister>,
 }
 
 /// Messages for storage actor
@@ -51,6 +64,9 @@ pub enum StorageMessage {
     DeleteSession {
         /// ID of the session to delete.
         session_id: Uuid,
+        /// The session's in-memory handle, if loaded: persists still queued
+        /// or in flight for it are dropped instead of writing it back.
+        live: Option<SessionHandle>,
         /// One-shot channel for returning whether the session existed.
         response_tx: oneshot::Sender<Result<bool, String>>,
     },
@@ -74,6 +90,11 @@ pub enum StorageMessage {
     ListSessions {
         /// One-shot channel for returning the session list.
         response_tx: oneshot::Sender<Result<Vec<Uuid>, String>>,
+    },
+    /// List every stored session's metadata without loading the sessions.
+    ListSessionSummaries {
+        /// One-shot channel for returning the summaries.
+        response_tx: oneshot::Sender<Result<Vec<SessionSummary>, String>>,
     },
     /// Save a session checkpoint.
     SaveCheckpoint {
@@ -146,15 +167,6 @@ pub enum StorageMessage {
         updates: Vec<post_cortex_core::core::context_update::ContextUpdate>,
         /// One-shot channel for returning the result.
         response_tx: oneshot::Sender<Result<(), String>>,
-    },
-    /// Fire-and-forget: persist session + updates without blocking caller.
-    PersistSessionAndUpdate {
-        /// Session snapshot to persist.
-        session: Box<ActiveSession>,
-        /// ID of the session being persisted.
-        session_id: Uuid,
-        /// Context updates accompanying this persist.
-        updates: Vec<post_cortex_core::core::context_update::ContextUpdate>,
     },
     /// Register a source reference for freshness tracking.
     RegisterSource {
@@ -240,14 +252,18 @@ impl StorageActorHandle {
         N: FnOnce() -> String,
     {
         let (response_tx, response_rx) = oneshot::channel::<Result<T, String>>();
-        self.sender
-            .send(build_msg(response_tx))
-            .map_err(|_| "Storage actor unavailable".to_string())?;
-
         let timeout_duration = op_type.timeout();
-        match tokio::time::timeout(timeout_duration, response_rx).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err("Storage actor response channel closed".to_string()),
+        let exchange = async {
+            self.sender
+                .send(build_msg(response_tx))
+                .await
+                .map_err(|_| "Storage actor unavailable".to_string())?;
+            response_rx
+                .await
+                .map_err(|_| "Storage actor response channel closed".to_string())?
+        };
+        match tokio::time::timeout(timeout_duration, exchange).await {
+            Ok(result) => result,
             Err(_) => Err(format!(
                 "{} timed out after {}s",
                 op_name(),
@@ -256,7 +272,9 @@ impl StorageActorHandle {
         }
     }
 
-    /// Load a session from storage by ID.
+    /// Load a session from storage by ID. `Ok(None)` means storage holds
+    /// no such session; any other failure is an error, never `None`, so
+    /// callers cannot mistake a read failure for a missing session.
     pub async fn load_session(&self, session_id: Uuid) -> Result<Option<ActiveSession>, String> {
         self.send_request(
             OperationType::Fast,
@@ -315,33 +333,63 @@ impl StorageActorHandle {
         Ok(stats)
     }
 
-    /// Enqueue session + updates persistence without blocking.
-    /// Returns immediately after sending the message. Errors are logged by the actor.
-    pub fn persist_session_and_update_nowait(
+    /// Queue a background write of `session`'s latest version plus
+    /// `updates` and return at once. Writes of one session are ordered and
+    /// coalesced: requests queued while a write runs are merged into one
+    /// blob write that snapshots `session` when it starts, so the stored
+    /// blob always ends at the newest version. Failures are logged.
+    pub fn persist_session_nowait(
         &self,
-        session: ActiveSession,
+        session: &SessionHandle,
         updates: Vec<post_cortex_core::core::context_update::ContextUpdate>,
     ) {
-        let session_id = session.id();
-        if let Err(e) = self.sender.send(StorageMessage::PersistSessionAndUpdate {
-            session: Box::new(session),
-            session_id,
-            updates,
-        }) {
-            warn!(
-                "Failed to enqueue background persist for session {}: {}",
-                session_id, e
-            );
+        let session_id = session.load().id();
+        self.persister.enqueue(session_id, session, updates, None);
+    }
+
+    /// Like [`Self::persist_session_nowait`], but wait until a write that
+    /// covers this request (blob and `updates`' rows) has finished.
+    pub async fn persist_session_and_wait(
+        &self,
+        session: &SessionHandle,
+        updates: Vec<post_cortex_core::core::context_update::ContextUpdate>,
+    ) -> Result<(), String> {
+        let session_id = session.load().id();
+        let (tx, rx) = oneshot::channel();
+        self.persister
+            .enqueue(session_id, session, updates, Some(tx));
+        let limit = OperationType::Medium.timeout();
+        match timeout(limit, rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err("Session persister dropped the request".to_string()),
+            Err(_) => Err(format!(
+                "Persist of session {session_id} timed out after {}s",
+                limit.as_secs()
+            )),
         }
     }
 
-    /// Delete a session from storage by ID.
-    pub async fn delete_session(&self, session_id: Uuid) -> Result<bool, String> {
+    /// Whether `session` is a handle of a session deleted via
+    /// [`Self::delete_session`]. Work finished on such a handle after the
+    /// delete must be undone rather than persisted.
+    pub fn is_deleted(&self, session_id: Uuid, session: &SessionHandle) -> bool {
+        self.persister.is_deleted(session_id, session)
+    }
+
+    /// Delete a session from storage by ID. Pass the session's in-memory
+    /// handle when it is loaded: queued and in-flight persists of it are
+    /// dropped, so the delete cannot be undone by a late write.
+    pub async fn delete_session(
+        &self,
+        session_id: Uuid,
+        live: Option<SessionHandle>,
+    ) -> Result<bool, String> {
         self.send_request(
             OperationType::Medium,
             || format!("DeleteSession {session_id}"),
             |response_tx| StorageMessage::DeleteSession {
                 session_id,
+                live,
                 response_tx,
             },
         )
@@ -370,6 +418,17 @@ impl StorageActorHandle {
             OperationType::Slow,
             || "ListSessions".to_string(),
             |response_tx| StorageMessage::ListSessions { response_tx },
+        )
+        .await
+    }
+
+    /// List every stored session's metadata (no particular order) without
+    /// loading the sessions.
+    pub async fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, String> {
+        self.send_request(
+            OperationType::Slow,
+            || "ListSessionSummaries".to_string(),
+            |response_tx| StorageMessage::ListSessionSummaries { response_tx },
         )
         .await
     }
@@ -659,12 +718,24 @@ impl StorageActor {
     pub async fn spawn(
         storage: Arc<dyn post_cortex_storage::traits::GraphStorage>,
     ) -> Result<StorageActorHandle, String> {
-        let (sender, receiver) = unbounded_channel();
+        let sink: Arc<dyn PersistSink> = Arc::new(StorageSink(Arc::clone(&storage)));
+        Self::spawn_with_sink(storage, sink).await
+    }
+
+    /// [`Self::spawn`] with session persists going to `sink`.
+    pub(crate) async fn spawn_with_sink(
+        storage: Arc<dyn post_cortex_storage::traits::GraphStorage>,
+        sink: Arc<dyn PersistSink>,
+    ) -> Result<StorageActorHandle, String> {
+        let (sender, receiver) = channel(REQUEST_QUEUE_CAPACITY);
+        let persister = SessionPersister::new(sink);
 
         let actor = Self {
-            storage,
             receiver,
-            persist_locks: Arc::new(DashMap::new()),
+            ctx: Arc::new(ActorContext {
+                storage,
+                persister: Arc::clone(&persister),
+            }),
         };
 
         // Create confirmation channel for startup synchronization
@@ -680,25 +751,35 @@ impl StorageActor {
             .await
             .map_err(|_| "Storage actor failed to start".to_string())?;
 
-        Ok(StorageActorHandle { sender })
+        Ok(StorageActorHandle { sender, persister })
     }
 
     async fn run_async(mut self) {
         info!("Storage actor started (async)");
+        let limiter = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
 
         while let Some(message) = self.receiver.recv().await {
-            match message {
-                StorageMessage::Shutdown => {
-                    info!("Storage actor shutting down");
-                    break;
-                }
-                msg => self.handle_message_async(msg).await,
+            if matches!(message, StorageMessage::Shutdown) {
+                info!("Storage actor shutting down");
+                break;
             }
+            // Waiting for a permit stops intake, so a saturated backend
+            // pushes back on senders through the bounded channel.
+            let Ok(permit) = Arc::clone(&limiter).acquire_owned().await else {
+                break;
+            };
+            let ctx = Arc::clone(&self.ctx);
+            tokio::spawn(async move {
+                ctx.handle_message_async(message).await;
+                drop(permit);
+            });
         }
 
         info!("Storage actor stopped");
     }
+}
 
+impl ActorContext {
     async fn handle_message_async(&self, message: StorageMessage) {
         trace!(
             "StorageActor: handling message {:?}",
@@ -711,7 +792,8 @@ impl StorageActor {
             } => {
                 let result = match self.storage.load_session(session_id).await {
                     Ok(session) => Ok(Some(session)),
-                    Err(_) => Ok(None), // Session not found is OK, not an error
+                    Err(e) if post_cortex_storage::is_not_found(&e) => Ok(None),
+                    Err(e) => Err(format!("{e:#}")),
                 };
                 let _ = response_tx.send(result);
             }
@@ -720,25 +802,23 @@ impl StorageActor {
                 response_tx,
             } => {
                 let result = self
-                    .storage
-                    .save_session(&session)
+                    .persister
+                    .exclusive(session.id(), self.storage.save_session(&session))
                     .await
                     .map_err(|e| e.to_string());
                 let _ = response_tx.send(result);
             }
             StorageMessage::DeleteSession {
                 session_id,
+                live,
                 response_tx,
             } => {
                 let result = self
-                    .storage
-                    .delete_session(session_id)
+                    .persister
+                    .delete(session_id, live.as_ref())
                     .await
                     .map(|_| true)
                     .map_err(|e| e.to_string());
-                // Drop the persist lock so it doesn't leak. Any in-flight persist
-                // still holds its Arc<Mutex> clone so it'll finish cleanly.
-                self.persist_locks.remove(&session_id);
                 let _ = response_tx.send(result);
             }
             StorageMessage::ClearSessionEntities {
@@ -746,8 +826,8 @@ impl StorageActor {
                 response_tx,
             } => {
                 let result = self
-                    .storage
-                    .clear_session_entities(session_id)
+                    .persister
+                    .exclusive(session_id, self.storage.clear_session_entities(session_id))
                     .await
                     .map_err(|e| e.to_string());
                 let _ = response_tx.send(result);
@@ -758,8 +838,11 @@ impl StorageActor {
                 response_tx,
             } => {
                 let result = self
-                    .storage
-                    .delete_entity(session_id, &entity_name)
+                    .persister
+                    .exclusive(
+                        session_id,
+                        self.storage.delete_entity(session_id, &entity_name),
+                    )
                     .await
                     .map_err(|e| e.to_string());
                 let _ = response_tx.send(result);
@@ -768,6 +851,14 @@ impl StorageActor {
                 let result = self
                     .storage
                     .list_sessions()
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = response_tx.send(result);
+            }
+            StorageMessage::ListSessionSummaries { response_tx } => {
+                let result = self
+                    .storage
+                    .list_session_summaries()
                     .await
                     .map_err(|e| e.to_string());
                 let _ = response_tx.send(result);
@@ -858,8 +949,11 @@ impl StorageActor {
                 response_tx,
             } => {
                 let result = self
-                    .storage
-                    .batch_save_updates(session_id, updates)
+                    .persister
+                    .exclusive(
+                        session_id,
+                        self.storage.batch_save_updates(session_id, updates),
+                    )
                     .await
                     .map_err(|e| e.to_string());
                 let _ = response_tx.send(result);
@@ -920,35 +1014,6 @@ impl StorageActor {
                     .await
                     .map_err(|e: anyhow::Error| e.to_string());
                 let _ = response_tx.send(result);
-            }
-            StorageMessage::PersistSessionAndUpdate {
-                session,
-                session_id,
-                updates,
-            } => {
-                // Spawn as background task so we don't block the actor queue, BUT
-                // serialize per-session via a tokio Mutex so concurrent persists
-                // for the same session can't write the session blob out of order.
-                let storage = Arc::clone(&self.storage);
-                let lock = self
-                    .persist_locks
-                    .entry(session_id)
-                    .or_insert_with(|| Arc::new(Mutex::new(())))
-                    .clone();
-                tokio::spawn(async move {
-                    let _guard = lock.lock().await;
-                    if let Err(e) = storage
-                        .save_session_with_updates(&session, session_id, updates)
-                        .await
-                    {
-                        warn!(
-                            "Background persist failed for session {}: {}",
-                            session_id, e
-                        );
-                    } else {
-                        debug!("Background persist completed for session {}", session_id);
-                    }
-                });
             }
             StorageMessage::RegisterSymbolDependencies {
                 from,

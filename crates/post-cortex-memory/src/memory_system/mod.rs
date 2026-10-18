@@ -21,17 +21,22 @@ mod embeddings;
 pub mod managers;
 /// System-level and session-level metrics snapshots
 pub mod metrics;
+/// Coalescing, per-session ordered session persistence
+mod persister;
 /// Session lifecycle management with DashMap-based caching
 pub mod session_manager;
 /// Actor-based storage communication layer
 pub mod storage_actor;
 /// Top-level conversation memory system orchestrator
 pub mod system;
+#[cfg(test)]
+mod write_path_tests;
 
 pub use circuit_breaker::CircuitBreaker;
 pub use config::{EmbeddingConfigHolder, OperationType, SystemConfig};
 pub use managers::{IncrementalContextProcessor, SimpleGraphManager};
 pub use metrics::{CircuitBreakerStats, SessionManagerMetrics, SystemHealth, SystemMetrics};
+pub use persister::SessionHandle;
 pub use session_manager::SessionManager;
 pub use storage_actor::{StorageActor, StorageActorHandle, StorageMessage};
-pub use system::ConversationMemorySystem;
+pub use system::{CommittedUpdate, ConversationMemorySystem};

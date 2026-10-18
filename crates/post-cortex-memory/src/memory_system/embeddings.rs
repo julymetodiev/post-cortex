@@ -27,19 +27,14 @@ const MAX_VECTORIZER_INIT_RETRIES: u32 = 10;
 const MAX_PARALLEL_VECTORIZATION: usize = 4;
 
 impl ConversationMemorySystem {
-    /// Vectorize the latest update in the background. Fire-and-forget;
-    /// failures are logged. Returns immediately **after** the vectorizer
-    /// has been initialised — on first call this still waits for the
-    /// model download (~50 MB for `potion-multilingual-128M`). The new
-    /// canonical write path goes through
-    /// [`MemoryServiceImpl`](crate::services::MemoryServiceImpl) (its
-    /// `update_context` impl), which
-    /// hands the work to the bounded background [`crate::pipeline::Pipeline`]
-    /// — the pipeline worker runs the same init inside its own task, so
-    /// callers of `update_context` never see the model-load cost on the
-    /// hot path. This legacy method stays as the safety net for direct
-    /// callers of `ConversationMemorySystem::add_incremental_update` until
-    /// they migrate (TODO.md item #4 follow-up, slated for 0.4.0).
+    /// Vectorize one update in the background. Fire-and-forget; failures
+    /// are logged. Returns immediately **after** the vectorizer has been
+    /// initialised — on first call this still waits for the model download
+    /// (~50 MB for `potion-multilingual-128M`). Used by direct callers of
+    /// `ConversationMemorySystem::add_incremental_update`; the canonical
+    /// write path ([`MemoryServiceImpl`](crate::services::MemoryServiceImpl))
+    /// vectorizes on the [`crate::pipeline::Pipeline`] instead, so its
+    /// callers never see the model-load cost on the hot path.
     #[cfg(feature = "embeddings")]
     pub async fn spawn_background_vectorization(
         &self,
@@ -66,7 +61,12 @@ impl ConversationMemorySystem {
             let session = session_arc.load_full();
             match vectorizer.vectorize_update(&session, update_id).await {
                 Ok(count) if count > 0 => {
-                    storage_actor.persist_session_and_update_nowait((*session).clone(), vec![]);
+                    if storage_actor.is_deleted(session_id, &session_arc) {
+                        // Deleted while embedding: undo, or the vectors outlive it.
+                        super::system::undo_vectorization(&vectorizer, session_id, update_id).await;
+                        return;
+                    }
+                    storage_actor.persist_session_nowait(&session_arc, vec![]);
                     debug!(
                         "Background vectorization: {} update(s) for session {}",
                         count, session_id
@@ -320,7 +320,7 @@ impl ConversationMemorySystem {
                     if count > 0 {
                         // Fire-and-forget persist to save the updated vectorized_update_ids
                         self.storage_actor
-                            .persist_session_and_update_nowait((*session).clone(), vec![]);
+                            .persist_session_nowait(&session_arc, vec![]);
                         debug!("Session {} vectorization persist enqueued", session_id);
                     }
 
@@ -724,7 +724,7 @@ impl ConversationMemorySystem {
                             }
                         }
                         self.storage_actor
-                            .persist_session_and_update_nowait((*new_arc).clone(), vec![]);
+                            .persist_session_nowait(&session_arc, vec![]);
                         self.drop_content_vectors(session_id, &removed_ids).await;
                     } else {
                         warn!(

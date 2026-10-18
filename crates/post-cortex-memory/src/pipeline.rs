@@ -28,15 +28,15 @@
 //!
 //! ## Status
 //!
-//! Phase 5 lands the queue scaffolding and worker tasks; the workers
-//! currently log+record metrics but do **not** yet drive the production
-//! pipelines (content vectorizer, graph manager, summary generator).
-//! Phase 7 wires the workers to the real components when the daemon's
-//! gRPC handlers migrate to call [`crate::MemoryServiceImpl`] via the
-//! trait — which is the same commit that converts `update_context` to
-//! return early after persist. Until then the legacy in-process
-//! pipeline inside [`crate::ConversationMemorySystem`] continues to run
-//! synchronously.
+//! The embedding and graph workers drive the content vectorizer and the
+//! entity graph for updates written through [`crate::MemoryServiceImpl`],
+//! which commits them with
+//! [`crate::ConversationMemorySystem::add_incremental_update_deferred`]
+//! and then hands the derived work to this pipeline only. The summary
+//! worker still just records the request. Direct callers of
+//! `ConversationMemorySystem::add_incremental_update` bypass the pipeline:
+//! that method does the graph merge in the same swap and vectorizes on a
+//! background task.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

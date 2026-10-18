@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
-use tracing::{debug, error, warn};
+use tracing::{error, info};
 use uuid::Uuid;
 
 use post_cortex_core::core::cache::SessionCache;
@@ -21,6 +21,10 @@ pub struct SessionManager {
     /// Storage communication
     storage_actor: StorageActorHandle,
 
+    /// One gate per session being loaded, so concurrent cache misses load
+    /// it once and all get the same handle.
+    loading: DashMap<Uuid, Arc<tokio::sync::Mutex<()>>>,
+
     /// Total number of sessions created
     pub session_count: Arc<AtomicUsize>,
     /// Total number of session operations performed
@@ -33,6 +37,13 @@ pub struct SessionManager {
     pub active_sessions: DashMap<Uuid, Arc<AtomicU64>>,
 }
 
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 impl SessionManager {
     /// Construct a new session manager wired to the given storage actor.
     pub fn new(cache_capacity: usize, storage_actor: StorageActorHandle) -> Result<Self, String> {
@@ -41,6 +52,7 @@ impl SessionManager {
         Ok(Self {
             sessions,
             storage_actor,
+            loading: DashMap::new(),
             session_count: Arc::new(AtomicUsize::new(0)),
             total_session_operations: Arc::new(AtomicU64::new(0)),
             session_cache_hits: Arc::new(AtomicU64::new(0)),
@@ -49,106 +61,120 @@ impl SessionManager {
         })
     }
 
-    /// Get or create session via actor communication
+    /// Cached handle of `session_id`, refreshing its access time.
+    pub fn cached(&self, session_id: Uuid) -> Option<Arc<ArcSwap<ActiveSession>>> {
+        let session_arc = self.sessions.get(&session_id)?;
+        if let Some(access_time) = self.active_sessions.get(&session_id) {
+            access_time.store(now_secs(), Ordering::Relaxed);
+        }
+        Some(session_arc)
+    }
+
+    /// Get or create session via actor communication.
+    ///
+    /// A new, empty session is created only when storage reports that the
+    /// session does not exist. Any other load failure (I/O, corrupt data,
+    /// timeout) is returned as an error, so a transient problem can never
+    /// replace a stored session with an empty one.
     pub async fn get_or_create_session(
         &self,
         session_id: Uuid,
     ) -> Result<Arc<ArcSwap<ActiveSession>>, String> {
+        self.load_or_create(session_id, true)
+            .await?
+            .ok_or_else(|| format!("Session {session_id} not found"))
+    }
+
+    /// Get a session from the cache or storage; `Ok(None)` when storage has
+    /// no such session.
+    pub async fn get_session(
+        &self,
+        session_id: Uuid,
+    ) -> Result<Option<Arc<ArcSwap<ActiveSession>>>, String> {
+        self.load_or_create(session_id, false).await
+    }
+
+    async fn load_or_create(
+        &self,
+        session_id: Uuid,
+        create: bool,
+    ) -> Result<Option<Arc<ArcSwap<ActiveSession>>>, String> {
         self.total_session_operations
             .fetch_add(1, Ordering::Relaxed);
 
-        // Try cache first
-        if let Some(session_arc) = self.sessions.get(&session_id) {
+        if let Some(session_arc) = self.cached(session_id) {
             self.session_cache_hits.fetch_add(1, Ordering::Relaxed);
-
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            if let Some(access_time) = self.active_sessions.get(&session_id) {
-                access_time.store(now, Ordering::Relaxed);
-            }
-
-            return Ok(session_arc);
+            return Ok(Some(session_arc));
         }
-
-        // Cache miss
         self.session_cache_misses.fetch_add(1, Ordering::Relaxed);
 
-        // Try loading from storage via actor. Differentiate between "not found"
-        // and actual storage errors to prevent data loss from transient issues.
-        let storage_result: Result<Option<ActiveSession>, String> = match self
+        // Single flight: the first miss loads, concurrent misses wait for
+        // it and then find the session cached. Without this each would
+        // install its own handle and writes to the losing one would vanish.
+        let gate = Arc::clone(
+            &self
+                .loading
+                .entry(session_id)
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+        );
+        let result = {
+            let _guard = gate.lock().await;
+            match self.cached(session_id) {
+                Some(session_arc) => Ok(Some(session_arc)),
+                None => self.load_uncached(session_id, create).await,
+            }
+        };
+        // Drop the gate once nobody else waits on it (map + this clone).
+        self.loading.remove_if(&session_id, |_, g| {
+            Arc::ptr_eq(g, &gate) && Arc::strong_count(g) <= 2
+        });
+        result
+    }
+
+    /// Load from storage (or create when allowed) and install in the cache.
+    /// The caller holds the session's loading gate.
+    async fn load_uncached(
+        &self,
+        session_id: Uuid,
+        create: bool,
+    ) -> Result<Option<Arc<ArcSwap<ActiveSession>>>, String> {
+        let stored = self
             .storage_actor
             .load_session(session_id)
             .await
-        {
-            Ok(Some(session)) => Ok(Some(session)),
-            Ok(None) => Ok(None),
-            Err(e) => {
-                let error_lower = e.to_lowercase();
-                if error_lower.contains("not found")
-                    || error_lower.contains("does not exist")
-                    || error_lower.contains("no such")
-                {
-                    debug!("Session {} not found in storage: {}", session_id, e);
-                    Ok(None)
-                } else if error_lower.contains("timeout") {
-                    warn!(
-                        "Timeout loading session {} from storage: {}. Will create new session.",
-                        session_id, e
-                    );
-                    Ok(None)
-                } else {
-                    error!(
-                        "Storage error loading session {}: {}. Propagating error instead of masking.",
-                        session_id, e
-                    );
-                    Err(format!("Storage error: {}", e))
-                }
-            }
-        };
+            .map_err(|e| {
+                error!("Storage error loading session {}: {}", session_id, e);
+                format!("Storage error: {e}")
+            })?;
 
-        match storage_result {
-            Ok(Some(session)) => {
-                let session_arc = Arc::new(ArcSwap::new(Arc::new(session)));
-                self.sessions.put(session_id, Arc::clone(&session_arc));
-
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                self.active_sessions
-                    .insert(session_id, Arc::new(AtomicU64::new(now)));
-
-                Ok(session_arc)
-            }
-            Ok(None) => {
-                tracing::info!(
+        let session = match stored {
+            Some(session) => session,
+            None if create => {
+                info!(
                     "Creating new session {} since not found in storage",
                     session_id
                 );
                 let new_session = ActiveSession::new(session_id, None, None);
-                let session_arc = Arc::new(ArcSwap::new(Arc::new(new_session.clone())));
-
-                match self.storage_actor.save_session(new_session).await {
-                    Ok(_) => {
-                        self.sessions.put(session_id, Arc::clone(&session_arc));
-
-                        let now = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs();
-                        self.active_sessions
-                            .insert(session_id, Arc::new(AtomicU64::new(now)));
-
-                        self.session_count.fetch_add(1, Ordering::Relaxed);
-                        Ok(session_arc)
-                    }
-                    Err(e) => Err(format!("Failed to save new session to storage: {e}")),
-                }
+                self.storage_actor
+                    .save_session(new_session.clone())
+                    .await
+                    .map_err(|e| format!("Failed to save new session to storage: {e}"))?;
+                self.session_count.fetch_add(1, Ordering::Relaxed);
+                new_session
             }
-            Err(e) => Err(format!("Storage error: {e}")),
-        }
+            None => return Ok(None),
+        };
+
+        Ok(Some(self.install(session_id, session)))
+    }
+
+    /// Put a session in the cache and mark it active.
+    fn install(&self, session_id: Uuid, session: ActiveSession) -> Arc<ArcSwap<ActiveSession>> {
+        let session_arc = Arc::new(ArcSwap::new(Arc::new(session)));
+        self.sessions.put(session_id, Arc::clone(&session_arc));
+        self.active_sessions
+            .insert(session_id, Arc::new(AtomicU64::new(now_secs())));
+        session_arc
     }
 
     /// Get session metrics - all atomic reads

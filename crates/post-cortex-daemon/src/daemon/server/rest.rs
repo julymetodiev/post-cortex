@@ -81,7 +81,7 @@ pub(super) async fn api_list_sessions(
 ) -> Result<Json<Vec<SessionInfo>>, (StatusCode, String)> {
     let ids = server
         .memory_system
-        .list_sessions()
+        .list_session_summaries()
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
@@ -93,22 +93,15 @@ pub(super) async fn api_list_sessions(
         }
     }
 
-    let mut sessions = Vec::new();
-    for id in ids {
-        let name = match server.memory_system.get_session(id).await {
-            Ok(session_arc) => {
-                let session = session_arc.load();
-                session.name().unwrap_or_else(|| "Unnamed".to_string())
-            }
-            Err(_) => "Error loading".to_string(),
-        };
-
-        sessions.push(SessionInfo {
-            id: id.to_string(),
-            name,
-            workspace: session_workspace_map.get(&id).cloned(),
-        });
-    }
+    // Metadata records only: listing never loads sessions.
+    let sessions = ids
+        .into_iter()
+        .map(|summary| SessionInfo {
+            id: summary.id.to_string(),
+            name: summary.name.unwrap_or_else(|| "Unnamed".to_string()),
+            workspace: session_workspace_map.get(&summary.id).cloned(),
+        })
+        .collect();
 
     Ok(Json(sessions))
 }
@@ -141,7 +134,6 @@ pub(super) async fn api_delete_session(
 
     server
         .memory_system
-        .get_storage()
         .delete_session(uuid)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;

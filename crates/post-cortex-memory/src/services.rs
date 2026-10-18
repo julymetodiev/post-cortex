@@ -148,36 +148,30 @@ impl PostCortexService for MemoryServiceImpl {
             serde_json::to_value(&context_update).expect("ContextUpdate serialization cannot fail");
         let session_id = req.session_id;
 
-        let entry_id_str = self
+        // Waits for the storage write (blob + update row), so `durable`
+        // reports what actually happened.
+        let committed = self
             .system
-            .add_incremental_update(session_id, description.clone(), Some(metadata))
+            .add_incremental_update_deferred(session_id, description.clone(), Some(metadata), true)
             .await
             .map_err(SystemError::Internal)?;
 
-        let entry_id = Uuid::parse_str(&entry_id_str).map_err(|e| {
-            SystemError::Internal(format!(
-                "storage returned non-UUID entry id {entry_id_str:?}: {e}"
-            ))
-        })?;
-
-        // Hand derived work to the bounded pipeline. Best-effort: a full
-        // queue logs `Backpressure` but doesn't fail the durable write
-        // — the legacy in-system `tokio::spawn`s in
-        // `ConversationMemorySystem::add_incremental_update_internal`
-        // remain as the safety net until they're fully retired in 0.4.0.
+        // Graph merge and vectorization run on the pipeline only (the
+        // deferred write does neither), so each happens exactly once.
         submit_derived_work(
             &self.pipeline,
+            &self.system,
             session_id,
-            entry_id,
+            committed.entry_id,
             &description,
-            context_update,
+            committed.update,
         );
 
         Ok(UpdateContextResponse {
-            entry_id,
+            entry_id: committed.entry_id,
             session_id,
             persisted_at: Utc::now(),
-            durable: true,
+            durable: committed.durable,
         })
     }
 
@@ -213,35 +207,41 @@ impl PostCortexService for MemoryServiceImpl {
         }
 
         let mut entry_ids = Vec::with_capacity(req.updates.len());
+        let mut durable = false;
+        let last = req.updates.len().saturating_sub(1);
         for (i, item) in req.updates.iter().enumerate() {
             let description = build_description(item);
             let context_update = build_context_update(item);
             let metadata = serde_json::to_value(&context_update)
                 .expect("ContextUpdate serialization cannot fail");
-            let entry_id_str = self
+            // Only the last item waits: session writes are ordered and
+            // coalesced, so the write it waits for covers every row before it.
+            let committed = self
                 .system
-                .add_incremental_update(item.session_id, description.clone(), Some(metadata))
+                .add_incremental_update_deferred(
+                    item.session_id,
+                    description.clone(),
+                    Some(metadata),
+                    i == last,
+                )
                 .await
                 .map_err(|e| SystemError::Internal(format!("updates[{i}]: {e}")))?;
-            let entry_id = Uuid::parse_str(&entry_id_str).map_err(|e| {
-                SystemError::Internal(format!(
-                    "updates[{i}]: storage returned non-UUID entry id {entry_id_str:?}: {e}"
-                ))
-            })?;
-            entry_ids.push(entry_id);
+            durable = committed.durable;
+            entry_ids.push(committed.entry_id);
             submit_derived_work(
                 &self.pipeline,
+                &self.system,
                 item.session_id,
-                entry_id,
+                committed.entry_id,
                 &description,
-                context_update,
+                committed.update,
             );
         }
 
         Ok(BulkUpdateContextResponse {
             entry_ids,
             persisted_at: Utc::now(),
-            durable: true,
+            durable,
         })
     }
 
@@ -429,13 +429,12 @@ fn build_context_update(req: &UpdateContextRequest) -> ContextUpdate {
 /// Hand a freshly-persisted update off to the bounded background pipeline:
 /// embedding compute, entity-graph merge, and summary refresh all run on
 /// separate worker tasks so the write path returns as soon as the entry
-/// is durably stored. Backpressure on any queue is logged but swallowed
-/// — the legacy in-system `tokio::spawn`s in
-/// [`ConversationMemorySystem::add_incremental_update_internal`] still
-/// run as a safety net, so a full queue degrades to "do the work on a
-/// raw spawn anyway" rather than dropping it.
+/// is stored. The pipeline is the only place this work runs; when a queue
+/// rejects an item (full or shut down) the same work runs on a plain task
+/// instead, so it is never dropped.
 fn submit_derived_work(
     pipeline: &Pipeline,
+    system: &Arc<ConversationMemorySystem>,
     session_id: Uuid,
     entry_id: Uuid,
     text: &str,
@@ -447,9 +446,32 @@ fn submit_derived_work(
         text: text.to_string(),
     }) {
         log_pipeline_submit("embedding", session_id, entry_id, e);
+        #[cfg(feature = "embeddings")]
+        {
+            let system = Arc::clone(system);
+            tokio::spawn(async move {
+                if let Err(e) = system.vectorize_update_now(session_id, entry_id).await {
+                    warn!(%session_id, %entry_id, error = %e, "fallback vectorization failed");
+                }
+            });
+        }
     }
-    if let Err(e) = pipeline.submit_graph(GraphWorkItem::ApplyUpdate { session_id, update }) {
+    // The queue drops a rejected item, so keep the update for the fallback.
+    let item = GraphWorkItem::ApplyUpdate {
+        session_id,
+        update: update.clone(),
+    };
+    if let Err(e) = pipeline.submit_graph(item) {
         log_pipeline_submit("graph", session_id, entry_id, e);
+        let system = Arc::clone(system);
+        tokio::spawn(async move {
+            if let Err(e) = system
+                .apply_entity_graph_update_now(session_id, update)
+                .await
+            {
+                warn!(%session_id, %entry_id, error = %e, "fallback graph merge failed");
+            }
+        });
     }
     if let Err(e) = pipeline.submit_summary(SummaryWorkItem { session_id }) {
         log_pipeline_submit("summary", session_id, entry_id, e);
@@ -462,7 +484,7 @@ fn log_pipeline_submit(queue: &str, session_id: Uuid, entry_id: Uuid, err: Pipel
         %session_id,
         %entry_id,
         error = %err,
-        "pipeline submission failed (non-fatal — legacy in-system spawn covers the work)"
+        "pipeline submission failed (non-fatal — running the work on a plain task)"
     );
 }
 
@@ -698,14 +720,13 @@ mod tests {
         // (post-vectorizer-init), update_context returns quickly and the
         // pipeline backlog drains shortly after.
         //
-        // The first call still pays the model-download cost via the
-        // legacy in-system `spawn_background_vectorization` (kept as a
-        // safety net while direct callers migrate to the pipeline path).
-        // Phase 7+ removes that path entirely.
+        // The model load is paid up front (as the daemon does at startup)
+        // so the drain below only measures real work.
         let (svc, test_dir) = make_service("nonblocking").await;
         let session_id = svc.inner().create_session(None, None).await.unwrap();
+        svc.inner().warm_up_embeddings().await.unwrap();
 
-        // Warm-up call — absorbs first-time model load.
+        // Warm-up call — first write through every worker.
         let mut warmup = good_request();
         warmup.session_id = session_id;
         warmup.content.title = "warmup".into();
@@ -746,6 +767,56 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&test_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_context_merges_entities_exactly_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SystemConfig {
+            data_directory: dir.path().to_string_lossy().into_owned(),
+            enable_embeddings: false,
+            ..Default::default()
+        };
+        let system = Arc::new(ConversationMemorySystem::new(config).await.unwrap());
+        let svc = MemoryServiceImpl::new(system);
+        let session_id = svc.inner().create_session(None, None).await.unwrap();
+
+        for round in 1..=3u32 {
+            let mut req = good_request();
+            req.session_id = session_id;
+            req.content.title = format!("round {round}");
+            assert!(svc.update_context(req).await.unwrap().durable);
+
+            let mut mentions = 0;
+            for _ in 0..200 {
+                let session = svc
+                    .inner()
+                    .get_session(session_id)
+                    .await
+                    .unwrap()
+                    .load_full();
+                mentions = session
+                    .entity_graph
+                    .entities
+                    .get("Foo")
+                    .map_or(0, |e| e.mention_count);
+                if svc.pipeline().backlog() == 0 && mentions >= round {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            assert_eq!(mentions, round, "one merge per update");
+        }
+
+        // No second path applies them again later.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let session = svc
+            .inner()
+            .get_session(session_id)
+            .await
+            .unwrap()
+            .load_full();
+        assert_eq!(session.entity_graph.entities["Foo"].mention_count, 3);
     }
 
     #[tokio::test]

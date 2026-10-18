@@ -8,9 +8,11 @@ use tokio::sync::OnceCell;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
+use post_cortex_core::core::context_update::ContextUpdate;
 use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_core::workspace::WorkspaceManager;
 use post_cortex_storage::rocksdb_storage::RealRocksDBStorage;
+use post_cortex_storage::traits::SessionSummary;
 
 use super::circuit_breaker::CircuitBreaker;
 use super::config::SystemConfig;
@@ -27,6 +29,67 @@ use post_cortex_embeddings::EmbeddingModelType;
 // Memory management constants
 const MAX_ACTIVE_SESSIONS: usize = 500;
 const SESSION_CLEANUP_BATCH_SIZE: usize = 50;
+/// Compare-and-swap attempts before a session write gives up.
+const MAX_CAS_ATTEMPTS: u32 = 20;
+
+/// Wait before retrying a lost compare-and-swap: yield for the first
+/// attempts, then back off exponentially (capped at 3.2 ms).
+async fn cas_backoff(attempt: u32) {
+    if attempt > 3 {
+        tokio::time::sleep(std::time::Duration::from_micros(
+            100 * (1 << (attempt - 3).min(5)),
+        ))
+        .await;
+    } else {
+        tokio::task::yield_now().await;
+    }
+}
+
+/// Remove what vectorizing `update_id` added for a session that was
+/// deleted meanwhile: its vectors (memory and persisted) and cached results.
+#[cfg(feature = "embeddings")]
+pub(super) async fn undo_vectorization(
+    vectorizer: &crate::content_vectorizer::ContentVectorizer,
+    session_id: Uuid,
+    update_id: Uuid,
+) {
+    if let Err(e) = vectorizer
+        .remove_content(session_id, &update_id.to_string())
+        .await
+    {
+        warn!(
+            "Failed to remove embedding {} of deleted session {}: {:#}",
+            update_id, session_id, e
+        );
+    }
+    vectorizer.remove_session_vectors(session_id);
+}
+
+/// How a write handles the work derived from a new update.
+#[derive(Debug, Clone, Copy)]
+enum WriteMode {
+    /// Merge the update into the entity graph in the same swap, persist in
+    /// the background and vectorize in the background.
+    Inline,
+    /// Leave graph merge and vectorization to the caller (the pipeline);
+    /// optionally wait until the update is written to storage.
+    Deferred {
+        /// Wait for the storage write before returning.
+        wait_durable: bool,
+    },
+}
+
+/// An update committed by [`ConversationMemorySystem::add_incremental_update_deferred`].
+#[derive(Debug, Clone)]
+pub struct CommittedUpdate {
+    /// Id of the new entry.
+    pub entry_id: Uuid,
+    /// The update as stored in the session.
+    pub update: ContextUpdate,
+    /// Whether the update was confirmed written to storage before the call
+    /// returned (only ever true when the caller asked to wait for it).
+    pub durable: bool,
+}
 
 /// Conversation memory system using actors and channels
 pub struct ConversationMemorySystem {
@@ -341,40 +404,10 @@ impl ConversationMemorySystem {
         &self,
         session_id: Uuid,
     ) -> Result<Arc<ArcSwap<ActiveSession>>, String> {
-        if let Some(session_arc) = self.session_manager.sessions.get(&session_id) {
-            // Update access time
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("System time before UNIX epoch")
-                .as_secs();
-            if let Some(access_time) = self.session_manager.active_sessions.get(&session_id) {
-                access_time.store(now, Ordering::Relaxed);
-            }
-            return Ok(session_arc);
-        }
-
-        // Try loading from storage via actor
-        match self.storage_actor.load_session(session_id).await {
-            Ok(Some(session)) => {
-                let session_arc = Arc::new(ArcSwap::new(Arc::new(session)));
-                self.session_manager
-                    .sessions
-                    .put(session_id, Arc::clone(&session_arc));
-
-                // Add to active sessions
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("System time before UNIX epoch")
-                    .as_secs();
-                self.session_manager
-                    .active_sessions
-                    .insert(session_id, Arc::new(AtomicU64::new(now)));
-
-                Ok(session_arc)
-            }
-            Ok(None) => Err(format!("Session {session_id} not found")),
-            Err(e) => Err(format!("Storage error: {e}")),
-        }
+        self.session_manager
+            .get_session(session_id)
+            .await?
+            .ok_or_else(|| format!("Session {session_id} not found"))
     }
 
     // MCP Compatibility methods
@@ -406,22 +439,36 @@ impl ConversationMemorySystem {
         )
         .await?;
 
-        if let Some(new_arc) = updated {
+        if updated.is_some() {
             self.storage_actor
-                .persist_session_and_update_nowait((*new_arc).clone(), vec![]);
+                .persist_session_nowait(&session_arc, vec![]);
         }
         Ok(())
     }
 
-    /// Delete a session: evicts both in-memory caches before tearing down the
-    /// persisted row. Without the cache evict step, `get_session` (used by
+    /// Delete a session: evicts it from the in-memory caches, drops its
+    /// queued persists (and makes persists still in flight for the evicted
+    /// handle no-ops, so the delete cannot be undone by a late write),
+    /// deletes it from storage and removes its in-memory vectors and cached
+    /// search results. Without the cache evict step, `get_session` (used by
     /// `session action=load`) would still hand out the cached ActiveSession
     /// after the underlying storage row was already gone.
     pub async fn delete_session(&self, session_id: Uuid) -> Result<bool, String> {
+        let live = self.session_manager.sessions.remove(&session_id);
+        self.session_manager.active_sessions.remove(&session_id);
+
+        let deleted = self.storage_actor.delete_session(session_id, live).await?;
+
+        // A load racing the delete may have cached the session again.
         self.session_manager.sessions.remove(&session_id);
         self.session_manager.active_sessions.remove(&session_id);
 
-        self.storage_actor.delete_session(session_id).await
+        #[cfg(feature = "embeddings")]
+        if let Some(vectorizer) = self.content_vectorizer.get() {
+            vectorizer.remove_session_vectors(session_id);
+        }
+
+        Ok(deleted)
     }
 
     /// Delete a single entity from a session: removes the node + incident
@@ -442,9 +489,9 @@ impl ConversationMemorySystem {
             })
             .await?;
         let existed = updated.is_some();
-        if let Some(new_arc) = updated {
+        if existed {
             self.storage_actor
-                .persist_session_and_update_nowait((*new_arc).clone(), vec![]);
+                .persist_session_nowait(&session_arc, vec![]);
         }
 
         self.storage_actor
@@ -479,7 +526,7 @@ impl ConversationMemorySystem {
         // Shared set: drop the id before the snapshot is persisted.
         new_arc.vectorized_update_ids.remove(&entry_id);
         self.storage_actor
-            .persist_session_and_update_nowait((*new_arc).clone(), vec![]);
+            .persist_session_nowait(&session_arc, vec![]);
 
         self.drop_content_vectors(session_id, &[entry_id.to_string()])
             .await;
@@ -527,37 +574,51 @@ impl ConversationMemorySystem {
         ))
     }
 
-    /// Find sessions by name or description compatibility method
+    /// Find sessions whose name or description contains `query`
+    /// (case-insensitive). Reads session metadata only: no session is
+    /// loaded or added to the cache.
     pub async fn find_sessions_by_name_or_description(
         &self,
         query: &str,
     ) -> Result<Vec<Uuid>, String> {
-        let session_ids = self.list_sessions().await?;
+        Ok(self
+            .find_session_summaries(query)
+            .await?
+            .into_iter()
+            .map(|s| s.id)
+            .collect())
+    }
+
+    /// [`Self::find_sessions_by_name_or_description`] returning the
+    /// matching sessions' metadata.
+    pub async fn find_session_summaries(&self, query: &str) -> Result<Vec<SessionSummary>, String> {
         let query_lower = query.to_lowercase();
-        let mut matching_sessions = Vec::new();
+        let matches = |text: &Option<String>| {
+            text.as_ref()
+                .is_some_and(|t| t.to_lowercase().contains(&query_lower))
+        };
+        let mut summaries = self.list_session_summaries().await?;
+        summaries.retain(|s| matches(&s.name) || matches(&s.description));
+        Ok(summaries)
+    }
 
-        for session_id in &session_ids {
-            // get_session already does cache-then-storage lookup
-            let Ok(session_arc) = self.get_session(*session_id).await else {
-                continue;
-            };
-            let session = session_arc.load();
-
-            let name_match = session
-                .name()
-                .as_ref()
-                .is_some_and(|n| n.to_lowercase().contains(&query_lower));
-            let desc_match = session
-                .description()
-                .as_ref()
-                .is_some_and(|d| d.to_lowercase().contains(&query_lower));
-
-            if name_match || desc_match {
-                matching_sessions.push(*session_id);
+    /// Metadata of every stored session, ordered by creation time (oldest
+    /// first). Served from storage's metadata records, so no session is
+    /// loaded or added to the cache; sessions that are cached report their
+    /// in-memory state, which may be ahead of the last write.
+    pub async fn list_session_summaries(&self) -> Result<Vec<SessionSummary>, String> {
+        let mut summaries = self
+            .storage_actor
+            .list_session_summaries()
+            .await
+            .map_err(|e| format!("Failed to list sessions: {e}"))?;
+        for summary in &mut summaries {
+            if let Some(session_arc) = self.session_manager.sessions.get(&summary.id) {
+                *summary = SessionSummary::from_session(&session_arc.load());
             }
         }
-
-        Ok(matching_sessions)
+        summaries.sort_by_key(|s| (s.created_at, s.id));
+        Ok(summaries)
     }
 
     /// List all sessions
@@ -579,52 +640,62 @@ impl ConversationMemorySystem {
         }
     }
 
-    /// Apply an entity-graph update for a session **now** (no spawn).
+    /// Merge an update's entities and relations into its session's entity
+    /// graph **now** (no spawn), then persist in the background.
     ///
-    /// Encapsulates the load → mutate → CAS-swap → persist pattern that
-    /// `add_incremental_update_internal` previously inlined inside a
-    /// `tokio::spawn`. Exposed publicly so the non-blocking [`crate::pipeline`]
-    /// workers can drive entity-graph maintenance off the hot write path.
-    ///
-    /// Idempotent w.r.t. concurrent updates: a failed CAS-swap is treated
-    /// as "another writer won" and silently dropped (the next update
-    /// catches up). Errors propagate so the caller — typically a pipeline
-    /// worker — can log them and continue.
+    /// Used by the [`crate::pipeline`] graph worker for updates written via
+    /// [`Self::add_incremental_update_deferred`]. A lost compare-and-swap is
+    /// retried on the newer version, so a concurrent write never drops the
+    /// merge; each attempt starts from a fresh copy, so the update is
+    /// applied exactly once. Skips sessions that no longer exist and
+    /// updates that were deleted after being queued. Errors propagate so
+    /// the caller — typically a pipeline worker — can log them and continue.
     pub async fn apply_entity_graph_update_now(
         &self,
         session_id: Uuid,
-        update: post_cortex_core::core::context_update::ContextUpdate,
+        update: ContextUpdate,
     ) -> Result<(), String> {
-        let session_arc = match self.session_manager.sessions.get(&session_id) {
-            Some(arc) => arc,
-            None => {
+        let Some(session_arc) = self.session_manager.get_session(session_id).await? else {
+            debug!(
+                "apply_entity_graph_update_now: session {} not found, skipping",
+                session_id
+            );
+            return Ok(());
+        };
+
+        for attempt in 1..=MAX_CAS_ATTEMPTS {
+            let current = session_arc.load_full();
+            if !current
+                .incremental_updates
+                .iter()
+                .rev()
+                .any(|u| u.id == update.id)
+            {
                 debug!(
-                    "apply_entity_graph_update_now: session {} not cached, skipping",
-                    session_id
+                    "apply_entity_graph_update_now: update {} no longer in session {}, skipping",
+                    update.id, session_id
                 );
                 return Ok(());
             }
-        };
 
-        let current = session_arc.load();
-        let mut new_session = (**current).clone();
-        new_session
-            .apply_entity_graph_update(&update)
-            .await
-            .map_err(|e| format!("apply_entity_graph_update failed: {e}"))?;
+            let mut new_session = (*current).clone();
+            new_session
+                .apply_entity_graph_update(&update)
+                .await
+                .map_err(|e| format!("apply_entity_graph_update failed: {e}"))?;
 
-        let new_arc = Arc::new(new_session);
-        let prev = session_arc.compare_and_swap(&current, Arc::clone(&new_arc));
-        if Arc::ptr_eq(&prev, &current) {
-            self.storage_actor
-                .persist_session_and_update_nowait((*new_arc).clone(), vec![]);
-        } else {
-            debug!(
-                "apply_entity_graph_update_now: CAS lost for session {} (concurrent update), skipping",
-                session_id
-            );
+            let prev = session_arc.compare_and_swap(&current, Arc::new(new_session));
+            if Arc::ptr_eq(&prev, &current) {
+                self.storage_actor
+                    .persist_session_nowait(&session_arc, vec![]);
+                return Ok(());
+            }
+            cas_backoff(attempt).await;
         }
-        Ok(())
+
+        Err(format!(
+            "apply_entity_graph_update_now: high contention ({MAX_CAS_ATTEMPTS} CAS attempts exhausted) for session {session_id}"
+        ))
     }
 
     /// Vectorize one update of a session **now** (no spawn).
@@ -644,15 +715,12 @@ impl ConversationMemorySystem {
             return Ok(0);
         }
 
-        let session_arc = match self.session_manager.sessions.get(&session_id) {
-            Some(arc) => arc,
-            None => {
-                debug!(
-                    "vectorize_update_now: session {} not cached, skipping",
-                    session_id
-                );
-                return Ok(0);
-            }
+        let Some(session_arc) = self.session_manager.get_session(session_id).await? else {
+            debug!(
+                "vectorize_update_now: session {} not found, skipping",
+                session_id
+            );
+            return Ok(0);
         };
 
         let vectorizer = self
@@ -660,12 +728,19 @@ impl ConversationMemorySystem {
             .await
             .map_err(|e| format!("vectorizer init: {e}"))?;
 
-        let session = session_arc.load();
+        // Owned snapshot: an ArcSwap guard must not live across the
+        // embedding await.
+        let session = session_arc.load_full();
         match vectorizer.vectorize_update(&session, update_id).await {
             Ok(count) if count > 0 => {
+                if self.storage_actor.is_deleted(session_id, &session_arc) {
+                    // Deleted while embedding: undo, or the vectors outlive it.
+                    undo_vectorization(&vectorizer, session_id, update_id).await;
+                    return Ok(0);
+                }
                 let _ = vectorizer.invalidate_session_cache(session_id).await;
                 self.storage_actor
-                    .persist_session_and_update_nowait((**session).clone(), vec![]);
+                    .persist_session_nowait(&session_arc, vec![]);
                 Ok(count)
             }
             Ok(_) => Ok(0),
@@ -673,7 +748,14 @@ impl ConversationMemorySystem {
         }
     }
 
-    /// Add incremental update - compatibility wrapper
+    /// Add an update to a session (created if it does not exist) and
+    /// return its entry id.
+    ///
+    /// Self-contained: the update is merged into the entity graph in the
+    /// same atomic swap, and persistence and vectorization run in the
+    /// background. [`crate::MemoryServiceImpl`] uses
+    /// [`Self::add_incremental_update_deferred`] instead and hands the
+    /// derived work to its pipeline.
     #[instrument(skip(self, session_id, description, metadata))]
     pub async fn add_incremental_update(
         &self,
@@ -681,6 +763,43 @@ impl ConversationMemorySystem {
         description: String,
         metadata: Option<serde_json::Value>,
     ) -> Result<String, String> {
+        self.add_incremental_update_with(session_id, description, metadata, WriteMode::Inline)
+            .await
+            .map(|c| c.entry_id.to_string())
+    }
+
+    /// Add an update to a session (created if it does not exist) without
+    /// its derived work: the caller must merge it into the entity graph
+    /// ([`Self::apply_entity_graph_update_now`]) and vectorize it
+    /// ([`Self::vectorize_update_now`]), as the pipeline does.
+    ///
+    /// With `wait_durable`, returns only after the update's storage write
+    /// finished; [`CommittedUpdate::durable`] reports whether it succeeded.
+    /// A failed write does not fail the call: the update is committed in
+    /// memory and later persists of the session retry the write.
+    pub async fn add_incremental_update_deferred(
+        &self,
+        session_id: Uuid,
+        description: String,
+        metadata: Option<serde_json::Value>,
+        wait_durable: bool,
+    ) -> Result<CommittedUpdate, String> {
+        self.add_incremental_update_with(
+            session_id,
+            description,
+            metadata,
+            WriteMode::Deferred { wait_durable },
+        )
+        .await
+    }
+
+    async fn add_incremental_update_with(
+        &self,
+        session_id: Uuid,
+        description: String,
+        metadata: Option<serde_json::Value>,
+        mode: WriteMode,
+    ) -> Result<CommittedUpdate, String> {
         debug!("add_incremental_update START for session {}", session_id);
         self.system_metrics
             .total_requests
@@ -699,7 +818,7 @@ impl ConversationMemorySystem {
         }
 
         let result = self
-            .add_incremental_update_internal(session_id, description, metadata)
+            .add_incremental_update_internal(session_id, description, metadata, mode)
             .await;
 
         // Update circuit breaker based on result
@@ -729,7 +848,8 @@ impl ConversationMemorySystem {
         session_id: Uuid,
         mut description: String,
         metadata: Option<serde_json::Value>,
-    ) -> Result<String, String> {
+        mode: WriteMode,
+    ) -> Result<CommittedUpdate, String> {
         // Content size limit to prevent timeouts
         if description.len() > 2000 {
             // Truncate at nearest UTF-8 boundary at or before 1800 bytes
@@ -751,7 +871,6 @@ impl ConversationMemorySystem {
         // Update session atomically using CAS loop to prevent race conditions
         let update_result = {
             let start = std::time::Instant::now();
-            const MAX_CAS_ATTEMPTS: u32 = 20;
             let mut attempts = 0;
 
             let result_holder = loop {
@@ -767,10 +886,16 @@ impl ConversationMemorySystem {
                 let current_arc = session_arc.load();
                 let mut new_session = (**current_arc).clone();
 
-                // Add context update
-                let result = new_session
+                // Add context update (and, inline, its graph merge: one
+                // swap, so the merge is neither lost nor applied twice)
+                let mut result = new_session
                     .add_context_update(description.clone(), metadata.clone())
                     .await;
+                if let (WriteMode::Inline, Ok((_, update))) = (mode, &result)
+                    && let Err(e) = new_session.apply_entity_graph_update(update).await
+                {
+                    result = Err(format!("Entity graph update failed: {e}"));
+                }
 
                 match result {
                     Ok((uid, update)) => {
@@ -795,14 +920,7 @@ impl ConversationMemorySystem {
                             session_id,
                             attempts
                         );
-                        if attempts > 3 {
-                            tokio::time::sleep(std::time::Duration::from_micros(
-                                100 * (1 << (attempts - 3).min(5)),
-                            ))
-                            .await;
-                        } else {
-                            tokio::task::yield_now().await;
-                        }
+                        cas_backoff(attempts).await;
                     }
                     Err(e) => {
                         // Logic error, not contention
@@ -845,59 +963,53 @@ impl ConversationMemorySystem {
                     .graph_updates
                     .fetch_add(1, Ordering::Relaxed);
 
-                // Fire-and-forget: enqueue combined session + update persistence
-                // Data is already committed in-memory via ArcSwap CAS
-                let current_session = session_arc.load();
-                self.storage_actor.persist_session_and_update_nowait(
-                    (**current_session).clone(),
-                    vec![context_update.clone()],
-                );
-                debug!("Session {} persistence enqueued (non-blocking)", session_id);
+                let entry_id = Uuid::parse_str(&update_id)
+                    .map_err(|e| format!("Invalid update id {update_id:?}: {e}"))?;
 
-                // Background entity graph update (non-blocking, non-critical)
-                let session_arc_bg = Arc::clone(&session_arc);
-                let storage_actor_bg = self.storage_actor.clone();
-                #[cfg(feature = "embeddings")]
-                let vectorize_id = context_update.id;
-                let update_for_graph = context_update;
-                tokio::spawn(async move {
-                    let current = session_arc_bg.load();
-                    let mut new_session = (**current).clone();
-
-                    if let Err(e) = new_session
-                        .apply_entity_graph_update(&update_for_graph)
+                // Data is already committed in memory via the CAS; the
+                // persister coalesces this with other pending writes.
+                let durable = match mode {
+                    WriteMode::Deferred { wait_durable: true } => match self
+                        .storage_actor
+                        .persist_session_and_wait(&session_arc, vec![context_update.clone()])
                         .await
                     {
-                        warn!("Background entity graph update failed: {}", e);
-                        return;
+                        Ok(()) => true,
+                        Err(e) => {
+                            warn!(
+                                "Update {} of session {} not yet persisted: {}",
+                                entry_id, session_id, e
+                            );
+                            false
+                        }
+                    },
+                    _ => {
+                        self.storage_actor
+                            .persist_session_nowait(&session_arc, vec![context_update.clone()]);
+                        false
                     }
-
-                    // CAS-swap the graph update back and persist only on success.
-                    let new_arc = Arc::new(new_session);
-                    let prev = session_arc_bg.compare_and_swap(&current, Arc::clone(&new_arc));
-                    if Arc::ptr_eq(&prev, &current) {
-                        // CAS succeeded — persist session with updated entity graph
-                        storage_actor_bg
-                            .persist_session_and_update_nowait((*new_arc).clone(), vec![]);
-                    } else {
-                        debug!("Background entity graph CAS failed (concurrent update), skipping");
-                    }
-                });
+                };
 
                 #[cfg(feature = "embeddings")]
-                self.spawn_background_vectorization(
-                    session_id,
-                    Arc::clone(&session_arc),
-                    vectorize_id,
-                )
-                .await;
+                if matches!(mode, WriteMode::Inline) {
+                    self.spawn_background_vectorization(
+                        session_id,
+                        Arc::clone(&session_arc),
+                        entry_id,
+                    )
+                    .await;
+                }
 
                 info!(
                     "Added incremental update to session {}: {} chars",
                     session_id,
                     description.len()
                 );
-                Ok(update_id)
+                Ok(CommittedUpdate {
+                    entry_id,
+                    update: context_update,
+                    durable,
+                })
             }
             Err(e) => {
                 self.context_processor
@@ -915,72 +1027,18 @@ impl ConversationMemorySystem {
             .total_requests
             .fetch_add(1, Ordering::Relaxed);
 
-        // Try cache first
-        if let Some(session_arc) = self.session_manager.sessions.get(&session_id) {
-            self.session_manager
-                .session_cache_hits
-                .fetch_add(1, Ordering::Relaxed);
-
-            // Load session atomically
-            let session = session_arc.load();
-            let context = session.context_summary();
-
-            // Update access timestamp
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("System time before UNIX epoch")
-                .as_secs();
-            if let Some(access_time) = self.session_manager.active_sessions.get(&session_id) {
-                access_time.store(now, Ordering::Relaxed);
-            }
-
-            self.system_metrics
-                .successful_requests
-                .fetch_add(1, Ordering::Relaxed);
-            return Ok(context);
-        }
-
-        // Cache miss - load from storage via actor
-        self.session_manager
-            .session_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
-
-        match self.storage_actor.load_session(session_id).await {
-            Ok(Some(session)) => {
-                // Cache the loaded session using ArcSwap
-                let session_arc = Arc::new(ArcSwap::new(Arc::new(session)));
-                self.session_manager
-                    .sessions
-                    .put(session_id, Arc::clone(&session_arc));
-
-                // Add to active sessions
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("System time before UNIX epoch")
-                    .as_secs();
-                self.session_manager
-                    .active_sessions
-                    .insert(session_id, Arc::new(AtomicU64::new(now)));
-
-                let context = session_arc.load().context_summary();
-                self.system_metrics
-                    .successful_requests
-                    .fetch_add(1, Ordering::Relaxed);
-                Ok(context)
-            }
-            Ok(None) => {
-                self.system_metrics
-                    .failed_requests
-                    .fetch_add(1, Ordering::Relaxed);
-                Err("Session not found".to_string())
-            }
-            Err(e) => {
-                self.system_metrics
-                    .failed_requests
-                    .fetch_add(1, Ordering::Relaxed);
-                Err(format!("Storage error: {e}"))
-            }
-        }
+        let result = match self.session_manager.get_session(session_id).await {
+            Ok(Some(session_arc)) => Ok(session_arc.load().context_summary()),
+            Ok(None) => Err("Session not found".to_string()),
+            Err(e) => Err(format!("Storage error: {e}")),
+        };
+        let counter = if result.is_ok() {
+            &self.system_metrics.successful_requests
+        } else {
+            &self.system_metrics.failed_requests
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+        result
     }
 
     /// Get system health - all atomic reads

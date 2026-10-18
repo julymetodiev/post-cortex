@@ -38,6 +38,17 @@ use helpers::{
 use pb::post_cortex_server::{PostCortex, PostCortexServer};
 use pb::*;
 
+/// Proto listing row for a session.
+fn session_info(summary: post_cortex_storage::traits::SessionSummary) -> SessionInfo {
+    SessionInfo {
+        session_id: summary.id.to_string(),
+        name: summary.name.unwrap_or_default(),
+        description: summary.description.unwrap_or_default(),
+        created_at_unix: summary.created_at.timestamp(),
+        update_count: summary.update_count as u32,
+    }
+}
+
 /// gRPC service backed by ConversationMemorySystem.
 ///
 /// Holds both the raw [`ConversationMemorySystem`] (used by handlers
@@ -123,14 +134,15 @@ impl PostCortex for PcxGrpcService {
     ) -> Result<Response<ListSessionsResponse>, Status> {
         let req = request.into_inner();
 
-        let session_ids = if !req.name_filter.is_empty() {
+        // Metadata records only: listing never loads sessions.
+        let summaries = if !req.name_filter.is_empty() {
             self.memory
-                .find_sessions_by_name_or_description(&req.name_filter)
+                .find_session_summaries(&req.name_filter)
                 .await
                 .map_err(Status::internal)?
         } else {
             self.memory
-                .list_sessions()
+                .list_session_summaries()
                 .await
                 .map_err(Status::internal)?
         };
@@ -141,19 +153,11 @@ impl PostCortex for PcxGrpcService {
             100
         };
 
-        let mut sessions = Vec::new();
-        for session_id in session_ids.into_iter().take(limit) {
-            if let Ok(session_arc) = self.memory.get_session(session_id).await {
-                let session = session_arc.load();
-                sessions.push(SessionInfo {
-                    session_id: session_id.to_string(),
-                    name: session.name().unwrap_or_default(),
-                    description: session.description().unwrap_or_default(),
-                    created_at_unix: session.created_at().timestamp(),
-                    update_count: session.incremental_updates.len() as u32,
-                });
-            }
-        }
+        let sessions = summaries
+            .into_iter()
+            .take(limit)
+            .map(session_info)
+            .collect();
 
         Ok(Response::new(ListSessionsResponse { sessions }))
     }
@@ -198,25 +202,14 @@ impl PostCortex for PcxGrpcService {
             return Err(Status::invalid_argument("query cannot be empty"));
         }
 
-        let session_ids = self
+        let sessions = self
             .memory
-            .find_sessions_by_name_or_description(&req.query)
+            .find_session_summaries(&req.query)
             .await
-            .map_err(Status::internal)?;
-
-        let mut sessions = Vec::new();
-        for session_id in session_ids {
-            if let Ok(session_arc) = self.memory.get_session(session_id).await {
-                let session = session_arc.load();
-                sessions.push(SessionInfo {
-                    session_id: session_id.to_string(),
-                    name: session.name().unwrap_or_default(),
-                    description: session.description().unwrap_or_default(),
-                    created_at_unix: session.created_at().timestamp(),
-                    update_count: session.incremental_updates.len() as u32,
-                });
-            }
-        }
+            .map_err(Status::internal)?
+            .into_iter()
+            .map(session_info)
+            .collect();
 
         Ok(Response::new(SearchSessionsResponse { sessions }))
     }
