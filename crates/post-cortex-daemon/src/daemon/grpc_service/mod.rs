@@ -1365,13 +1365,21 @@ impl PostCortex for PcxGrpcService {
 pub async fn start_grpc_server(
     memory: Arc<ConversationMemorySystem>,
     addr: std::net::SocketAddr,
+    auth_token: Option<String>,
 ) -> Result<(), String> {
     let service = PcxGrpcService::new(memory);
 
     info!("Starting gRPC server on {}", addr);
 
-    tonic::transport::Server::builder()
-        .add_service(service.into_server())
+    let mut builder = tonic::transport::Server::builder();
+    let router = match auth_token {
+        Some(token) => builder.add_service(PostCortexServer::with_interceptor(
+            service,
+            crate::daemon::auth::grpc_interceptor(Arc::new(token)),
+        )),
+        None => builder.add_service(service.into_server()),
+    };
+    router
         .serve(addr)
         .await
         .map_err(|e| format!("gRPC server error: {e}"))

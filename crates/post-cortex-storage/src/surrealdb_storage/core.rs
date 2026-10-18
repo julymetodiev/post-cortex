@@ -17,7 +17,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use std::sync::Arc;
 use surrealdb::engine::any::connect;
-use surrealdb::opt::auth::Root;
+use surrealdb::opt::auth::{Namespace, Root};
 use surrealdb::types::SurrealValue;
 use tracing::info;
 use uuid::Uuid;
@@ -86,18 +86,29 @@ impl SurrealDBStorage {
         // Connect to SurrealDB via WebSocket
         let db = connect(&endpoint).await?;
 
-        // Authenticate if credentials provided
-        if let (Some(user), Some(pass)) = (username, password) {
-            db.signin(Root {
-                username: user.to_string(),
-                password: pass.to_string(),
-            })
-            .await?;
-            info!("SurrealDBStorage: Authenticated as {}", user);
-        }
-
         let namespace = namespace.unwrap_or("post_cortex").to_string();
         let database = database.unwrap_or("main").to_string();
+
+        // Authenticate if credentials provided. `root` signs in at root level;
+        // any other user is a namespace user (`DEFINE USER … ON NAMESPACE`) of
+        // the namespace selected below, so the daemon need not hold root.
+        if let (Some(user), Some(pass)) = (username, password) {
+            if user == "root" {
+                db.signin(Root {
+                    username: user.to_string(),
+                    password: pass.to_string(),
+                })
+                .await?;
+            } else {
+                db.signin(Namespace {
+                    namespace: namespace.clone(),
+                    username: user.to_string(),
+                    password: pass.to_string(),
+                })
+                .await?;
+            }
+            info!("SurrealDBStorage: Authenticated as {}", user);
+        }
 
         info!(
             "SurrealDBStorage: Using namespace '{}', database '{}'",

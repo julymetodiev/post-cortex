@@ -93,6 +93,8 @@ pub struct SystemConfig {
     pub auto_vectorize_on_update: bool,
     /// Whether cross-session semantic search is enabled
     pub cross_session_search_enabled: bool,
+    /// Secret / personal-data redaction on the canonical write path
+    pub redaction: post_cortex_core::redact::RedactionConfig,
     /// Storage backend type
     #[cfg(feature = "surrealdb-storage")]
     pub storage_backend: post_cortex_storage::traits::StorageBackendType,
@@ -136,6 +138,7 @@ impl Default for SystemConfig {
             semantic_search_threshold: 0.7,
             auto_vectorize_on_update: true,
             cross_session_search_enabled: true,
+            redaction: post_cortex_core::redact::RedactionConfig::default(),
             // Storage backend defaults
             #[cfg(feature = "surrealdb-storage")]
             storage_backend: post_cortex_storage::traits::StorageBackendType::RocksDB,

@@ -23,6 +23,7 @@
 //! Provides lock-free HTTP/SSE transport for MCP JSON-RPC, enabling multiple
 //! Claude Code instances to share a single RocksDB instance.
 
+pub mod auth;
 pub mod coerce;
 pub mod config;
 pub mod format_helpers;

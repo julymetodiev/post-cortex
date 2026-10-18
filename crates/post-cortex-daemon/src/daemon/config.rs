@@ -67,6 +67,23 @@ pub struct DaemonConfig {
     /// SurrealDB database (default: "main")
     #[serde(default = "default_surrealdb_database")]
     pub surrealdb_database: String,
+
+    /// Bearer token required on every HTTP (except `/health`) and gRPC call.
+    /// Unset = no authentication, only safe on a loopback bind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
+
+    /// Redact secrets and personal data on every write (default: true)
+    #[serde(default = "default_redact")]
+    pub redact: bool,
+
+    /// Extra redaction regexes; matches become `[REDACTED:custom]`
+    #[serde(default)]
+    pub redact_patterns: Vec<String>,
+}
+
+fn default_redact() -> bool {
+    true
 }
 
 fn default_grpc_port() -> u16 {
@@ -98,6 +115,9 @@ impl Default for DaemonConfig {
             surrealdb_password: None,
             surrealdb_namespace: default_surrealdb_namespace(),
             surrealdb_database: default_surrealdb_database(),
+            auth_token: None,
+            redact: default_redact(),
+            redact_patterns: Vec::new(),
         }
     }
 }
@@ -194,7 +214,34 @@ impl DaemonConfig {
             );
         }
 
+        if let Ok(token) = std::env::var("PC_AUTH_TOKEN") {
+            config.auth_token = (!token.is_empty()).then_some(token);
+            tracing::debug!("Overriding auth_token from PC_AUTH_TOKEN environment variable");
+        }
+
+        if let Ok(redact) = std::env::var("PC_REDACT") {
+            config.redact = !matches!(redact.as_str(), "0" | "false" | "no" | "off");
+            tracing::debug!("Overriding redact from PC_REDACT environment variable");
+        }
+
         config
+    }
+
+    /// HTTP client for talking to the daemon: carries the bearer token when
+    /// one is configured, so CLI commands and the stdio proxy pass auth.
+    pub fn http_client(&self) -> reqwest::Client {
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Some(token) = &self.auth_token
+            && let Ok(mut value) =
+                reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+        {
+            value.set_sensitive(true);
+            headers.insert(reqwest::header::AUTHORIZATION, value);
+        }
+        reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .unwrap_or_default()
     }
 
     /// Create example config file at the default location
@@ -230,6 +277,8 @@ impl DaemonConfig {
              #   PC_SURREALDB_ENDPOINT - SurrealDB WebSocket endpoint (e.g., \"ws://localhost:8000\")\n\
              #   PC_SURREALDB_USER - SurrealDB username\n\
              #   PC_SURREALDB_PASS - SurrealDB password\n\
+             #   PC_AUTH_TOKEN - Bearer token required by HTTP/gRPC clients\n\
+             #   PC_REDACT - \"0\" disables redaction of secrets/personal data\n\
              # \n\
              # Priority: Environment > Config file > Defaults\n\n\
              {}",

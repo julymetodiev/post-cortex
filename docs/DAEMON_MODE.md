@@ -165,9 +165,66 @@ pkill -f post-cortex-daemon
 ## Security
 
 - Localhost only by default (127.0.0.1)
-- No authentication (single-user design)
 - File system permissions protect data directory
-- CORS enabled for local development
+- No CORS layer: the daemon is not meant to be called from browsers
+
+### Bearer token
+
+Set a token before binding to anything but loopback (tailnet, LAN):
+
+```toml
+# ~/.post-cortex/daemon.toml
+host = "100.125.13.76"
+auth_token = "<long random string>"   # or PC_AUTH_TOKEN
+```
+
+Every HTTP request except `GET /health`, and every gRPC call, must then send
+`Authorization: Bearer <token>`. The `pcx` CLI and the stdio proxy read the
+same config and send it automatically. MCP clients over HTTP add the header,
+e.g. `claude mcp add --transport http post-cortex http://host:3737/mcp --header "Authorization: Bearer <token>"`.
+Without a token on a non-loopback bind the daemon logs a warning at startup.
+
+### Redaction
+
+On by default. Every write goes through the canonical `update_context`, which
+replaces secrets and personal data with `[REDACTED:<kind>]` in the title,
+description, details, examples, implications, entity names, relation
+endpoints/context and code snippets:
+
+| Kind | What |
+|---|---|
+| `private_key` | PEM private key blocks |
+| `jwt` | JSON Web Tokens |
+| `api_key` | `sk-…`, `sk-ant-…`, `ghp_…`, `github_pat_…`, `glpat-…`, `AKIA…`, `xox?-…`, `AIza…` |
+| `telegram_token` | Telegram bot tokens |
+| `bearer` | `Bearer <token>` (the word is kept) |
+| `url_password` | password in `scheme://user:pass@host` (user and host kept) |
+| `secret` | value of `password`/`token`/`secret`/`api_key`/… `=` or `:` |
+| `email`, `phone` | e-mail addresses; `+<country>…` and Bulgarian `08x/09x` numbers |
+| `ip` | public IPv4 only — private, loopback, link-local and tailnet (100.64/10) are kept |
+
+Kept on purpose: UUIDs, host/pod/node names, private addresses — they are
+pseudonymous and needed to correlate events. Replacements are deterministic,
+so an entity and the relations that name it stay consistent.
+
+```toml
+redact = true                        # PC_REDACT=0 disables
+redact_patterns = ['ORD-\d{6}']      # extra regexes → [REDACTED:custom]
+```
+
+Counts per kind are logged (`update_context: redacted sensitive values`),
+never the values.
+
+### SurrealDB credentials
+
+`surrealdb_username = "root"` signs in at root level; any other user is
+treated as a namespace user (`DEFINE USER … ON NAMESPACE`) of
+`surrealdb_namespace`, so the daemon does not need root:
+
+```sql
+USE NS post_cortex;
+DEFINE USER pcx ON NAMESPACE PASSWORD '…' ROLES OWNER;
+```
 
 ## Troubleshooting
 

@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 /// Start RMCP-based SSE server
@@ -37,8 +37,17 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
     // Create memory system with embeddings enabled
     let mut system_config = post_cortex_memory::SystemConfig {
         data_directory: config.data_directory.clone(),
+        redaction: post_cortex_core::redact::RedactionConfig {
+            enabled: config.redact,
+            extra_patterns: config.redact_patterns.clone(),
+        },
         ..Default::default()
     };
+    info!(
+        "  Redaction: {} ({} extra patterns)",
+        if config.redact { "on" } else { "OFF" },
+        config.redact_patterns.len()
+    );
 
     #[cfg(feature = "embeddings")]
     {
@@ -149,9 +158,25 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
         .with_state(api_state);
 
     // Create router with MCP service and API routes
-    let router = Router::new()
+    let mut router = Router::new()
         .nest_service("/mcp", mcp_service)
         .merge(api_router);
+    match &config.auth_token {
+        Some(token) => {
+            router = router.layer(axum::middleware::from_fn_with_state(
+                Arc::new(token.clone()),
+                crate::daemon::auth::require_bearer,
+            ));
+            info!("  Auth: bearer token required (HTTP except /health, gRPC)");
+        }
+        None if !addr.ip().is_loopback() => {
+            warn!(
+                "  Auth: NONE on non-loopback bind {} — set auth_token / PC_AUTH_TOKEN",
+                addr
+            );
+        }
+        None => info!("  Auth: none (loopback bind)"),
+    }
 
     // Create TCP listener
     let listener = tokio::net::TcpListener::bind(addr)
@@ -180,9 +205,11 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
             .parse()
             .map_err(|e| format!("Invalid gRPC address: {}", e))?;
         let grpc_memory = memory_system.clone();
+        let grpc_token = config.auth_token.clone();
         tokio::spawn(async move {
             if let Err(e) =
-                crate::daemon::grpc_service::start_grpc_server(grpc_memory, grpc_addr).await
+                crate::daemon::grpc_service::start_grpc_server(grpc_memory, grpc_addr, grpc_token)
+                    .await
             {
                 error!("gRPC server error: {}", e);
             }

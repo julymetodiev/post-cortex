@@ -39,6 +39,9 @@ doc_lazy_continuation = "allow"
 needless_range_loop = "allow"
 too_many_arguments = "allow"
 useless_vec = "allow"
+# `async_trait` marks generated methods `#[must_use]` while they return a
+# must-use boxed future; clippy 1.99 flags every such trait method.
+double_must_use = "allow"
 
 # `missing_docs` as a workspace-wide warning surfaces the documentation
 # gap (~1073 undocumented struct fields + enum variants at 0.2.0) without
@@ -88,8 +91,8 @@ candle-transformers = "0.9"
 tokenizers = "0.22"
 hf-hub = "0.4"
 model2vec-rs = "0.2"
-surrealdb = { version = "3.0.0", features = ["kv-mem", "protocol-ws"] }
-surrealdb-types = "3.0.0"
+surrealdb = { version = "3.3.4", features = ["kv-mem", "protocol-ws"] }
+surrealdb-types = "3.3.4"
 axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }

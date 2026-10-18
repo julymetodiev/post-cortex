@@ -56,6 +56,9 @@ pub mod core;
 /// used to enrich semantic search with relationship traversal.
 pub mod graph;
 
+/// Secret and personal-data redaction applied on the canonical write path.
+pub mod redact;
+
 /// Canonical [`services::PostCortexService`] trait. Every transport
 /// (gRPC, MCP, REST) delegates to the same single implementation in
 /// `post-cortex-memory`.

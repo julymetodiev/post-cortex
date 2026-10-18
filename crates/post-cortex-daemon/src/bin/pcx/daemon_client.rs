@@ -48,7 +48,7 @@ impl DaemonClient {
     pub fn new(config: &DaemonConfig) -> Self {
         Self {
             base_url: format!("http://{}:{}", config.host, config.port),
-            client: reqwest::Client::new(),
+            client: config.http_client(),
         }
     }
 

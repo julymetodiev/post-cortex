@@ -510,6 +510,7 @@ mod tests {
             surrealdb_password: None,
             surrealdb_namespace: "post_cortex".to_string(),
             surrealdb_database: "main".to_string(),
+            ..Default::default()
         }
     }
 

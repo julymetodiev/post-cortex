@@ -25,6 +25,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use post_cortex_core::core::context_update::{ContextUpdate, EntityRelationship, TypedEntity};
 use post_cortex_core::core::error::SystemError;
+use post_cortex_core::redact::{RedactionCounts, Redactor};
 use post_cortex_core::services::{
     AdminRequest, AdminResponse, AssembleContextRequest, AssembleContextResponse,
     BulkUpdateContextRequest, BulkUpdateContextResponse, HealthReport, ManageEntityRequest,
@@ -49,6 +50,7 @@ use crate::pipeline::{
 pub struct MemoryServiceImpl {
     system: Arc<ConversationMemorySystem>,
     pipeline: Arc<Pipeline>,
+    redactor: Arc<Redactor>,
 }
 
 impl MemoryServiceImpl {
@@ -68,7 +70,15 @@ impl MemoryServiceImpl {
         config: PipelineConfig,
     ) -> Self {
         let pipeline = Arc::new(Pipeline::start(config, Arc::clone(&system)));
-        Self { system, pipeline }
+        let (redactor, invalid) = Redactor::new(&system.config.redaction);
+        for p in invalid {
+            warn!("redaction: skipping invalid extra pattern {p}");
+        }
+        Self {
+            system,
+            pipeline,
+            redactor: Arc::new(redactor),
+        }
     }
 
     /// Borrow the non-blocking pipeline. Exposed so transport adapters
@@ -127,8 +137,9 @@ impl PostCortexService for MemoryServiceImpl {
     )]
     async fn update_context(
         &self,
-        req: UpdateContextRequest,
+        mut req: UpdateContextRequest,
     ) -> Result<UpdateContextResponse, SystemError> {
+        log_redactions(req.session_id, &self.redactor.redact_request(&mut req));
         validate_update_request(&req)?;
 
         let description = build_description(&req);
@@ -177,8 +188,11 @@ impl PostCortexService for MemoryServiceImpl {
     )]
     async fn bulk_update_context(
         &self,
-        req: BulkUpdateContextRequest,
+        mut req: BulkUpdateContextRequest,
     ) -> Result<BulkUpdateContextResponse, SystemError> {
+        for item in &mut req.updates {
+            log_redactions(item.session_id, &self.redactor.redact_request(item));
+        }
         // Pre-validate the whole batch first so a bad item doesn't leave us
         // with a half-applied write (storage-actor batching lands later;
         // until then we still fail-fast on validation but persist
@@ -299,6 +313,14 @@ impl PostCortexService for MemoryServiceImpl {
 // behaviour by going through `update_context` / `bulk_update_context`; the
 // helpers below are intentionally private so transports cannot bypass them.
 // ---------------------------------------------------------------------------
+
+/// Redaction never fails a write; it is logged so a spike (e.g. an agent
+/// pasting a log full of addresses) is visible without exposing the values.
+fn log_redactions(session_id: Uuid, counts: &RedactionCounts) {
+    if !counts.is_empty() {
+        tracing::info!(%session_id, ?counts, "update_context: redacted sensitive values");
+    }
+}
 
 /// Strict validation lifted from the legacy gRPC helper. Rejects any input
 /// that would corrupt the entity graph (empty title+description, missing

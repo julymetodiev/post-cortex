@@ -751,3 +751,61 @@ async fn test_full_normalized_roundtrip() {
         "Added new functionality"
     );
 }
+
+/// register_source upserts on entry_id: it must create the reference on a
+/// table that already has other rows, keep a single row on re-registration,
+/// and pick up the new hash. Guards the `UPSERT … WHERE` path across
+/// SurrealDB upgrades (3.3 evaluates WHERE first).
+#[tokio::test]
+async fn test_register_source_creates_then_updates_single_row() {
+    use crate::traits::FreshnessStorage;
+    use post_cortex_proto::pb::{FreshnessStatus, SourceReference};
+
+    let storage = SurrealDBStorage::new("mem://", None, None, None, None)
+        .await
+        .expect("in-memory storage");
+    let session = Uuid::new_v4();
+    let entry_id = "src/lib.rs::parse/v1".to_string();
+    let reference = |hash: &[u8]| SourceReference {
+        entry_id: entry_id.clone(),
+        file_path: "src/lib.rs".into(),
+        content_hash: hash.to_vec(),
+        captured_at_unix: 1,
+        scope: None,
+    };
+
+    // An unrelated row first, so the WHERE has rows to scan and none matches.
+    let mut other = reference(b"x");
+    other.entry_id = "src/other.rs::f/v1".into();
+    storage.register_source(session, other).await.unwrap();
+
+    storage
+        .register_source(session, reference(b"h1"))
+        .await
+        .unwrap();
+    let first = storage.check_freshness(&entry_id, b"h1").await.unwrap();
+    assert_eq!(
+        first.status,
+        FreshnessStatus::Fresh as i32,
+        "created on first register"
+    );
+
+    storage
+        .register_source(session, reference(b"h2"))
+        .await
+        .unwrap();
+    let second = storage.check_freshness(&entry_id, b"h2").await.unwrap();
+    assert_eq!(
+        second.status,
+        FreshnessStatus::Fresh as i32,
+        "hash updated on re-register"
+    );
+
+    let mut res = storage
+        .db
+        .query("SELECT count() AS n FROM source_reference GROUP ALL")
+        .await
+        .unwrap();
+    let n: Option<i64> = res.take("n").unwrap();
+    assert_eq!(n, Some(2), "re-registering must not duplicate the row");
+}
