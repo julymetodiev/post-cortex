@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   embedded the second twice and never the first, so it was unsearchable.
   Jobs now vectorize their own update id (`ContentVectorizer::vectorize_update`)
   and skip ids already vectorized.
+- **Sessions with a NULL name/description could not be loaded** ("Session
+  not found"): `SurrealValue` reads JSON NULL into `Option<String>` as an
+  error. Session reads now coalesce both fields to NONE
+  (`select_session_record`); `session_exists` and session delete go through
+  the same path.
+- **Backfilled vectors were dated "now".** `vectorize_session` stamped every
+  vector with the embedding time, so recency-biased search saw old records as
+  new. Vectors now carry the update's timestamp (entities: `last_mentioned`),
+  via `VectorMetadata::with_timestamp`.
 - **`pcx start` ignored `daemon.toml` host/port and `PC_HOST`/`PC_PORT`**:
   the clap defaults always overwrote them. Flags now override only when
   given. The stdio proxy's background start also passed `PCX_*` instead of
@@ -42,6 +51,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (workspace-scope `semantic_search`):** results use the same fields
+  as session and global scope — `content_id`, `session_id`, `content_type`,
+  `text_content`, `similarity_score`, `importance_score`, `combined_score`,
+  `timestamp` — instead of `entry_id`/`content`/`score`/`type`. One JSONPath
+  `select` now works for every scope; the `select` examples in the tool
+  schema were also wrong (`$.total_matches` does not exist) and are fixed.
 - **SurrealDB SDK 3.0 → 3.3.4.** Verified against a SurrealDB 3.3.4 server
   upgraded in place from 3.0 (record counts identical, HNSW `REBUILD INDEX`
   and kNN OK). Not tested against 3.0 servers — upgrade the server first.

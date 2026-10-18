@@ -167,8 +167,7 @@ impl Storage for SurrealDBStorage {
         );
 
         // Load session metadata
-        let record: Option<SessionRecord> =
-            self.db.select(("session", session_id.to_string())).await?;
+        let record = self.select_session_record(session_id).await?;
 
         let r = record.ok_or_else(|| anyhow::anyhow!("Session not found"))?;
 
@@ -270,7 +269,13 @@ impl Storage for SurrealDBStorage {
         debug!("SurrealDBStorage: Deleting session with ID: {}", session_id);
 
         // Delete session
-        let _: Option<SessionRecord> = self.db.delete(("session", session_id.to_string())).await?;
+        // Raw DELETE: a typed delete deserializes the removed row, and rows
+        // with NULL name/description (see select_session_record) cannot be.
+        self.db
+            .query("DELETE type::record('session', $id)")
+            .bind(("id", session_id.to_string()))
+            .await?
+            .check()?;
 
         // Delete all context updates for this session
         self.db
@@ -368,10 +373,7 @@ impl Storage for SurrealDBStorage {
     }
 
     async fn session_exists(&self, session_id: Uuid) -> Result<bool> {
-        let record: Option<SessionRecord> =
-            self.db.select(("session", session_id.to_string())).await?;
-
-        Ok(record.is_some())
+        Ok(self.select_session_record(session_id).await?.is_some())
     }
 
     async fn batch_save_updates(

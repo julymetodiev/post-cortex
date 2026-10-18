@@ -809,3 +809,33 @@ async fn test_register_source_creates_then_updates_single_row() {
     let n: Option<i64> = res.take("n").unwrap();
     assert_eq!(n, Some(2), "re-registering must not duplicate the row");
 }
+
+/// Sessions written with `name`/`description` = NULL (instead of NONE) by
+/// older clients must still load; three real sessions were unloadable
+/// ("Session not found") because of it.
+#[tokio::test]
+async fn test_load_session_with_null_name_and_description() {
+    let storage = SurrealDBStorage::new("mem://", None, None, None, None)
+        .await
+        .expect("in-memory storage");
+    let id = Uuid::new_v4();
+    storage
+        .db
+        .query(
+            "CREATE type::record('session', $id) CONTENT { session_id: $id, name: NULL, \
+             description: NULL, created_at: '2026-05-17T16:34:52Z', last_updated: '2026-05-17T16:59:20Z', \
+             user_preferences: {}, vectorized_update_ids: [], total_updates: 0 }",
+        )
+        .bind(("id", id.to_string()))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+
+    let session = storage
+        .load_session(id)
+        .await
+        .expect("NULL name must not hide the session");
+    assert_eq!(session.id(), id);
+    assert!(session.name().is_none());
+}

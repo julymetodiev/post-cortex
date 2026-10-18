@@ -132,6 +132,26 @@ impl SurrealDBStorage {
         Ok(storage)
     }
 
+    /// Load one session row. `name`/`description` are coalesced to NONE:
+    /// older clients wrote JSON NULL there, which `SurrealValue` cannot
+    /// read into `Option<String>` — the whole session then failed to load
+    /// and surfaced as "Session not found".
+    pub(super) async fn select_session_record(
+        &self,
+        session_id: uuid::Uuid,
+    ) -> surrealdb::Result<Option<super::records::SessionRecord>> {
+        let mut res = self
+            .db
+            .query(
+                "SELECT *, (name ?? NONE) AS name, (description ?? NONE) AS description \
+                 FROM type::record('session', $id)",
+            )
+            .bind(("id", session_id.to_string()))
+            .await?;
+        let rows: Vec<super::records::SessionRecord> = res.take(0)?;
+        Ok(rows.into_iter().next())
+    }
+
     /// Select all records from a table
     pub(super) async fn select_all<T: for<'de> Deserialize<'de> + SurrealValue>(
         &self,
