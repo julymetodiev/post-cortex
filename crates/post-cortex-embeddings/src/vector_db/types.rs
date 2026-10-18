@@ -79,6 +79,15 @@ impl VectorMetadata {
         }
     }
 
+    /// Date the vector by its source content, not by when it was embedded:
+    /// a backfill (`vectorize_session`) otherwise makes old records look new
+    /// to recency-biased search.
+    #[must_use]
+    pub fn with_timestamp(mut self, timestamp: chrono::DateTime<chrono::Utc>) -> Self {
+        self.timestamp = timestamp;
+        self
+    }
+
     /// Add custom metadata
     pub fn with_metadata(mut self, key: String, value: String) -> Self {
         self.metadata.insert(key, value);
@@ -199,4 +208,19 @@ pub struct VectorDbStatsSnapshot {
     pub index_efficiency: f64,
     /// Compression ratio when product quantization is enabled (>= 1.0).
     pub quantization_ratio: f64,
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::*;
+
+    #[test]
+    fn with_timestamp_keeps_the_source_time() {
+        let then = chrono::DateTime::parse_from_rfc3339("2026-03-24T10:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let m = VectorMetadata::new("u1".into(), "t".into(), "s".into(), "UpdateContent".into())
+            .with_timestamp(then);
+        assert_eq!(m.timestamp, then);
+    }
 }

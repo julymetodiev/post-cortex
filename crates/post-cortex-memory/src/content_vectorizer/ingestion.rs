@@ -137,7 +137,8 @@ impl ContentVectorizer {
             prepared_text,
             session.id().to_string(),
             format!("{content_type:?}"),
-        );
+        )
+        .with_timestamp(update.timestamp);
 
         if self.add_and_persist(embedding, metadata).await {
             debug!("Successfully vectorized and persisted update {}", update.id);
@@ -263,7 +264,8 @@ impl ContentVectorizer {
                             entity_text.clone(),
                             session.id().to_string(),
                             "EntityDescription".to_string(),
-                        );
+                        )
+                        .with_timestamp(entity_data.last_mentioned);
                         Some((entity_text, metadata))
                     } else {
                         None
@@ -282,12 +284,15 @@ impl ContentVectorizer {
                 let entity_text = build_entity_description(session, entity_name, entity_data);
                 if self.should_vectorize_text(&entity_text) {
                     texts_to_embed.push(entity_text.clone());
-                    metadata_list.push(VectorMetadata::new(
-                        format!("entity:{entity_name}"),
-                        entity_text,
-                        session.id().to_string(),
-                        "EntityDescription".to_string(),
-                    ));
+                    metadata_list.push(
+                        VectorMetadata::new(
+                            format!("entity:{entity_name}"),
+                            entity_text,
+                            session.id().to_string(),
+                            "EntityDescription".to_string(),
+                        )
+                        .with_timestamp(entity_data.last_mentioned),
+                    );
                 }
             }
 
@@ -334,12 +339,15 @@ impl ContentVectorizer {
                 let content_type = determine_content_type(update);
                 let prepared_text = self.prepare_text_for_vectorization(&raw_text);
                 texts_to_embed.push(prepared_text.clone());
-                metadata_list.push(VectorMetadata::new(
-                    update.id.to_string(),
-                    prepared_text,
-                    session.id().to_string(),
-                    format!("{content_type:?}"),
-                ));
+                metadata_list.push(
+                    VectorMetadata::new(
+                        update.id.to_string(),
+                        prepared_text,
+                        session.id().to_string(),
+                        format!("{content_type:?}"),
+                    )
+                    .with_timestamp(update.timestamp),
+                );
             }
         }
 
@@ -368,7 +376,8 @@ impl ContentVectorizer {
                         prepared_text.clone(),
                         session.id().to_string(),
                         format!("{content_type:?}"),
-                    );
+                    )
+                    .with_timestamp(update.timestamp);
                     Some((prepared_text, metadata))
                 } else {
                     None
