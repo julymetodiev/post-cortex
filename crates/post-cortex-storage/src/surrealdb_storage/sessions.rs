@@ -471,14 +471,12 @@ impl Storage for SurrealDBStorage {
             );
             Vec::new()
         });
+        let entity_count = entities.len();
         let mut entity_graph = SimpleEntityGraph::new();
-        for entity in &entities {
-            entity_graph.add_or_update_entity(
-                entity.name.clone(),
-                entity.entity_type.clone(),
-                entity.last_mentioned,
-                entity.description.as_deref().unwrap_or(""),
-            );
+        // As stored: re-adding them as mentions would reset mention_count,
+        // importance_score and first_mentioned.
+        for entity in entities {
+            entity_graph.insert_entity(entity);
         }
 
         // Load relationships from native graph and add to entity_graph
@@ -497,7 +495,7 @@ impl Storage for SurrealDBStorage {
         }
         debug!(
             "SurrealDBStorage: Loaded {} entities, graph rebuilt",
-            entities.len()
+            entity_count
         );
 
         // Rebuild StructuredContext from updates
@@ -547,7 +545,7 @@ impl Storage for SurrealDBStorage {
         debug!(
             "SurrealDBStorage: Session loaded (normalized) - {} updates, {} entities",
             session.incremental_updates.len(),
-            entities.len()
+            entity_count
         );
         Ok(session)
     }

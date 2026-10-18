@@ -403,7 +403,21 @@ impl SimpleEntityGraph {
         }
     }
 
-    /// Add or update entity - maintains same API as original SimpleEntityGraph
+    /// Insert (or replace) an entity exactly as given, e.g. when rebuilding
+    /// a graph from storage: unlike
+    /// [`add_or_update_entity`](Self::add_or_update_entity) it keeps the
+    /// stored mention count, importance score and first-mention time.
+    pub fn insert_entity(&mut self, entity: EntityData) {
+        if !self.entity_to_node.contains_key(&entity.name) {
+            let node_index = self.graph.add_node(entity.name.clone());
+            self.entity_to_node.insert(entity.name.clone(), node_index);
+            self.node_to_entity.insert(node_index, entity.name.clone());
+        }
+        self.entities.insert(entity.name.clone(), entity);
+    }
+
+    /// Record a mention of an entity: create it (mention count 1) or bump
+    /// its count and last-mention time.
     pub fn add_or_update_entity(
         &mut self,
         name: String,

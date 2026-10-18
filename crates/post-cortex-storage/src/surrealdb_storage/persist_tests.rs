@@ -191,6 +191,49 @@ async fn incremental_persist_writes_changed_graph() {
     assert_eq!(storage.list_entities(id).await.unwrap().len(), 2);
 }
 
+/// A save/load round trip keeps every entity field, including the ones a
+/// rebuild through `add_or_update_entity` would reset.
+#[tokio::test]
+async fn load_keeps_entity_mention_count_and_importance() {
+    let storage = test_storage().await;
+    let id = Uuid::new_v4();
+    let first = Utc::now() - chrono::Duration::days(3);
+    let last = Utc::now() - chrono::Duration::hours(1);
+
+    let mut graph = SimpleEntityGraph::new();
+    graph.insert_entity(post_cortex_core::core::context_update::EntityData {
+        name: "Rust".into(),
+        entity_type: EntityType::Technology,
+        first_mentioned: first,
+        last_mentioned: last,
+        mention_count: 7,
+        importance_score: 2.5,
+        description: None,
+    });
+    graph.add_or_update_entity("Tokio".into(), EntityType::Technology, last, "runtime");
+    graph.add_or_update_entity("Tokio".into(), EntityType::Technology, last, "");
+    let mut session = ActiveSession::new(id, None, None);
+    session.entity_graph = std::sync::Arc::new(graph);
+    storage.save_session(&session).await.unwrap();
+
+    let loaded = storage.load_session(id).await.unwrap();
+    let rust = &loaded.entity_graph.entities["Rust"];
+    assert_eq!(rust.mention_count, 7);
+    assert_eq!(rust.importance_score, 2.5);
+    assert_eq!(rust.first_mentioned.timestamp(), first.timestamp());
+    assert_eq!(rust.last_mentioned.timestamp(), last.timestamp());
+    assert_eq!(rust.description, None);
+    let tokio = &loaded.entity_graph.entities["Tokio"];
+    assert_eq!(tokio.mention_count, 2);
+    assert_eq!(tokio.description.as_deref(), Some("runtime"));
+
+    // Loading again (and saving the loaded copy) does not drift.
+    storage.save_session(&loaded).await.unwrap();
+    let again = storage.load_session(id).await.unwrap();
+    assert_eq!(again.entity_graph.entities["Rust"].mention_count, 7);
+    assert_eq!(again.entity_graph.entities["Tokio"].mention_count, 2);
+}
+
 /// Records written with the old interpolated ids (`table:`id``) are the
 /// records the bound `type::record` ids address.
 #[tokio::test]
