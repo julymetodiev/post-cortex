@@ -109,6 +109,10 @@ The plist file uses these environment variables:
 - `PC_HOST=127.0.0.1` - Bind address (localhost only by default)
 - `PC_PORT=3737` - Port number
 
+Binding to a non-loopback address? Also set `PC_ALLOWED_HOSTS` (comma-separated
+host names/IPs clients use, e.g. `my-mac.tailnet.ts.net,100.64.0.7`) or remote
+clients get 403, and `PC_AUTH_TOKEN`. See [docs/DAEMON_MODE.md](../../docs/DAEMON_MODE.md#allowed-hosts-dns-rebinding).
+
 ### Customizing via plist file
 
 Edit `~/Library/LaunchAgents/com.post-cortex.daemon.plist` and reload:

@@ -52,6 +52,8 @@ Environment variables:
 | `PC_PORT` | `51900` | HTTP / SSE port |
 | `PC_GRPC_PORT` | `51901` | gRPC port |
 | `PC_DATA_DIR` | `~/.post-cortex/data` | RocksDB data directory |
+| `PC_AUTH_TOKEN` | _unset_ | Bearer token for HTTP (except `/health`) and gRPC |
+| `PC_ALLOWED_HOSTS` | loopback + `PC_HOST` | Extra `Host` headers (`host` or `host:port`, comma-separated) accepted on `/mcp` and `/api/*`; others get 403. Set it when binding to `0.0.0.0`. `*` disables the check |
 | `RUST_LOG` | `info` | tracing-subscriber filter |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | _unset_ | OTLP collector endpoint (with `otel` feature) |
 

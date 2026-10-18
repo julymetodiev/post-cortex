@@ -34,7 +34,9 @@ post-cortex is designed as a local-first conversation memory system. The expecte
 - All persisted data lives under the user's home directory.
 - Embedding compute and HNSW search are local; no model weights or queries leave the machine.
 
-Operators who change `PC_HOST` to a non-loopback interface must front the daemon with TLS termination and authentication of their own choosing — the daemon performs no authentication on its REST / gRPC / MCP surfaces.
+- `/mcp` and `/api/*` reject requests whose `Host` header is not on the allowlist (`localhost`, `127.0.0.1`, `::1`, a non-wildcard bind host, plus `allowed_hosts` / `PC_ALLOWED_HOSTS`) with `403`, so web pages cannot reach the daemon via DNS rebinding.
+
+Operators who change `PC_HOST` to a non-loopback interface must set `auth_token` (bearer auth on HTTP and gRPC), list the names clients use in `allowed_hosts`, and front the daemon with TLS termination — the daemon does not terminate TLS itself. See [docs/DAEMON_MODE.md](docs/DAEMON_MODE.md#security).
 
 ## Build-time integrity
 

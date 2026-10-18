@@ -45,6 +45,7 @@ data_directory = "/Users/username/.post-cortex/data"
 PC_HOST=127.0.0.1
 PC_PORT=3737
 PC_DATA_DIR=~/.post-cortex/data
+PC_ALLOWED_HOSTS=my-mac.tailnet.ts.net,100.64.0.7:3737  # extra allowed Host headers
 RUST_LOG=info  # debug, trace
 ```
 
@@ -52,6 +53,7 @@ RUST_LOG=info  # debug, trace
 - Host: 127.0.0.1 (localhost only)
 - Port: 3737
 - Data: ~/.post-cortex/data
+- Allowed `Host` headers: `localhost`, `127.0.0.1`, `::1` (+ `host` if not a wildcard)
 
 ## Commands
 
@@ -183,6 +185,37 @@ Every HTTP request except `GET /health`, and every gRPC call, must then send
 same config and send it automatically. MCP clients over HTTP add the header,
 e.g. `claude mcp add --transport http post-cortex http://host:3737/mcp --header "Authorization: Bearer <token>"`.
 Without a token on a non-loopback bind the daemon logs a warning at startup.
+
+### Allowed hosts (DNS rebinding)
+
+`/mcp` and `/api/*` only answer requests whose `Host` header is on an
+allowlist; anything else gets `403 Forbidden: Host header is not allowed`.
+This stops a web page from reaching the daemon through a DNS name it points
+at `127.0.0.1` (RUSTSEC-2026-0189). `/health` accepts any `Host`.
+
+Always allowed: `localhost`, `127.0.0.1`, `::1`, and `host` itself when it is
+a specific address (not `0.0.0.0` / `::`). `allowed_hosts` adds to that list:
+
+```toml
+# ~/.post-cortex/daemon.toml
+host = "0.0.0.0"
+allowed_hosts = ["my-mac.tailnet.ts.net", "100.64.0.7:3737"]
+# or PC_ALLOWED_HOSTS=my-mac.tailnet.ts.net,100.64.0.7:3737
+```
+
+| Entry | Matches |
+|---|---|
+| `my-mac.tailnet.ts.net` | that name on any port |
+| `my-mac.tailnet.ts.net:3737` | that name on port 3737 only (`Host` must carry the port) |
+| `100.64.0.7`, `::1`, `[fd7a::1]` | that IP on any port |
+| `[fd7a::1]:3737` | that IPv6 address on port 3737 only |
+| `*` | everything: disables the check (warned at startup; not recommended) |
+
+Matching is case-insensitive; no schemes, paths or wildcards inside names.
+List every name clients put in their URL (`http://<name>:3737/mcp`). Bound to
+`0.0.0.0` / `::` with no `allowed_hosts`, the daemon warns at startup that
+remote clients will get 403. The allowlist is not authentication: use
+`auth_token` too.
 
 ### Redaction
 

@@ -40,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Security: DNS rebinding on the HTTP endpoints (RUSTSEC-2026-0189).** A web
+  page could reach a local daemon through a DNS name resolving to `127.0.0.1`.
+  rmcp is upgraded from 0.12 to 3.5.1, whose Streamable HTTP transport checks
+  the `Host` header, and the same check now guards the REST `/api/*` routes;
+  other hosts get `403`. New `allowed_hosts` / `PC_ALLOWED_HOSTS` adds names
+  (`host` or `host:port`) to the default `localhost`, `127.0.0.1`, `::1` and
+  non-wildcard `host`; `["*"]` turns the check off. `/health` stays open.
+  A wildcard bind without `allowed_hosts` logs a warning. MCP tool names,
+  schemas and results are unchanged.
 - **MCP `manage_workspace`, `session` `list`, and `update_conversation_context`
   returned only the summary line** ("Found 5 workspaces") and dropped the result
   data. They now go through the same `mcp_result_to_call_result` as the other
@@ -174,6 +183,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requests concurrently on a bounded queue.
 
 ### Migration
+
+**Binding to `0.0.0.0` / `::` (tailnet, LAN):** set `allowed_hosts` (or
+`PC_ALLOWED_HOSTS`) to the host names and IPs clients put in their URL, e.g.
+`allowed_hosts = ["my-mac.tailnet.ts.net", "100.64.0.7"]`, or remote MCP and
+REST calls get `403 Forbidden: Host header is not allowed`. Loopback clients
+and clients that reach a daemon bound to one specific IP by that IP need no
+change.
 
 Back up the SurrealDB database before the first start: the schema change is
 forward-only, and an older daemon will not start against it afterwards.
