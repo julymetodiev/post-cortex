@@ -37,11 +37,37 @@ use uuid::Uuid;
 ///
 /// Uses DashMap with sequential IDs for lock-free recent updates storage.
 /// Older updates are automatically evicted when capacity is reached.
+///
+/// Entries are stored as `Arc<ContextUpdate>` so the same allocation can be
+/// shared with `ActiveSession::incremental_updates` and so copying the hot
+/// tier (see the `Clone` impl) only bumps reference counts. Prefer the
+/// non-cloning helpers ([`for_each`](Self::for_each), [`any`](Self::any),
+/// [`find`](Self::find), [`contains_id`](Self::contains_id),
+/// [`snapshot_arcs`](Self::snapshot_arcs)) over [`iter`](Self::iter), which
+/// deep-clones every update for backwards compatibility.
 #[derive(Debug)]
 pub struct HotContext {
-    updates: DashMap<u64, ContextUpdate>,
+    updates: DashMap<u64, Arc<ContextUpdate>>,
     next_id: Arc<AtomicU64>,
     max_size: usize,
+}
+
+/// Deep copy: the clone gets its own map and id counter, so pushing into
+/// the clone never affects the original (the updates themselves are shared
+/// `Arc`s, so this costs one refcount bump per entry).
+impl Clone for HotContext {
+    fn clone(&self) -> Self {
+        let current_id = self.next_id.load(Ordering::Acquire);
+        let updates = DashMap::with_capacity(self.updates.len());
+        for entry in self.updates.iter() {
+            updates.insert(*entry.key(), Arc::clone(entry.value()));
+        }
+        Self {
+            updates,
+            next_id: Arc::new(AtomicU64::new(current_id)),
+            max_size: self.max_size,
+        }
+    }
 }
 
 impl HotContext {
@@ -56,11 +82,14 @@ impl HotContext {
 
     /// Push new update, evicting oldest if at capacity (lock-free)
     ///
+    /// Accepts either an owned `ContextUpdate` or an `Arc<ContextUpdate>`
+    /// (the latter shares the allocation with the caller).
+    ///
     /// Uses Release ordering to ensure the insert is visible before the ID increment
     /// is visible to readers using Acquire ordering.
-    pub fn push(&self, update: ContextUpdate) {
+    pub fn push(&self, update: impl Into<Arc<ContextUpdate>>) {
         let id = self.next_id.fetch_add(1, Ordering::Release);
-        self.updates.insert(id, update);
+        self.updates.insert(id, update.into());
 
         // Evict oldest if we exceed capacity (lock-free cleanup)
         if id >= self.max_size as u64 {
@@ -69,12 +98,14 @@ impl HotContext {
         }
     }
 
-    /// Get N most recent updates (lock-free)
-    ///
-    /// Note: In a concurrent environment, some entries may have been evicted
-    /// between loading the ID and fetching. This is expected lock-free behavior.
-    /// The returned Vec may contain fewer than N elements.
-    pub fn get_recent(&self, n: usize) -> Vec<ContextUpdate> {
+    /// Valid id range (oldest first) for the retained window.
+    fn id_range(&self) -> std::ops::Range<u64> {
+        let current_id = self.next_id.load(Ordering::Acquire);
+        current_id.saturating_sub(self.max_size as u64)..current_id
+    }
+
+    /// Get N most recent updates as shared handles, newest first (lock-free).
+    pub fn get_recent_arcs(&self, n: usize) -> Vec<Arc<ContextUpdate>> {
         let current_id = self.next_id.load(Ordering::Acquire);
         // Limit to max_size to avoid iterating over evicted entries
         let effective_n = n.min(self.max_size);
@@ -83,7 +114,32 @@ impl HotContext {
         let mut results = Vec::with_capacity(effective_n);
         for id in (start_id..current_id).rev() {
             if let Some(entry) = self.updates.get(&id) {
-                results.push(entry.clone());
+                results.push(Arc::clone(entry.value()));
+            }
+        }
+        results
+    }
+
+    /// Get N most recent updates (lock-free)
+    ///
+    /// Note: In a concurrent environment, some entries may have been evicted
+    /// between loading the ID and fetching. This is expected lock-free behavior.
+    /// The returned Vec may contain fewer than N elements.
+    pub fn get_recent(&self, n: usize) -> Vec<ContextUpdate> {
+        self.get_recent_arcs(n)
+            .into_iter()
+            .map(|u| (*u).clone())
+            .collect()
+    }
+
+    /// All retained updates as shared handles in chronological order
+    /// (oldest first). Costs one refcount bump per entry, no deep clone.
+    pub fn snapshot_arcs(&self) -> Vec<Arc<ContextUpdate>> {
+        let range = self.id_range();
+        let mut results = Vec::with_capacity(self.updates.len());
+        for id in range {
+            if let Some(entry) = self.updates.get(&id) {
+                results.push(Arc::clone(entry.value()));
             }
         }
         results
@@ -93,17 +149,48 @@ impl HotContext {
     ///
     /// Returns updates sorted by insertion order (oldest first).
     /// Only iterates over the valid range of IDs to avoid O(n) iteration.
+    /// Deep-clones every update; prefer [`snapshot_arcs`](Self::snapshot_arcs).
     pub fn get_all(&self) -> Vec<ContextUpdate> {
-        let current_id = self.next_id.load(Ordering::Acquire);
-        let start_id = current_id.saturating_sub(self.max_size as u64);
-
-        let mut results = Vec::with_capacity(self.max_size.min(current_id as usize));
-        for id in start_id..current_id {
+        let range = self.id_range();
+        let mut results = Vec::with_capacity(self.updates.len());
+        for id in range {
             if let Some(entry) = self.updates.get(&id) {
-                results.push(entry.clone());
+                results.push(ContextUpdate::clone(entry.value()));
             }
         }
         results
+    }
+
+    /// Visit every retained update in chronological order without cloning.
+    pub fn for_each(&self, mut f: impl FnMut(&ContextUpdate)) {
+        for id in self.id_range() {
+            if let Some(entry) = self.updates.get(&id) {
+                f(entry.value());
+            }
+        }
+    }
+
+    /// Returns `true` if any retained update matches `pred` (no cloning,
+    /// stops at the first match).
+    pub fn any(&self, mut pred: impl FnMut(&ContextUpdate) -> bool) -> bool {
+        self.updates.iter().any(|entry| pred(entry.value()))
+    }
+
+    /// Returns the oldest retained update matching `pred` as a shared handle.
+    pub fn find(&self, mut pred: impl FnMut(&ContextUpdate) -> bool) -> Option<Arc<ContextUpdate>> {
+        for id in self.id_range() {
+            if let Some(entry) = self.updates.get(&id)
+                && pred(entry.value())
+            {
+                return Some(Arc::clone(entry.value()));
+            }
+        }
+        None
+    }
+
+    /// Returns `true` if an update with `ContextUpdate.id == entry_id` is retained.
+    pub fn contains_id(&self, entry_id: &Uuid) -> bool {
+        self.any(|u| u.id == *entry_id)
     }
 
     /// Get current length (lock-free)
@@ -138,16 +225,23 @@ impl HotContext {
         }
     }
 
+    /// Most recent update as a shared handle (lock-free).
+    pub fn back_arc(&self) -> Option<Arc<ContextUpdate>> {
+        let current_id = self.next_id.load(Ordering::Acquire);
+        if current_id == 0 {
+            return None;
+        }
+        self.updates
+            .get(&(current_id - 1))
+            .map(|e| Arc::clone(e.value()))
+    }
+
     /// Get most recent update (lock-free)
     ///
     /// Returns None if the context is empty or if the most recent entry
     /// was evicted by a concurrent push operation.
     pub fn back(&self) -> Option<ContextUpdate> {
-        let current_id = self.next_id.load(Ordering::Acquire);
-        if current_id == 0 {
-            return None;
-        }
-        self.updates.get(&(current_id - 1)).map(|e| e.clone())
+        self.back_arc().map(|u| (*u).clone())
     }
 
     /// Get snapshot of all updates as Vec (lock-free)
@@ -157,6 +251,10 @@ impl HotContext {
     }
 
     /// Iterate over all updates (convenience method, returns Vec)
+    ///
+    /// Deep-clones every update. Kept for compatibility; prefer
+    /// [`for_each`](Self::for_each) / [`any`](Self::any) /
+    /// [`snapshot_arcs`](Self::snapshot_arcs).
     pub fn iter(&self) -> Vec<ContextUpdate> {
         self.snapshot()
     }
@@ -164,22 +262,22 @@ impl HotContext {
     /// Convert to VecDeque for serialization
     /// Only iterates over the valid range of IDs (last max_size entries)
     pub fn to_deque(&self) -> VecDeque<ContextUpdate> {
-        let current_id = self.next_id.load(Ordering::Acquire);
-        let start_id = current_id.saturating_sub(self.max_size as u64);
-
-        let mut deque = VecDeque::with_capacity(self.max_size.min(current_id as usize));
-        for id in start_id..current_id {
-            if let Some(entry) = self.updates.get(&id) {
-                deque.push_back(entry.clone());
-            }
-        }
-        deque
+        self.get_all().into()
     }
 
     /// Create from VecDeque for deserialization (lock-free)
     pub fn from_deque(deque: VecDeque<ContextUpdate>, max_size: usize) -> Self {
+        Self::from_updates(deque, max_size)
+    }
+
+    /// Create from any sequence of updates (owned or `Arc`), oldest first.
+    pub fn from_updates<I>(updates: I, max_size: usize) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<Arc<ContextUpdate>>,
+    {
         let hot = Self::new(max_size);
-        for update in deque {
+        for update in updates {
             hot.push(update);
         }
         hot

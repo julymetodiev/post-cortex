@@ -388,9 +388,9 @@ impl PostCortex for PcxGrpcService {
             session_id,
             created_at: chrono::Utc::now(),
             structured_context: (*session.current_state).clone(),
-            recent_updates: (*session.incremental_updates).clone(),
+            recent_updates: session.incremental_updates_owned(),
             code_references: (*session.code_references).clone(),
-            change_history: (*session.change_history).clone(),
+            change_history: session.change_history_owned(),
             total_updates: session.incremental_updates.len(),
             context_quality_score: 1.0,
             compression_ratio: 1.0,
@@ -594,17 +594,22 @@ impl PostCortex for PcxGrpcService {
                 let selected_json = match jsonpath::apply_select(
                     &full_payload,
                     req.select_string.as_deref(),
-                    if req.select_map.is_empty() { None } else { Some(&req.select_map) },
+                    if req.select_map.is_empty() {
+                        None
+                    } else {
+                        Some(&req.select_map)
+                    },
                 ) {
-                    Ok(filtered) => serde_json::to_string(&filtered)
-                        .unwrap_or_else(|_| "null".to_string()),
+                    Ok(filtered) => {
+                        serde_json::to_string(&filtered).unwrap_or_else(|_| "null".to_string())
+                    }
                     Err(e) => {
-                        return Err(Status::invalid_argument(
-                            format!("Invalid JSONPath expression at offset {}: {}. \
+                        return Err(Status::invalid_argument(format!(
+                            "Invalid JSONPath expression at offset {}: {}. \
                                      Allowed: $, .field, [n], [-n], [a:b], [*], [0,3,7]. \
                                      Forbidden: .., [?(...)], functions, [a:b:c]",
-                                    e.byte_offset, e.message),
-                        ));
+                            e.byte_offset, e.message
+                        )));
                     }
                 };
 
@@ -1043,17 +1048,22 @@ impl PostCortex for PcxGrpcService {
             let selected_json = match jsonpath::apply_select(
                 &full_payload,
                 req.select_string.as_deref(),
-                if req.select_map.is_empty() { None } else { Some(&req.select_map) },
+                if req.select_map.is_empty() {
+                    None
+                } else {
+                    Some(&req.select_map)
+                },
             ) {
-                Ok(filtered) => serde_json::to_string(&filtered)
-                    .unwrap_or_else(|_| "null".to_string()),
+                Ok(filtered) => {
+                    serde_json::to_string(&filtered).unwrap_or_else(|_| "null".to_string())
+                }
                 Err(e) => {
-                    return Err(Status::invalid_argument(
-                        format!("Invalid JSONPath expression at offset {}: {}. \
+                    return Err(Status::invalid_argument(format!(
+                        "Invalid JSONPath expression at offset {}: {}. \
                                  Allowed: $, .field, [n], [-n], [a:b], [*], [0,3,7]. \
                                  Forbidden: .., [?(...)], functions, [a:b:c]",
-                                e.byte_offset, e.message),
-                    ));
+                        e.byte_offset, e.message
+                    )));
                 }
             };
 

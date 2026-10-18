@@ -20,7 +20,7 @@ post-cortex-proto.workspace = true
 
 # Core async runtime + serialisation
 anyhow.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 schemars.workspace = true
 bincode.workspace = true
