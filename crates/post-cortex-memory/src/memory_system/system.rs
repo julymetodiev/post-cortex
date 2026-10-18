@@ -197,6 +197,8 @@ impl ConversationMemorySystem {
     }
 
     /// Create system with trait object storage (supports both RocksDB and SurrealDB)
+    // Still copies the deprecated `max_vectors_per_session` into the holder.
+    #[allow(deprecated)]
     async fn new_with_trait_storage(
         storage: Arc<dyn post_cortex_storage::traits::GraphStorage>,
         vector_storage: Arc<dyn post_cortex_storage::traits::VectorStorage>,

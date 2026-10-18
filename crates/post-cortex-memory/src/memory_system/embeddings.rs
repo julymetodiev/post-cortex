@@ -148,8 +148,8 @@ impl ConversationMemorySystem {
                 let vector_db_config = VectorDbConfig {
                     dimension: self.embedding_config_holder.vector_dimension,
                     // `max_vectors` is a hard cap on the whole DB (all
-                    // sessions); `max_vectors_per_session` is not that, so
-                    // stay unbounded as before the cap was enforced.
+                    // sessions); the deprecated `max_vectors_per_session` is not
+                    // that and is ignored, so stay unbounded.
                     max_vectors: usize::MAX,
                     ..Default::default()
                 };

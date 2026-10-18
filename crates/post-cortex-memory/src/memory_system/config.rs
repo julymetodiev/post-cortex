@@ -43,7 +43,9 @@ pub struct EmbeddingConfigHolder {
     pub model_type: EmbeddingModelType,
     /// Dimension of the embedding vectors
     pub vector_dimension: usize,
-    /// Maximum number of vectors stored per session
+    /// Formerly the maximum number of vectors per session. Never enforced;
+    /// the in-memory vector DB is uncapped. Kept for compatibility.
+    #[deprecated(note = "not enforced: the vector DB is uncapped; the value is ignored")]
     pub max_vectors_per_session: usize,
     /// Directory where vector index data is stored
     pub data_directory: String,
@@ -85,7 +87,12 @@ pub struct SystemConfig {
     pub embeddings_model_type: String,
     /// Dimensionality of embedding vectors
     pub vector_dimension: usize,
-    /// Maximum number of vectors per session
+    /// Formerly the maximum number of vectors per session. It was never
+    /// enforced and is ignored: the in-memory vector DB is uncapped
+    /// (`VectorDbConfig::max_vectors = usize::MAX`), and a per-session cap
+    /// would silently drop searchable content. Kept so existing struct
+    /// literals keep compiling; it will be removed in a future release.
+    #[deprecated(note = "not enforced: the vector DB is uncapped; the value is ignored")]
     pub max_vectors_per_session: usize,
     /// Minimum similarity score for semantic search results
     pub semantic_search_threshold: f32,
@@ -116,6 +123,8 @@ pub struct SystemConfig {
 }
 
 impl Default for SystemConfig {
+    // Still initialises the deprecated `max_vectors_per_session`.
+    #[allow(deprecated)]
     fn default() -> Self {
         Self {
             max_hot_context_size: 50,
