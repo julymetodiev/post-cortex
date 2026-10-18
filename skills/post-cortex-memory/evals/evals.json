@@ -1,0 +1,60 @@
+{
+  "skill_name": "post-cortex-memory",
+  "notes": "Run each prompt with `claude -p` in an empty directory outside any repo (no CLAUDE.md with post-cortex rules, no project hooks). with_skill: the skill copied into <dir>/.claude/skills/. Prompts give no session IDs on purpose - finding or creating the session is part of the task. eval 1 creates a session: run the configurations one after another and delete what each creates.",
+  "evals": [
+    {
+      "id": 0,
+      "name": "find-session-and-answer",
+      "prompt": "I've been building post-cortex (a Rust MCP memory server) with you for a while, and you've been logging our work into its memory. What did we end up doing about the Stop hook that kept firing false alarms, and why?",
+      "expected_output": "Locates the post-cortex session (session search/list) and searches it before answering: the prompt-type Stop hook was replaced by the deterministic pcx-stop-check.py command hook because the model judge flagged status turns and forced duplicate logs.",
+      "files": [],
+      "assertions": [
+        {"text": "Calls a post-cortex read tool before answering", "check": "at least one semantic_search / query_conversation_context / get_structured_summary call"},
+        {"text": "Resolves the project's session instead of guessing", "check": "a session search/list call, or a semantic_search with scope session/workspace and a real scope_id"},
+        {"text": "Answer names the replacement (deterministic command hook / pcx-stop-check.py)", "check": "answer mentions pcx-stop-check or a deterministic/command/transcript-based hook"},
+        {"text": "Answer gives the reason (model judge produced false positives / duplicate logs)", "check": "answer mentions false positives, status turns or duplicate entries"},
+        {"text": "No writes", "check": "no update_conversation_context, manage_entity, or session create/delete"}
+      ]
+    },
+    {
+      "id": 1,
+      "name": "new-project-log",
+      "prompt": "New project: acme-billing (a Go invoicing service). We just decided to store all money amounts as integer cents (int64) instead of float64, because float rounding broke invoice totals. Remember this decision for future sessions.",
+      "expected_output": "Checks for an existing acme-billing session, creates one (named, described) plus a workspace when none exists, writes a decision_made entry with decision+rationale, >=2 entities and >=1 relation, and tells the user the new IDs so they can be stored.",
+      "files": [],
+      "assertions": [
+        {"text": "Looks for an existing session before creating one", "check": "session search/list call precedes session create"},
+        {"text": "Creates a named session for the project", "check": "session create with a name mentioning acme"},
+        {"text": "Writes a decision_made entry with decision and rationale", "check": "update_conversation_context with interaction_type decision_made; content mentions cents/int64 and float rounding"},
+        {"text": "Graph data: >=2 entities and >=1 relation", "check": "len(entities)>=2 and len(relations)>=1"},
+        {"text": "Tells the user the session ID so it can be reused", "check": "answer contains the created session UUID"}
+      ]
+    },
+    {
+      "id": 2,
+      "name": "persister-impact",
+      "prompt": "In post-cortex I want to change SessionPersister. According to the project memory, what depends on it and what should I be careful about?",
+      "expected_output": "Locates the session/workspace, uses assemble_context naming SessionPersister for impact analysis plus semantic_search for past problems; lists dependents and recorded pitfalls (ordering, coalescing, delete/load races, flush on eviction/shutdown).",
+      "files": [],
+      "assertions": [
+        {"text": "Uses assemble_context with a query naming SessionPersister", "check": "assemble_context call whose query contains SessionPersister"},
+        {"text": "Uses semantic_search for recorded problems", "check": "a semantic_search call"},
+        {"text": "Answer lists recorded pitfalls (ordering / coalescing / delete-load races / flush)", "check": "answer mentions at least two of: order, coalesc, resurrect/race, flush"},
+        {"text": "No writes", "check": "no update_conversation_context, manage_entity, or session create/delete"}
+      ]
+    },
+    {
+      "id": 3,
+      "name": "resume-project",
+      "prompt": "Pick up where we left off on post-cortex - summarize where things stand and what is still open.",
+      "expected_output": "Locates the session and uses a summary/recent view (get_structured_summary, open_questions, recency-biased search); reports the 0.4.0 release state and open items (ml migration, skill evaluation, etc.).",
+      "files": [],
+      "assertions": [
+        {"text": "Uses a summary or recency-oriented read", "check": "get_structured_summary, query_conversation_context (open_questions/recent_changes/decisions) or semantic_search with recency_bias>0"},
+        {"text": "Answer reflects the latest state (0.4.0 released)", "check": "answer mentions 0.4.0"},
+        {"text": "Answer lists open items", "check": "answer mentions the ml/hermes migration or another pending item"},
+        {"text": "No writes", "check": "no update_conversation_context, manage_entity, or session create/delete"}
+      ]
+    }
+  ]
+}
