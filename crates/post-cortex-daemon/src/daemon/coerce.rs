@@ -15,105 +15,112 @@ pub use crate::daemon::validate::VALID_INTERACTION_TYPES;
 
 /// Coerce and validate a JSON value into the target type.
 ///
-/// This function attempts to deserialize the value directly first (fast path).
-/// If that fails, it applies type coercion rules to fix common type mismatches
-/// before attempting deserialization again.
+/// This function attempts to deserialize the value directly first (fast path,
+/// borrowing the value — no clone). If that fails, it applies targeted type
+/// coercion rules to fix common type mismatches before deserializing again.
 ///
 /// # Type Coercion Rules
 ///
-/// - Number → String: Converts integers and floats to their string representation
-/// - Boolean → String: Converts "true"/"false" to strings
-/// - Object/Array → JSON String: Serializes nested structures as JSON strings
-///   (useful for `content` fields that expect stringified JSON)
+/// Coercion is deliberately narrow so typed fields (`limit`, `dry_run`,
+/// `updates: [...]`, `select_map`, ...) are never rewritten:
+///
+/// - `content` maps (top-level and inside each `updates[]` item) and the
+///   query tool's `parameters` map are `HashMap<String, String>`, so every
+///   non-string value in them becomes a
+///   string: numbers/booleans via `to_string`, objects/arrays as compact JSON.
+/// - Top-level `*_id` fields (`session_id`, `workspace_id`, `scope_id`,
+///   `entry_id`) are always strings, so a number/boolean there becomes its
+///   string form.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use serde_json::json;
 ///
-/// #[derive(Deserialize)]
-/// struct Request {
-///     session_id: String,
-///     count: String,
-/// }
-///
 /// let value = json!({
-///     "session_id": 123,  // Number instead of string
-///     "count": 42         // Number instead of string
+///     "session_id": 123,                 // Number instead of string
+///     "content": {"score": 42, "ok": true}, // Non-string content values
+///     "limit": 5                          // Left as a number
 /// });
 ///
 /// let req: Request = coerce_and_validate(value)?;
 /// assert_eq!(req.session_id, "123");
-/// assert_eq!(req.count, "42");
 /// ```
 pub fn coerce_and_validate<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T, CoercionError> {
-    // Fast path: try direct deserialization first
-    if let Ok(result) = serde_json::from_value::<T>(value.clone()) {
+    // Fast path: deserialize straight from the borrowed value.
+    if let Ok(result) = T::deserialize(&value) {
         return Ok(result);
     }
 
     // Slow path: apply coercions and try again
     let coerced = apply_coercions(value)?;
-    serde_json::from_value(coerced)
+    T::deserialize(coerced)
         .map_err(|e| CoercionError::new("Failed to deserialize parameter(s)", e, None))
 }
 
-/// Apply type coercion rules to a JSON value.
-///
-/// This recursively walks through the value and applies coercion rules
-/// to convert common type mismatches.
+/// Apply the targeted coercion rules (see [`coerce_and_validate`]) in place.
 fn apply_coercions(mut value: Value) -> Result<Value, CoercionError> {
-    if let Some(obj) = value.as_object_mut() {
-        for (_key, val) in obj.iter_mut() {
-            *val = coerce_value(val)?;
+    let Some(obj) = value.as_object_mut() else {
+        return Ok(value);
+    };
+
+    for (key, val) in obj.iter_mut() {
+        match key.as_str() {
+            // Both are `HashMap<String, String>` in the request types.
+            "content" | "parameters" => coerce_string_map(val)?,
+            "updates" => {
+                if let Value::Array(items) = val {
+                    for item in items {
+                        if let Some(content) = item.get_mut("content") {
+                            coerce_string_map(content)?;
+                        }
+                    }
+                }
+            }
+            k if k.ends_with("_id") => coerce_scalar_to_string(val),
+            _ => {}
         }
     }
     Ok(value)
 }
 
-/// Coerce a single value according to the coercion rules.
-fn coerce_value(val: &Value) -> Result<Value, CoercionError> {
-    match val {
-        // Number → String
-        // Handles cases like: {"session_id": 123} → {"session_id": "123"}
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Ok(Value::String(i.to_string()))
-            } else if let Some(f) = n.as_f64() {
-                Ok(Value::String(f.to_string()))
-            } else {
-                Ok(val.clone())
-            }
+/// Stringify every non-string value of a `HashMap<String, String>`-shaped object.
+fn coerce_string_map(val: &mut Value) -> Result<(), CoercionError> {
+    if let Value::Object(map) = val {
+        for v in map.values_mut() {
+            coerce_to_string(v)?;
         }
-
-        // Boolean → String
-        // Handles cases like: {"enabled": true} → {"enabled": "true"}
-        Value::Bool(b) => Ok(Value::String(b.to_string())),
-
-        // Object → JSON String
-        // Handles cases where nested objects need to be stringified
-        // e.g., {"metadata": {"key": "value"}} → {"metadata": "{\"key\":\"value\"}"}
-        Value::Object(obj) => serde_json::to_string(obj).map(Value::String).map_err(|e| {
-            CoercionError::new(
-                "Failed to serialize object to JSON string",
-                e,
-                Some(val.clone()),
-            )
-        }),
-
-        // Array → JSON String
-        // Similar to object coercion, stringifies arrays
-        Value::Array(arr) => serde_json::to_string(arr).map(Value::String).map_err(|e| {
-            CoercionError::new(
-                "Failed to serialize array to JSON string",
-                e,
-                Some(val.clone()),
-            )
-        }),
-
-        // String, Null, etc. pass through unchanged
-        _ => Ok(val.clone()),
     }
+    Ok(())
+}
+
+/// Number/Boolean → String; everything else is left untouched.
+fn coerce_scalar_to_string(val: &mut Value) {
+    match val {
+        Value::Number(n) => *val = Value::String(n.to_string()),
+        Value::Bool(b) => *val = Value::String(b.to_string()),
+        _ => {}
+    }
+}
+
+/// Number/Boolean → String, Object/Array → compact JSON string. Strings and
+/// nulls pass through unchanged.
+fn coerce_to_string(val: &mut Value) -> Result<(), CoercionError> {
+    match val {
+        Value::Number(_) | Value::Bool(_) => coerce_scalar_to_string(val),
+        Value::Object(_) | Value::Array(_) => {
+            let json = serde_json::to_string(val).map_err(|e| {
+                CoercionError::new(
+                    "Failed to serialize nested value to JSON string",
+                    e,
+                    Some(val.clone()),
+                )
+            })?;
+            *val = Value::String(json);
+        }
+        Value::String(_) | Value::Null => {}
+    }
+    Ok(())
 }
 
 /// Generate recovery suggestions based on error message patterns.
@@ -353,36 +360,123 @@ mod tests {
         assert_eq!(result.get("session_id"), Some(&"123".to_string()));
     }
 
+    /// Mirrors the shape of the update_conversation_context request.
+    #[derive(Debug, Deserialize)]
+    struct UpdateReq {
+        session_id: String,
+        content: Option<HashMap<String, String>>,
+        updates: Option<Vec<UpdateItem>>,
+        dry_run: Option<bool>,
+        code_reference: Option<Value>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct UpdateItem {
+        interaction_type: String,
+        content: HashMap<String, String>,
+    }
+
+    /// Mirrors the shape of the semantic_search request.
+    #[derive(Debug, Deserialize)]
+    struct SearchReq {
+        query: String,
+        scope_id: Option<String>,
+        limit: Option<usize>,
+        recency_bias: Option<f32>,
+        interaction_type: Option<Vec<String>>,
+    }
+
     #[test]
-    fn test_coerce_float_to_string() {
+    fn test_coerce_content_values_to_strings() {
         // Use an arbitrary float that doesn't approximate `f64::consts::PI`.
-        let value = json!({"score": 2.71});
-        let result: HashMap<String, String> = coerce_and_validate(value).unwrap();
-        assert_eq!(result.get("score"), Some(&"2.71".to_string()));
+        let value = json!({
+            "session_id": "s",
+            "content": {
+                "score": 2.71,
+                "count": 42,
+                "enabled": true,
+                "metadata": {"key": "value"},
+                "tags": ["tag1", "tag2"],
+                "text": "plain"
+            }
+        });
+        let req: UpdateReq = coerce_and_validate(value).unwrap();
+        let content = req.content.unwrap();
+        assert_eq!(content["score"], "2.71");
+        assert_eq!(content["count"], "42");
+        assert_eq!(content["enabled"], "true");
+        assert_eq!(content["metadata"], "{\"key\":\"value\"}");
+        assert_eq!(content["tags"], "[\"tag1\",\"tag2\"]");
+        assert_eq!(content["text"], "plain");
     }
 
     #[test]
-    fn test_coerce_bool_to_string() {
-        let value = json!({"enabled": true});
-        let result: HashMap<String, String> = coerce_and_validate(value).unwrap();
-        assert_eq!(result.get("enabled"), Some(&"true".to_string()));
-    }
-
-    #[test]
-    fn test_coerce_object_to_json_string() {
-        let value = json!({"metadata": {"key": "value"}});
-        let result: HashMap<String, String> = coerce_and_validate(value).unwrap();
+    fn test_coerce_keeps_typed_fields_intact() {
+        // `dry_run` (bool), `code_reference` (object) and `updates` (array)
+        // must survive the slow path untouched; only content values change.
+        let value = json!({
+            "session_id": 7,
+            "dry_run": true,
+            "code_reference": {"file": "main.rs", "line": 3},
+            "updates": [
+                {"interaction_type": "qa", "content": {"question": "q", "n": 1}},
+                {"interaction_type": "code_change", "content": {"ok": false}}
+            ]
+        });
+        let req: UpdateReq = coerce_and_validate(value).unwrap();
+        assert_eq!(req.session_id, "7");
+        assert_eq!(req.dry_run, Some(true));
         assert_eq!(
-            result.get("metadata"),
-            Some(&"{\"key\":\"value\"}".to_string())
+            req.code_reference,
+            Some(json!({"file": "main.rs", "line": 3}))
+        );
+        let updates = req.updates.unwrap();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].interaction_type, "qa");
+        assert_eq!(updates[0].content["n"], "1");
+        assert_eq!(updates[1].content["ok"], "false");
+    }
+
+    #[test]
+    fn test_coerce_does_not_stringify_numeric_and_array_params() {
+        // A numeric `scope_id` forces the slow path; `limit`,
+        // `recency_bias` and the `interaction_type` array must stay typed.
+        let value = json!({
+            "query": "auth",
+            "scope_id": 42,
+            "limit": 5,
+            "recency_bias": 0.5,
+            "interaction_type": ["qa", "decision_made"]
+        });
+        let req: SearchReq = coerce_and_validate(value).unwrap();
+        assert_eq!(req.query, "auth");
+        assert_eq!(req.scope_id.as_deref(), Some("42"));
+        assert_eq!(req.limit, Some(5));
+        assert_eq!(req.recency_bias, Some(0.5));
+        assert_eq!(
+            req.interaction_type,
+            Some(vec!["qa".to_string(), "decision_made".to_string()])
         );
     }
 
     #[test]
-    fn test_coerce_array_to_json_string() {
-        let value = json!({"tags": ["tag1", "tag2"]});
-        let result: HashMap<String, String> = coerce_and_validate(value).unwrap();
-        assert_eq!(result.get("tags"), Some(&"[\"tag1\",\"tag2\"]".to_string()));
+    fn test_coerce_query_parameters_map() {
+        let value = json!({"parameters": {"limit": 10, "topic": "x"}});
+        #[derive(Deserialize)]
+        struct QueryReq {
+            parameters: HashMap<String, String>,
+        }
+        let req: QueryReq = coerce_and_validate(value).unwrap();
+        assert_eq!(req.parameters["limit"], "10");
+        assert_eq!(req.parameters["topic"], "x");
+    }
+
+    #[test]
+    fn test_coerce_unrelated_field_still_errors() {
+        // Non-`_id`, non-content fields are not coerced.
+        let value = json!({"query": 123});
+        let result: Result<SearchReq, _> = coerce_and_validate(value);
+        assert!(result.is_err());
     }
 
     #[test]
