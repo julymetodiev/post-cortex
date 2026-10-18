@@ -39,4 +39,5 @@ pub use embeddings::{EmbeddingBackend, EmbeddingConfig, EmbeddingModelType, Loca
 pub use vector_db::{
     ProductQuantizationCodebook, SearchMatch, SearchMode, SearchQualityPreset, StoredVector,
     VectorDB, VectorDbConfig, VectorDbStats, VectorDbStatsSnapshot, VectorMetadata,
+    cosine_similarity, cosine_with_norms, dot, l2_norm,
 };

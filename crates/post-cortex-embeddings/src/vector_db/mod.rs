@@ -21,6 +21,7 @@ pub mod config;
 pub mod core;
 mod hnsw_index;
 pub mod product_quantization;
+pub mod similarity;
 
 #[cfg(test)]
 mod tests;
@@ -28,4 +29,5 @@ mod tests;
 pub use config::{SearchMode, SearchQualityPreset, VectorDbConfig};
 pub use core::VectorDB;
 pub use product_quantization::ProductQuantizationCodebook;
+pub use similarity::{cosine_similarity, cosine_with_norms, dot, l2_norm};
 pub use types::{SearchMatch, StoredVector, VectorDbStats, VectorDbStatsSnapshot, VectorMetadata};

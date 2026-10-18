@@ -70,9 +70,16 @@ pub struct VectorDbConfig {
     pub quantization_buckets: usize,
     /// Enable HNSW indexing
     pub enable_hnsw_index: bool,
+    /// Up to this many vectors, searches are exact linear scans and no HNSW
+    /// graph is maintained (inserts stay O(1)). The first insert that
+    /// crosses it builds the graph once; from then on it is kept up to date
+    /// incrementally. [`VectorDB::build_index`](super::VectorDB::build_index)
+    /// builds it explicitly regardless of size.
+    pub exact_search_threshold: usize,
     /// Distance threshold for considering vectors similar
     pub distance_threshold: f32,
-    /// Maximum number of vectors to store
+    /// Maximum number of vectors to store in total (all sources). Inserts
+    /// beyond it fail with an error; bulk inserts stop and warn.
     pub max_vectors: usize,
     /// Auto-save interval (number of operations)
     pub auto_save_interval: usize,
@@ -99,6 +106,7 @@ impl Default for VectorDbConfig {
             enable_quantization: true,
             quantization_buckets: 256,
             enable_hnsw_index: true,
+            exact_search_threshold: 10_000,
             distance_threshold: 0.7,
             max_vectors: 100_000,
             auto_save_interval: 1000,

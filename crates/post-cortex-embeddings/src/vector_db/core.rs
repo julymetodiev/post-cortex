@@ -11,17 +11,31 @@
 // copies or substantial portions of the Software.
 
 //! `VectorDB` — the orchestrator type binding storage, HNSW, quantization, and search.
+//!
+//! Search paths:
+//! - Up to [`VectorDbConfig::exact_search_threshold`] vectors every search is
+//!   an exact scan with a bounded top-k heap, and no HNSW graph is kept.
+//! - Above it the graph is built once and maintained incrementally; unfiltered
+//!   default searches and generic filtered searches use it.
+//! - Source-scoped searches ([`VectorDB::search_in_sources`]) always score
+//!   only that source's vectors, found through a secondary index.
+//!
+//! Locking: no code path holds a guard on one map while writing another, so
+//! the DashMaps cannot deadlock against each other.
 
 use anyhow::Result;
 use dashmap::DashMap;
+use rayon::prelude::*;
+use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use tracing::{debug, info, warn};
 
-use super::common::SearchResult;
+use super::common::{SearchResult, TopK};
 use super::config::{SearchMode, SearchQualityPreset, VectorDbConfig};
 use super::hnsw_index::HnswIndex;
 use super::product_quantization::ProductQuantizationCodebook;
+use super::similarity::{cosine_with_norms, l2_norm};
 use super::types::{
     SearchMatch, StoredVector, VectorDbStats, VectorDbStatsSnapshot, VectorMetadata,
 };
@@ -29,12 +43,28 @@ use super::types::{
 // Type aliases to reduce complexity
 type QuantizationParams = Arc<arc_swap::ArcSwap<Option<(Vec<f32>, Vec<f32>)>>>;
 
+/// Content type of entity-description vectors; everything else counts as an
+/// update embedding for the per-source update queries.
+const ENTITY_DESCRIPTION: &str = "EntityDescription";
+
+/// Ids belonging to one `VectorMetadata::source`.
+#[derive(Debug, Default)]
+struct SourceIds {
+    ids: HashSet<u32>,
+    /// How many of `ids` are not `EntityDescription` vectors.
+    update_count: usize,
+}
+
 /// Vector database using DashMap and atomic operations
 pub struct VectorDB {
     /// Vector storage - concurrent DashMap
     vectors: Arc<DashMap<u32, StoredVector>>,
     /// Metadata storage - concurrent DashMap
     metadata: Arc<DashMap<u32, VectorMetadata>>,
+    /// Secondary index: `metadata.source` -> vector ids
+    by_source: DashMap<String, SourceIds>,
+    /// Secondary index: `metadata.id` (content id) -> vector ids, oldest first
+    by_content_id: DashMap<String, Vec<u32>>,
     /// Configuration
     config: VectorDbConfig,
     /// Next available vector ID - atomic
@@ -43,6 +73,10 @@ pub struct VectorDB {
     stats: Arc<VectorDbStats>,
     /// HNSW index
     hnsw_index: Arc<HnswIndex>,
+    /// Whether the HNSW graph is live (built and maintained on insert)
+    hnsw_active: AtomicBool,
+    /// Serialises graph (re)builds
+    build_lock: parking_lot::Mutex<()>,
     /// Vector quantization parameters using ArcSwap
     quantization_params: QuantizationParams,
     /// Product Quantization codebook (if enabled)
@@ -95,22 +129,94 @@ impl VectorDB {
         Ok(Self {
             vectors: Arc::new(DashMap::new()),
             metadata: Arc::new(DashMap::new()),
+            by_source: DashMap::new(),
+            by_content_id: DashMap::new(),
             config,
             next_id: Arc::new(AtomicU32::new(0)),
             stats,
             hnsw_index: Arc::new(HnswIndex::new()),
+            hnsw_active: AtomicBool::new(false),
+            build_lock: parking_lot::Mutex::new(()),
             quantization_params,
             pq_codebook,
         })
     }
 
     /// Add a vector to the database
+    ///
+    /// Below [`VectorDbConfig::exact_search_threshold`] this is O(1); the
+    /// insert that crosses the threshold builds the HNSW graph once.
     pub fn add_vector(&self, vector: Vec<f32>, metadata: VectorMetadata) -> Result<u32> {
+        let id = self.insert_unindexed(vector, metadata)?;
+        self.index_new_vectors(&[id]);
+        debug!("Added vector {} to database", id);
+        Ok(id)
+    }
+
+    /// Add many vectors, deferring HNSW work until all are stored.
+    ///
+    /// Use this for startup loads: one graph build at the end instead of an
+    /// incremental insert per vector. Vectors with a wrong dimension are
+    /// skipped with a warning; once `max_vectors` is reached the rest are
+    /// dropped with a warning. Returns the ids of the stored vectors, in
+    /// input order.
+    pub fn add_vectors_bulk<I>(&self, vectors: I) -> Result<Vec<u32>>
+    where
+        I: IntoIterator<Item = (Vec<f32>, VectorMetadata)>,
+    {
+        let iter = vectors.into_iter();
+        let mut ids = Vec::with_capacity(iter.size_hint().0);
+        let mut dropped_at_capacity = 0usize;
+
+        for (vector, metadata) in iter {
+            if dropped_at_capacity > 0 || self.at_capacity() {
+                dropped_at_capacity += 1;
+                continue;
+            }
+            match self.insert_unindexed(vector, metadata) {
+                Ok(id) => ids.push(id),
+                Err(e) => warn!("Failed to add vector to batch: {}", e),
+            }
+        }
+
+        if dropped_at_capacity > 0 {
+            warn!(
+                "Vector DB is full (max_vectors = {}): dropped {} vectors from batch",
+                self.config.max_vectors, dropped_at_capacity
+            );
+        }
+
+        self.index_new_vectors(&ids);
+
+        info!("Added {} vectors in batch", ids.len());
+        Ok(ids)
+    }
+
+    /// Add vectors in batch. Same as [`Self::add_vectors_bulk`].
+    pub fn add_vectors_batch(&self, vectors: Vec<(Vec<f32>, VectorMetadata)>) -> Result<Vec<u32>> {
+        self.add_vectors_bulk(vectors)
+    }
+
+    fn at_capacity(&self) -> bool {
+        self.vectors.len() >= self.config.max_vectors
+    }
+
+    /// Validate and store a vector plus its metadata and secondary-index
+    /// entries, without touching the HNSW graph.
+    fn insert_unindexed(&self, vector: Vec<f32>, metadata: VectorMetadata) -> Result<u32> {
         if vector.len() != self.config.dimension {
             return Err(anyhow::anyhow!(
                 "Vector dimension {} does not match expected {}",
                 vector.len(),
                 self.config.dimension
+            ));
+        }
+        // Checked without a reservation, so concurrent inserts can overshoot
+        // the cap by at most the number of racing threads.
+        if self.at_capacity() {
+            return Err(anyhow::anyhow!(
+                "Vector DB is full: max_vectors = {} reached",
+                self.config.max_vectors
             ));
         }
 
@@ -130,33 +236,77 @@ impl VectorDB {
             .as_ref()
             .map(|codebook| codebook.encode(&vector));
 
-        // Create stored vector
         let stored_vector = StoredVector::new(id, vector, quantized, pq_codes);
         let vector_size_bytes = stored_vector_size(&stored_vector);
 
-        // Add to vectors collection
+        self.index_metadata(id, &metadata);
         self.vectors.insert(id, stored_vector);
-
-        // Add metadata
         self.metadata.insert(id, metadata);
 
-        // Update statistics
         self.stats.record_vector_added(vector_size_bytes);
-
-        // Build HNSW index if enabled
-        if self.config.enable_hnsw_index {
-            self.build_hnsw_index_for_vector(id)?;
-        }
-
-        debug!("Added vector {} to database", id);
         Ok(id)
+    }
+
+    fn index_metadata(&self, id: u32, metadata: &VectorMetadata) {
+        {
+            let mut entry = self.by_source.entry(metadata.source.clone()).or_default();
+            if entry.ids.insert(id) && metadata.content_type != ENTITY_DESCRIPTION {
+                entry.update_count += 1;
+            }
+        }
+        self.by_content_id
+            .entry(metadata.id.clone())
+            .or_default()
+            .push(id);
+    }
+
+    fn unindex_metadata(&self, id: u32, metadata: &VectorMetadata) {
+        self.by_source.remove_if_mut(&metadata.source, |_, entry| {
+            if entry.ids.remove(&id) && metadata.content_type != ENTITY_DESCRIPTION {
+                entry.update_count = entry.update_count.saturating_sub(1);
+            }
+            entry.ids.is_empty()
+        });
+        self.by_content_id.remove_if_mut(&metadata.id, |_, ids| {
+            ids.retain(|&v| v != id);
+            ids.is_empty()
+        });
+    }
+
+    /// Bring freshly stored vectors into the HNSW graph if it is live
+    /// (auto-built or via [`Self::build_index`]), or build it once if HNSW
+    /// is enabled and the DB just crossed the exact-search threshold.
+    fn index_new_vectors(&self, ids: &[u32]) {
+        if !self.hnsw_active.load(Ordering::Acquire) {
+            if !self.config.enable_hnsw_index
+                || self.vectors.len() <= self.config.exact_search_threshold
+            {
+                return;
+            }
+            let _guard = self.build_lock.lock();
+            if !self.hnsw_active.load(Ordering::Acquire) {
+                info!(
+                    "Vector DB crossed {} vectors, building HNSW index",
+                    self.config.exact_search_threshold
+                );
+                self.build_graph_locked();
+                return;
+            }
+        }
+        // The graph may have been built concurrently from a snapshot that
+        // already holds some of these.
+        for &id in ids {
+            if !self.hnsw_index.contains(id) {
+                self.insert_into_graph(id);
+            }
+        }
     }
 
     /// Search for similar vectors
     pub fn search(&self, query_vector: &[f32], k: usize) -> Result<Vec<SearchMatch>> {
         // Use exact (linear) scan for small-to-medium DBs — HNSW post-filter
         // misses sparse clusters and is only worth it for very large DBs.
-        let mode = if self.vectors.len() <= 10_000 {
+        let mode = if self.vectors.len() <= self.config.exact_search_threshold {
             SearchMode::Exact
         } else {
             SearchMode::default()
@@ -178,59 +328,15 @@ impl VectorDB {
         mode: SearchMode,
         ef_search_override: Option<usize>,
     ) -> Result<Vec<SearchMatch>> {
-        if query_vector.len() != self.config.dimension {
-            return Err(anyhow::anyhow!(
-                "Query vector dimension {} does not match expected {}",
-                query_vector.len(),
-                self.config.dimension
-            ));
-        }
-
+        self.check_query(query_vector)?;
         let start_time = std::time::Instant::now();
+        let query_norm = l2_norm(query_vector);
 
-        // Select search strategy based on mode
-        let results = match mode {
-            SearchMode::Exact => {
-                // Always use linear search for exact mode
-                debug!("Using exact search (linear scan)");
-                self.linear_search(query_vector, k)?
-            }
-            SearchMode::Approximate | SearchMode::Balanced => {
-                // Use HNSW if available, otherwise fall back to linear
-                if self.config.enable_hnsw_index && !self.hnsw_index.is_empty() {
-                    let ef_search = ef_search_override.unwrap_or_else(|| match mode {
-                        SearchMode::Approximate => SearchQualityPreset::Fast.ef_search(),
-                        SearchMode::Balanced => SearchQualityPreset::Balanced.ef_search(),
-                        _ => self.config.ef_search,
-                    });
-                    debug!("Using HNSW search with ef_search={}", ef_search);
-                    self.hnsw_search_with_ef(query_vector, k, ef_search)?
-                } else {
-                    debug!("HNSW index not available, falling back to linear search");
-                    self.linear_search(query_vector, k)?
-                }
-            }
-        };
+        let results = self.ranked(query_vector, query_norm, k, mode, ef_search_override);
+        let matches = self.to_matches(results, k, None);
 
-        // Metadata access via DashMap
-        let mut matches = Vec::new();
-
-        for result in results {
-            let vector_id = result.id;
-
-            if let Some(metadata) = self.metadata.get(&vector_id) {
-                matches.push(SearchMatch {
-                    vector_id,
-                    similarity: result.similarity,
-                    metadata: metadata.clone(),
-                });
-            }
-        }
-
-        // Update statistics
         let duration_us = start_time.elapsed().as_micros() as u64;
         self.stats.record_search(duration_us);
-
         debug!(
             "Search completed in {}μs with mode {:?}, found {} matches",
             duration_us,
@@ -240,145 +346,221 @@ impl VectorDB {
         Ok(matches)
     }
 
-    /// Linear search through all vectors
-    fn linear_search(&self, query_vector: &[f32], k: usize) -> Result<Vec<SearchResult>> {
-        let mut similarities: Vec<_> = Vec::new();
-
-        // Iterate over vectors
-        for entry in self.vectors.iter() {
-            let stored_vector = entry.value();
-            let similarity = Self::calculate_cosine_similarity(query_vector, &stored_vector.vector);
-            similarities.push(SearchResult {
-                id: stored_vector.id,
-                similarity,
-            });
+    fn check_query(&self, query_vector: &[f32]) -> Result<()> {
+        if query_vector.len() != self.config.dimension {
+            return Err(anyhow::anyhow!(
+                "Query vector dimension {} does not match expected {}",
+                query_vector.len(),
+                self.config.dimension
+            ));
         }
-
-        // Sort by similarity (descending)
-        similarities.sort_by(|a, b| {
-            b.similarity
-                .partial_cmp(&a.similarity)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        similarities.truncate(k);
-
-        Ok(similarities)
+        Ok(())
     }
 
-    /// HNSW search with configurable ef_search parameter
-    ///
-    /// Uses BinaryHeap for O(log n) candidate management instead of O(n log n) Vec+sort.
-    ///
-    /// # Arguments
-    /// * `query_vector` - Query vector to search for
-    /// * `k` - Number of results to return
-    /// * `ef_search` - Size of the dynamic candidate list (higher = more accurate but slower)
-    fn hnsw_search_with_ef(
+    /// Top-`k` ids for an unfiltered query under `mode`.
+    fn ranked(
         &self,
         query_vector: &[f32],
+        query_norm: f32,
+        k: usize,
+        mode: SearchMode,
+        ef_search_override: Option<usize>,
+    ) -> Vec<SearchResult> {
+        match mode {
+            SearchMode::Exact => {
+                debug!("Using exact search (linear scan)");
+                self.scan_all(query_vector, query_norm, k, None)
+            }
+            SearchMode::Approximate | SearchMode::Balanced => {
+                let ef_search = ef_search_override.unwrap_or_else(|| match mode {
+                    SearchMode::Approximate => SearchQualityPreset::Fast.ef_search(),
+                    SearchMode::Balanced => SearchQualityPreset::Balanced.ef_search(),
+                    SearchMode::Exact => self.config.ef_search,
+                });
+                match self.graph_search(query_vector, query_norm, k, ef_search) {
+                    Some(results) => {
+                        debug!("Using HNSW search with ef_search={}", ef_search);
+                        results
+                    }
+                    None => {
+                        debug!("HNSW index not available, falling back to linear search");
+                        self.scan_all(query_vector, query_norm, k, None)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Exact scan over every vector, filtering on metadata before scoring.
+    fn scan_all(
+        &self,
+        query_vector: &[f32],
+        query_norm: f32,
+        k: usize,
+        filter: Option<&dyn Fn(&VectorMetadata) -> bool>,
+    ) -> Vec<SearchResult> {
+        let mut top = TopK::new(k);
+        for entry in self.vectors.iter() {
+            let id = *entry.key();
+            if let Some(filter) = filter {
+                match self.metadata.get(&id) {
+                    Some(m) if filter(&m) => {}
+                    _ => continue,
+                }
+            }
+            let stored = entry.value();
+            top.push(
+                id,
+                cosine_with_norms(query_vector, &stored.vector, query_norm, stored.magnitude),
+            );
+        }
+        top.into_sorted()
+    }
+
+    /// Exact scan over the given ids only.
+    fn scan_ids(
+        &self,
+        ids: &[u32],
+        query_vector: &[f32],
+        query_norm: f32,
+        k: usize,
+        filter: Option<&dyn Fn(&VectorMetadata) -> bool>,
+    ) -> Vec<SearchResult> {
+        let mut top = TopK::new(k);
+        for &id in ids {
+            if let Some(filter) = filter {
+                match self.metadata.get(&id) {
+                    Some(m) if filter(&m) => {}
+                    _ => continue,
+                }
+            }
+            if let Some(stored) = self.vectors.get(&id) {
+                top.push(
+                    id,
+                    cosine_with_norms(query_vector, &stored.vector, query_norm, stored.magnitude),
+                );
+            }
+        }
+        top.into_sorted()
+    }
+
+    /// Attach metadata to the ranked ids, applying `filter` and stopping at
+    /// `k`. Metadata is cloned only for the returned matches.
+    fn to_matches(
+        &self,
+        results: Vec<SearchResult>,
+        k: usize,
+        filter: Option<&dyn Fn(&VectorMetadata) -> bool>,
+    ) -> Vec<SearchMatch> {
+        let mut matches = Vec::with_capacity(results.len().min(k));
+        for result in results {
+            if matches.len() >= k {
+                break;
+            }
+            if let Some(metadata) = self.metadata.get(&result.id) {
+                if filter.is_some_and(|f| !f(&metadata)) {
+                    continue;
+                }
+                matches.push(SearchMatch {
+                    vector_id: result.id,
+                    similarity: result.similarity,
+                    metadata: metadata.clone(),
+                });
+            }
+        }
+        matches
+    }
+
+    /// HNSW search with configurable ef_search parameter.
+    ///
+    /// Returns `None` when the graph is not live or its entry point is gone,
+    /// so the caller can fall back to an exact scan.
+    fn graph_search(
+        &self,
+        query_vector: &[f32],
+        query_norm: f32,
         k: usize,
         ef_search: usize,
-    ) -> Result<Vec<SearchResult>> {
+    ) -> Option<Vec<SearchResult>> {
+        if !self.hnsw_active.load(Ordering::Acquire) {
+            return None;
+        }
+        let mut results = self.graph_candidates(query_vector, query_norm, ef_search.max(k))?;
+        results.truncate(k);
+        Some(results)
+    }
+
+    /// Greedy best-first walk over the graph keeping the `ef` best nodes,
+    /// sorted best first. Nodes whose vector has been removed are skipped.
+    fn graph_candidates(
+        &self,
+        query_vector: &[f32],
+        query_norm: f32,
+        ef: usize,
+    ) -> Option<Vec<SearchResult>> {
         use std::cmp::Reverse;
         use std::collections::BinaryHeap;
 
-        // Get entry point
-        let entry_point = self
-            .hnsw_index
-            .get_entry_point()
-            .ok_or_else(|| anyhow::anyhow!("HNSW index is empty"))?;
+        let entry_point = self.hnsw_index.get_entry_point()?;
+        let initial_similarity = self.similarity_to(query_vector, query_norm, entry_point)?;
 
         // Max-heap for candidates (best similarity first via Ord impl)
         let mut candidates: BinaryHeap<SearchResult> = BinaryHeap::new();
         // Min-heap for results (worst similarity first, to efficiently drop worst)
         let mut results: BinaryHeap<Reverse<SearchResult>> = BinaryHeap::new();
-        let mut visited = std::collections::HashSet::new();
+        let mut visited = HashSet::new();
+        let mut neighbours = Vec::new();
 
-        // Start from entry point
-        let initial_similarity = self.get_vector_similarity(query_vector, entry_point)?;
-        candidates.push(SearchResult {
+        let start = SearchResult {
             id: entry_point,
             similarity: initial_similarity,
-        });
-        results.push(Reverse(SearchResult {
-            id: entry_point,
-            similarity: initial_similarity,
-        }));
+        };
+        candidates.push(start.clone());
+        results.push(Reverse(start));
         visited.insert(entry_point);
 
-        // Expand search through connections using heap
         while let Some(current) = candidates.pop() {
             // Early termination: if current candidate is worse than worst result, stop
-            if results.len() >= ef_search
+            if results.len() >= ef
                 && let Some(Reverse(worst)) = results.peek()
                 && current.similarity < worst.similarity
             {
                 break;
             }
 
-            // Explore connections
-            if let Some(connections) = self.hnsw_index.get_connections(current.id) {
-                for &connected_id in &connections {
-                    if visited.insert(connected_id) {
-                        let similarity = self.get_vector_similarity(query_vector, connected_id)?;
-                        let result = SearchResult {
-                            id: connected_id,
-                            similarity,
-                        };
-
-                        // Add to candidates heap
-                        candidates.push(result.clone());
-
-                        // Add to results min-heap
-                        results.push(Reverse(result));
-
-                        // Keep only top ef_search results
-                        while results.len() > ef_search {
-                            results.pop(); // Removes worst (smallest similarity)
-                        }
-                    }
+            if !self
+                .hnsw_index
+                .connections_into(current.id, &mut neighbours)
+            {
+                continue;
+            }
+            for &connected_id in &neighbours {
+                if !visited.insert(connected_id) {
+                    continue;
+                }
+                let Some(similarity) = self.similarity_to(query_vector, query_norm, connected_id)
+                else {
+                    continue;
+                };
+                let result = SearchResult {
+                    id: connected_id,
+                    similarity,
+                };
+                candidates.push(result.clone());
+                results.push(Reverse(result));
+                if results.len() > ef {
+                    results.pop(); // Removes worst (smallest similarity)
                 }
             }
         }
 
-        // Extract top k from results and sort by similarity (descending)
-        let mut final_results: Vec<SearchResult> = results.into_iter().map(|r| r.0).collect();
-        final_results.sort_by(|a, b| {
-            b.similarity
-                .partial_cmp(&a.similarity)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        final_results.truncate(k);
-
-        Ok(final_results)
+        Some(results.into_sorted_vec().into_iter().map(|r| r.0).collect())
     }
 
-    /// Get vector similarity (helper for HNSW search)
-    fn get_vector_similarity(&self, query_vector: &[f32], vector_id: u32) -> Result<f32> {
-        self.vectors
-            .get(&vector_id)
-            .map(|entry| {
-                let stored_vector = entry.value();
-                Self::calculate_cosine_similarity(query_vector, &stored_vector.vector)
-            })
-            .ok_or_else(|| anyhow::anyhow!("Vector {} not found", vector_id))
-    }
-
-    /// Calculate cosine similarity between two vectors
-    fn calculate_cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-        if a.len() != b.len() {
-            return 0.0;
-        }
-
-        let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-        let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-
-        if norm_a == 0.0 || norm_b == 0.0 {
-            0.0
-        } else {
-            dot_product / (norm_a * norm_b)
-        }
+    fn similarity_to(&self, query_vector: &[f32], query_norm: f32, vector_id: u32) -> Option<f32> {
+        self.vectors.get(&vector_id).map(|stored| {
+            cosine_with_norms(query_vector, &stored.vector, query_norm, stored.magnitude)
+        })
     }
 
     /// Quantize a vector (simplified implementation)
@@ -419,175 +601,141 @@ impl VectorDB {
         }
     }
 
-    /// Assign a random layer to a new vector using exponential distribution
-    /// Higher layers are exponentially rarer, creating the hierarchical structure
+    /// Assign a random layer to a new vector using exponential distribution.
+    ///
+    /// The graph itself is single-layer; the layer only decides which node
+    /// becomes the search entry point (the highest one).
     fn random_layer(&self) -> usize {
         // ml = 1 / ln(M) where M is max_connections
-        // This gives the optimal layer distribution for HNSW
-        let ml = 1.0 / (self.config.max_connections as f64).ln();
+        let ml = 1.0 / (self.config.max_connections.max(2) as f64).ln();
         let r: f64 = rand::random::<f64>().max(1e-10); // Avoid log(0)
         let layer = (-r.ln() * ml).floor() as usize;
         // Cap at num_layers to prevent unbounded growth
         layer.min(self.config.num_layers.saturating_sub(1))
     }
 
-    /// Find k nearest neighbors to a query vector from existing vectors
-    fn find_nearest_neighbors(
+    /// Exact k nearest *indexed* nodes — used while the graph is still too
+    /// small for a graph walk to be cheaper than scoring every node.
+    fn nearest_graph_nodes(
         &self,
         query_vector: &[f32],
+        query_norm: f32,
         k: usize,
-        exclude_id: Option<u32>,
     ) -> Vec<SearchResult> {
-        use std::cmp::Reverse;
-        use std::collections::BinaryHeap;
-
-        // Min-heap to keep track of k best (worst at top for easy removal)
-        let mut heap: BinaryHeap<Reverse<SearchResult>> = BinaryHeap::new();
-
-        for entry in self.vectors.iter() {
-            let id = *entry.key();
-
-            // Skip excluded vector (self)
-            if Some(id) == exclude_id {
-                continue;
-            }
-
-            let stored = entry.value();
-            let similarity = Self::calculate_cosine_similarity(query_vector, &stored.vector);
-            let result = SearchResult { id, similarity };
-
-            if heap.len() < k {
-                heap.push(Reverse(result));
-            } else if let Some(Reverse(worst)) = heap.peek()
-                && similarity > worst.similarity
-            {
-                heap.pop();
-                heap.push(Reverse(result));
-            }
-        }
-
-        // Extract results sorted by similarity (descending)
-        let mut results: Vec<_> = heap.into_iter().map(|r| r.0).collect();
-        results.sort_by(|a, b| {
-            b.similarity
-                .partial_cmp(&a.similarity)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        results
+        let ids = self.hnsw_index.node_ids();
+        self.scan_ids(&ids, query_vector, query_norm, k, None)
     }
 
-    /// Add bidirectional connection between two vectors in the HNSW index
-    fn add_bidirectional_connection(&self, from_id: u32, to_id: u32) {
-        // Add connection from -> to
+    /// Add `to_id` to `from_id`'s adjacency list
+    fn add_connection(&self, from_id: u32, to_id: u32) {
         self.hnsw_index
             .connections
             .entry(from_id)
             .or_default()
             .push(to_id);
-
-        // Add connection to -> from
-        self.hnsw_index
-            .connections
-            .entry(to_id)
-            .or_default()
-            .push(from_id);
     }
 
     /// Prune connections to keep only the best max_connections neighbors
     fn prune_connections(&self, vector_id: u32, max_connections: usize) {
+        let Some((query, query_norm)) = self
+            .vectors
+            .get(&vector_id)
+            .map(|v| (v.vector.clone(), v.magnitude))
+        else {
+            return;
+        };
+
         if let Some(mut entry) = self.hnsw_index.connections.get_mut(&vector_id) {
             let connections = entry.value_mut();
             if connections.len() <= max_connections {
                 return;
             }
-
-            // Get the vector we're pruning connections for
-            let query = match self.vectors.get(&vector_id) {
-                Some(v) => v.vector.clone(),
-                None => return,
-            };
-
-            // Calculate similarities and keep only the best connections
-            let mut scored: Vec<_> = connections
-                .iter()
-                .filter_map(|&neighbor_id| {
-                    self.vectors.get(&neighbor_id).map(|v| {
-                        let sim = Self::calculate_cosine_similarity(&query, &v.vector);
-                        (neighbor_id, sim)
-                    })
-                })
-                .collect();
-
-            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            *connections = scored
-                .into_iter()
-                .take(max_connections)
-                .map(|(id, _)| id)
-                .collect();
+            let mut top = TopK::new(max_connections);
+            for &neighbor_id in connections.iter() {
+                if let Some(sim) = self.similarity_to(&query, query_norm, neighbor_id) {
+                    top.push(neighbor_id, sim);
+                }
+            }
+            *connections = top.into_sorted().into_iter().map(|r| r.id).collect();
         }
     }
 
-    /// Build HNSW index for a single vector using proper nearest neighbor selection
+    /// Insert one stored vector into the live graph.
     ///
-    /// This implements a simplified but correct HNSW insertion:
-    /// 1. Assigns a random layer using exponential distribution
-    /// 2. Finds actual nearest neighbors (not random vectors)
-    /// 3. Creates bidirectional connections
-    /// 4. Prunes connections to maintain graph sparsity
-    fn build_hnsw_index_for_vector(&self, vector_id: u32) -> Result<()> {
+    /// Neighbours come from a graph walk with `ef_construction` (exact scan
+    /// while the graph is small), so an insert costs O(ef · M), not O(n).
+    fn insert_into_graph(&self, vector_id: u32) {
         let max_connections = self.config.max_connections;
-
-        // Get the vector being indexed
-        let query_vector = self
+        let Some((query_vector, query_norm)) = self
             .vectors
             .get(&vector_id)
-            .map(|v| v.vector.clone())
-            .ok_or_else(|| anyhow::anyhow!("Vector {} not found", vector_id))?;
+            .map(|v| (v.vector.clone(), v.magnitude))
+        else {
+            return; // removed concurrently
+        };
 
-        // Assign random layer (exponential distribution)
         let layer = self.random_layer();
-
-        // First vector - just add it with no connections
-        if self.hnsw_index.is_empty() {
-            self.hnsw_index.add_vector(vector_id, layer, Vec::new());
-            debug!(
-                "Built HNSW index for first vector {} at layer {}",
-                vector_id, layer
-            );
-            return Ok(());
-        }
-
-        // Find nearest neighbors using actual distance calculation
         let ef_construction = self.config.ef_construction.max(max_connections * 2);
-        let neighbors =
-            self.find_nearest_neighbors(&query_vector, ef_construction, Some(vector_id));
 
-        // Select best neighbors (up to max_connections)
-        let selected_neighbors: Vec<u32> = neighbors
+        let neighbors = if self.hnsw_index.len() <= ef_construction {
+            self.nearest_graph_nodes(&query_vector, query_norm, max_connections)
+        } else {
+            self.graph_candidates(&query_vector, query_norm, ef_construction)
+                .unwrap_or_else(|| {
+                    self.nearest_graph_nodes(&query_vector, query_norm, max_connections)
+                })
+        };
+
+        let selected: Vec<u32> = neighbors
             .iter()
+            .filter(|r| r.id != vector_id)
             .take(max_connections)
             .map(|r| r.id)
             .collect();
 
-        // Add bidirectional connections
-        for &neighbor_id in &selected_neighbors {
-            self.add_bidirectional_connection(vector_id, neighbor_id);
-            // Prune neighbor's connections if they have too many
+        // Register the node with its outgoing edges first, then add the
+        // reverse edges, so nothing overwrites edges added to it meanwhile.
+        self.hnsw_index
+            .add_vector(vector_id, layer, selected.clone());
+        for &neighbor_id in &selected {
+            self.add_connection(neighbor_id, vector_id);
             self.prune_connections(neighbor_id, max_connections);
         }
 
-        // Add vector to index
-        self.hnsw_index
-            .add_vector(vector_id, layer, selected_neighbors.clone());
-
         debug!(
-            "Built HNSW index for vector {} at layer {} with {} neighbors (nearest similarity: {:.3})",
+            "Indexed vector {} at layer {} with {} neighbors",
             vector_id,
             layer,
-            selected_neighbors.len(),
-            neighbors.first().map(|r| r.similarity).unwrap_or(0.0)
+            selected.len()
         );
-        Ok(())
+    }
+
+    /// Rebuild the graph from all stored vectors. Caller holds `build_lock`.
+    fn build_graph_locked(&self) {
+        self.hnsw_index.clear();
+        // Live before the snapshot: inserts racing with the build add
+        // themselves incrementally instead of being missed.
+        self.hnsw_active.store(true, Ordering::Release);
+
+        let mut vector_ids: Vec<u32> = self.vectors.iter().map(|entry| *entry.key()).collect();
+        vector_ids.sort_unstable();
+
+        // Seed sequentially until graph walks take over from exact neighbour
+        // scans, then insert the rest in parallel (inserts are thread-safe).
+        let seed = vector_ids.len().min(
+            self.config
+                .ef_construction
+                .max(self.config.max_connections * 2)
+                + 1,
+        );
+        let insert = |&vector_id: &u32| {
+            if !self.hnsw_index.contains(vector_id) {
+                self.insert_into_graph(vector_id);
+            }
+        };
+        vector_ids[..seed].iter().for_each(insert);
+        vector_ids[seed..].par_iter().for_each(insert);
+        self.stats.is_built.store(true, Ordering::Relaxed);
     }
 
     /// Get metadata for a vector
@@ -597,25 +745,53 @@ impl VectorDB {
 
     /// Remove a vector from the database
     pub fn remove_vector(&self, vector_id: u32) -> Result<bool> {
-        // Remove from vectors
         let removed_vector = self.vectors.remove(&vector_id);
+        if let Some((_, metadata)) = self.metadata.remove(&vector_id) {
+            self.unindex_metadata(vector_id, &metadata);
+        }
 
-        // Remove metadata - we don't need the removed value
-        self.metadata.remove(&vector_id);
-
-        if let Some(removed) = removed_vector {
+        if let Some((_, removed)) = removed_vector {
             // Update statistics - match size calculation from add_vector
-            let vector_size_bytes = stored_vector_size(&removed.1);
-            self.stats.record_vector_removed(vector_size_bytes);
-
-            // Remove from HNSW index
+            self.stats
+                .record_vector_removed(stored_vector_size(&removed));
             self.hnsw_index.remove_vector(vector_id);
-
             debug!("Removed vector {} from database", vector_id);
             Ok(true)
         } else {
             Ok(false)
         }
+    }
+
+    /// Remove several vectors with a single pass over the HNSW graph.
+    /// Returns how many existed.
+    pub fn remove_vectors(&self, vector_ids: &[u32]) -> usize {
+        let mut removed_ids = HashSet::with_capacity(vector_ids.len());
+        for &vector_id in vector_ids {
+            if let Some((_, metadata)) = self.metadata.remove(&vector_id) {
+                self.unindex_metadata(vector_id, &metadata);
+            }
+            if let Some((_, removed)) = self.vectors.remove(&vector_id) {
+                self.stats
+                    .record_vector_removed(stored_vector_size(&removed));
+                removed_ids.insert(vector_id);
+            }
+        }
+        self.hnsw_index.remove_vectors(&removed_ids);
+        removed_ids.len()
+    }
+
+    /// Remove every vector whose `metadata.id` is `content_id`. Returns how
+    /// many were removed.
+    pub fn remove_by_content_id(&self, content_id: &str) -> usize {
+        let ids = self.find_vector_ids_by_content_id(content_id);
+        self.remove_vectors(&ids)
+    }
+
+    /// Remove every vector whose `metadata.source` is `source` (e.g. all of
+    /// a session's vectors). Returns how many were removed.
+    pub fn remove_source(&self, source: &str) -> usize {
+        let ids = self.source_vector_ids(source);
+        self.remove_vectors(&ids)
     }
 
     /// Get database statistics
@@ -633,107 +809,93 @@ impl VectorDB {
         self.vectors.is_empty()
     }
 
-    /// Check if database has embeddings for a session
+    /// Check if database has embeddings for a session. O(1).
     pub fn has_session_embeddings(&self, session_id: &str) -> bool {
-        self.metadata
-            .iter()
-            .any(|entry| entry.value().source == session_id)
+        self.by_source
+            .get(session_id)
+            .is_some_and(|entry| !entry.ids.is_empty())
     }
 
-    /// Count embeddings for a session
+    /// Count embeddings for a session. O(1).
     pub fn count_session_embeddings(&self, session_id: &str) -> usize {
-        self.metadata
-            .iter()
-            .filter(|entry| entry.value().source == session_id)
-            .count()
+        self.by_source
+            .get(session_id)
+            .map_or(0, |entry| entry.ids.len())
     }
 
-    /// Check if session has update embeddings (not just entities)
+    /// Check if session has update embeddings (not just entities). O(1).
     pub fn has_session_update_embeddings(&self, session_id: &str) -> bool {
-        self.metadata.iter().any(|entry| {
-            entry.value().source == session_id && entry.value().content_type != "EntityDescription"
-        })
+        self.by_source
+            .get(session_id)
+            .is_some_and(|entry| entry.update_count > 0)
     }
 
-    /// Check if a specific update_id exists as an embedding
+    /// Check if a specific update_id exists as an embedding. O(1).
     pub fn has_update_embedding(&self, update_id: &str) -> bool {
-        self.metadata
-            .iter()
-            .any(|entry| entry.value().id == update_id)
+        self.by_content_id.contains_key(update_id)
     }
 
-    /// Find vector_id by content_id (for removal operations)
+    /// Find vector_id by content_id (for removal operations). O(1).
+    ///
+    /// If several vectors share the content id, returns the oldest; use
+    /// [`Self::find_vector_ids_by_content_id`] to get all of them.
     pub fn find_vector_id_by_content_id(&self, content_id: &str) -> Option<u32> {
-        self.metadata
-            .iter()
-            .find(|entry| entry.value().id == content_id)
-            .map(|entry| *entry.key())
+        self.by_content_id
+            .get(content_id)
+            .and_then(|ids| ids.first().copied())
     }
 
-    /// Get list of update IDs that exist in vector DB for a session
+    /// All vector ids whose `metadata.id` is `content_id`, oldest first.
+    pub fn find_vector_ids_by_content_id(&self, content_id: &str) -> Vec<u32> {
+        self.by_content_id
+            .get(content_id)
+            .map(|ids| ids.clone())
+            .unwrap_or_default()
+    }
+
+    /// All vector ids whose `metadata.source` is `source`, in no particular
+    /// order. O(vectors in that source).
+    pub fn source_vector_ids(&self, source: &str) -> Vec<u32> {
+        self.by_source
+            .get(source)
+            .map(|entry| entry.ids.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Get list of update IDs that exist in vector DB for a session.
+    /// O(vectors in that session).
     pub fn get_vectorized_update_ids(&self, session_id: &str) -> Vec<String> {
-        self.metadata
-            .iter()
-            .filter(|entry| {
-                entry.value().source == session_id
-                    && entry.value().content_type != "EntityDescription"
+        self.source_vector_ids(session_id)
+            .into_iter()
+            .filter_map(|id| {
+                self.metadata
+                    .get(&id)
+                    .and_then(|m| (m.content_type != ENTITY_DESCRIPTION).then(|| m.id.clone()))
             })
-            .map(|entry| entry.value().id.clone())
             .collect()
     }
 
-    /// Build HNSW index for all vectors
+    /// Build HNSW index for all vectors, whatever the DB size. From then on
+    /// inserts keep the graph up to date.
     pub fn build_index(&self) -> Result<()> {
         info!("Building HNSW index for {} vectors", self.vectors.len());
-
-        // Collect keys first to avoid modifying during iteration
-        let existing_vector_ids: Vec<u32> = self
-            .hnsw_index
-            .connections
-            .iter()
-            .map(|entry| *entry.key())
-            .collect();
-
-        // Now safely remove
-        for vector_id in existing_vector_ids {
-            self.hnsw_index.remove_vector(vector_id);
-        }
-
-        // Collect vector IDs to build index for
-        let vector_ids: Vec<u32> = self.vectors.iter().map(|entry| *entry.key()).collect();
-
-        // Build index for each vector
-        for vector_id in vector_ids {
-            self.build_hnsw_index_for_vector(vector_id)?;
-        }
-
-        // Mark index as built
-        self.stats.is_built.store(true, Ordering::Relaxed);
-
+        let _guard = self.build_lock.lock();
+        self.build_graph_locked();
         info!("HNSW index built successfully");
         Ok(())
     }
 
     /// Clear all vectors from the database
     pub fn clear(&self) -> Result<()> {
+        let _guard = self.build_lock.lock();
         let vector_count = self.vectors.len();
 
-        // Clear all collections
         self.vectors.clear();
         self.metadata.clear();
-
-        // Collect keys first to avoid modifying during iteration
-        let hnsw_vector_ids: Vec<u32> = self
-            .hnsw_index
-            .connections
-            .iter()
-            .map(|entry| *entry.key())
-            .collect();
-
-        // Clear HNSW index safely
-        for vector_id in hnsw_vector_ids {
-            self.hnsw_index.remove_vector(vector_id);
-        }
+        self.by_source.clear();
+        self.by_content_id.clear();
+        self.hnsw_index.clear();
+        self.hnsw_active.store(false, Ordering::Release);
 
         // Reset statistics
         self.stats.total_vectors.store(0, Ordering::Relaxed);
@@ -747,25 +909,12 @@ impl VectorDB {
         Ok(())
     }
 
-    /// Add vectors in batch
-    pub fn add_vectors_batch(&self, vectors: Vec<(Vec<f32>, VectorMetadata)>) -> Result<Vec<u32>> {
-        let mut ids = Vec::with_capacity(vectors.len());
-
-        for (vector, metadata) in vectors {
-            match self.add_vector(vector, metadata) {
-                Ok(id) => ids.push(id),
-                Err(e) => {
-                    warn!("Failed to add vector to batch: {}", e);
-                    // Continue with other vectors
-                }
-            }
-        }
-
-        info!("Added {} vectors in batch", ids.len());
-        Ok(ids)
-    }
-
     /// Search with custom filter
+    ///
+    /// The filter runs during the scan (before scoring) and metadata is
+    /// cloned only for the returned matches. For source filters prefer
+    /// [`Self::search_in_sources_with_filter`], which scores only that
+    /// source's vectors.
     pub fn search_with_filter<F>(
         &self,
         query_vector: &[f32],
@@ -775,59 +924,41 @@ impl VectorDB {
     where
         F: Fn(&VectorMetadata) -> bool,
     {
+        self.check_query(query_vector)?;
+        let start_time = std::time::Instant::now();
+        let query_norm = l2_norm(query_vector);
         let total_vectors = self.vectors.len();
 
-        // For small databases or when filtering, use exact search to ensure we find all matches
-        // This is more accurate for session-scoped queries where filtered results may be sparse
-        let (search_limit, search_mode, ef_override) = if total_vectors <= 10_000 {
-            // Small database: use exact search for guaranteed accuracy
-            debug!(
-                "search_with_filter: using Exact mode for small database ({} vectors)",
-                total_vectors
-            );
-            (total_vectors, SearchMode::Exact, None)
-        } else {
-            // Large database: use HNSW with increased multiplier for filtered queries
-            // k*10 ensures enough candidates when filtering by session/content_type
-            let search_k = (k * 10).min(total_vectors);
-            let dynamic_ef_search = self.config.ef_search.max(search_k * 2);
+        // Small DB: exact filtered scan, guaranteed to find sparse matches.
+        // Large DB: HNSW with a widened candidate list, filtered afterwards.
+        let graph = if total_vectors > self.config.exact_search_threshold {
+            let search_k = k.saturating_mul(10).min(total_vectors);
+            let ef = self.config.ef_search.max(search_k.saturating_mul(2));
             debug!(
                 "search_with_filter: k={}, search_k={}, dynamic_ef_search={}",
-                k, search_k, dynamic_ef_search
+                k, search_k, ef
             );
-            (search_k, SearchMode::Balanced, Some(dynamic_ef_search))
+            self.graph_search(query_vector, query_norm, search_k, ef)
+        } else {
+            None
         };
 
-        let all_matches =
-            self.search_with_mode(query_vector, search_limit, search_mode, ef_override)?;
-
-        debug!(
-            "search_with_filter: got {} results before filtering",
-            all_matches.len()
-        );
-
-        // Log ContentType distribution for debugging cross-language search issues
-        if log::log_enabled!(log::Level::Debug) {
-            let mut content_type_counts: std::collections::HashMap<String, usize> =
-                std::collections::HashMap::new();
-            for m in &all_matches {
-                *content_type_counts
-                    .entry(m.metadata.content_type.clone())
-                    .or_insert(0) += 1;
+        let matches = match graph {
+            Some(candidates) => self.to_matches(candidates, k, Some(&filter)),
+            None => {
+                debug!(
+                    "search_with_filter: exact filtered scan over {} vectors",
+                    total_vectors
+                );
+                let ranked = self.scan_all(query_vector, query_norm, k, Some(&filter));
+                self.to_matches(ranked, k, None)
             }
-            debug!(
-                "search_with_filter: ContentType distribution: {:?}",
-                content_type_counts
-            );
-        }
+        };
 
-        let filtered_matches: Vec<_> = all_matches
-            .into_iter()
-            .filter(|match_| filter(&match_.metadata))
-            .take(k)
-            .collect();
-
-        Ok(filtered_matches)
+        self.stats
+            .record_search(start_time.elapsed().as_micros() as u64);
+        log_content_types(&matches);
+        Ok(matches)
     }
 
     /// Search in specific source
@@ -837,7 +968,72 @@ impl VectorDB {
         k: usize,
         source: &str,
     ) -> Result<Vec<SearchMatch>> {
-        self.search_with_filter(query_vector, k, |metadata| metadata.source == source)
+        self.search_in_sources(query_vector, k, &[source])
+    }
+
+    /// Exact search over the vectors of the given sources only (e.g. a set
+    /// of session ids). Cost is O(vectors in those sources), independent of
+    /// the DB size, and never misses matches the way a post-filtered HNSW
+    /// search can.
+    pub fn search_in_sources<S: AsRef<str>>(
+        &self,
+        query_vector: &[f32],
+        k: usize,
+        sources: &[S],
+    ) -> Result<Vec<SearchMatch>> {
+        self.search_sources_inner(query_vector, k, sources, None)
+    }
+
+    /// [`Self::search_in_sources`] plus an extra metadata predicate (e.g. a
+    /// date range), applied before scoring.
+    pub fn search_in_sources_with_filter<S, F>(
+        &self,
+        query_vector: &[f32],
+        k: usize,
+        sources: &[S],
+        filter: F,
+    ) -> Result<Vec<SearchMatch>>
+    where
+        S: AsRef<str>,
+        F: Fn(&VectorMetadata) -> bool,
+    {
+        self.search_sources_inner(query_vector, k, sources, Some(&filter))
+    }
+
+    fn search_sources_inner<S: AsRef<str>>(
+        &self,
+        query_vector: &[f32],
+        k: usize,
+        sources: &[S],
+        filter: Option<&dyn Fn(&VectorMetadata) -> bool>,
+    ) -> Result<Vec<SearchMatch>> {
+        self.check_query(query_vector)?;
+        let start_time = std::time::Instant::now();
+        let query_norm = l2_norm(query_vector);
+
+        let mut seen: HashSet<&str> = HashSet::with_capacity(sources.len());
+        let mut ids = Vec::new();
+        for source in sources {
+            let source = source.as_ref();
+            if seen.insert(source)
+                && let Some(entry) = self.by_source.get(source)
+            {
+                ids.extend(entry.ids.iter().copied());
+            }
+        }
+
+        let ranked = self.scan_ids(&ids, query_vector, query_norm, k, filter);
+        let matches = self.to_matches(ranked, k, None);
+
+        self.stats
+            .record_search(start_time.elapsed().as_micros() as u64);
+        debug!(
+            "search_in_sources: scored {} vectors from {} sources, {} matches",
+            ids.len(),
+            seen.len(),
+            matches.len()
+        );
+        Ok(matches)
     }
 
     /// Search by content type
@@ -856,6 +1052,17 @@ impl VectorDB {
 impl Default for VectorDB {
     fn default() -> Self {
         Self::new(VectorDbConfig::default()).expect("Failed to create default vector database")
+    }
+}
+
+/// Log the content-type mix of a result set (debugging cross-language search).
+fn log_content_types(matches: &[SearchMatch]) {
+    if log::log_enabled!(log::Level::Debug) {
+        let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for m in matches {
+            *counts.entry(m.metadata.content_type.as_str()).or_insert(0) += 1;
+        }
+        debug!("search_with_filter: ContentType distribution: {:?}", counts);
     }
 }
 
