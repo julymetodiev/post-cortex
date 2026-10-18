@@ -2,6 +2,7 @@
 
 use crate::{MCPToolResult, get_memory_system};
 use anyhow::Result;
+use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_core::summary::SummaryGenerator;
 use uuid::Uuid;
 
@@ -211,6 +212,10 @@ pub async fn get_entity_network_view(
             .map(|e| e.name.clone()),
     };
 
+    // TODO(perf): get_entity_network clones every entity within two hops
+    // before the max_entities/max_relationships cut below; bound the BFS with
+    // relationships_of once available (the current per-entity API drops edge
+    // direction, which this view reports).
     let network = match resolved_center.as_deref() {
         Some(center) => session.entity_graph.get_entity_network(center, 2),
         None => session.entity_graph.get_entity_network("", 2),
@@ -271,60 +276,56 @@ pub async fn get_session_statistics(session_id: String) -> Result<MCPToolResult>
 
     let session = session_arc.load();
 
+    Ok(MCPToolResult::success(
+        format!("Session statistics for {}", session_id),
+        Some(session_statistics(&session_id, &session)),
+    ))
+}
+
+/// Build the statistics payload for one session.
+fn session_statistics(session_id: &str, session: &ActiveSession) -> serde_json::Value {
     let hot_updates = session.hot_context.len();
     let warm_updates = session.warm_context.len();
     let incremental_updates = session.incremental_updates.len();
-    let total_updates = hot_updates + warm_updates + incremental_updates;
+    // Hot and warm tiers are subsets of the incremental log, so the log alone
+    // is the total.
+    let total_updates = incremental_updates;
     let entity_count = session.entity_graph.entities.len();
-    let relationship_count = session.entity_graph.get_all_relationships().len();
+    let relationship_count = session.entity_graph.get_graph_stats().edge_count;
     let code_refs = session.code_references.len();
     let change_history = session.change_history.len();
 
-    let first_update = session
+    let first = session
         .incremental_updates
         .iter()
-        .min_by_key(|u| u.timestamp)
-        .map(|u| u.timestamp.to_rfc3339());
-    let last_update = session
+        .map(|u| u.timestamp)
+        .min();
+    let last = session
         .incremental_updates
         .iter()
-        .max_by_key(|u| u.timestamp)
-        .map(|u| u.timestamp.to_rfc3339());
+        .map(|u| u.timestamp)
+        .max();
+    let duration = first.zip(last).map(|(f, l)| (l - f).num_minutes());
 
-    let duration = match (first_update.clone(), last_update.clone()) {
-        (Some(first), Some(last)) => {
-            let first_dt = chrono::DateTime::parse_from_rfc3339(&first).ok();
-            let last_dt = chrono::DateTime::parse_from_rfc3339(&last).ok();
-            match (first_dt, last_dt) {
-                (Some(f), Some(l)) => Some((l - f).num_minutes()),
-                _ => None,
-            }
-        }
-        _ => None,
-    };
-
-    Ok(MCPToolResult::success(
-        format!("Session statistics for {}", session_id),
-        Some(serde_json::json!({
-            "session_id": session_id,
-            "name": session.name(),
-            "description": session.description(),
-            "created_at": session.created_at().to_rfc3339(),
-            "last_updated": session.last_updated.to_rfc3339(),
-            "hot_updates": hot_updates,
-            "warm_updates": warm_updates,
-            "incremental_updates": incremental_updates,
-            "total_updates": total_updates,
-            "entity_count": entity_count,
-            "relationship_count": relationship_count,
-            "code_references": code_refs,
-            "change_history": change_history,
-            "first_update": first_update,
-            "last_update": last_update,
-            "duration_minutes": duration,
-            "vectorized_count": 0
-        })),
-    ))
+    serde_json::json!({
+        "session_id": session_id,
+        "name": session.name(),
+        "description": session.description(),
+        "created_at": session.created_at().to_rfc3339(),
+        "last_updated": session.last_updated.to_rfc3339(),
+        "hot_updates": hot_updates,
+        "warm_updates": warm_updates,
+        "incremental_updates": incremental_updates,
+        "total_updates": total_updates,
+        "entity_count": entity_count,
+        "relationship_count": relationship_count,
+        "code_references": code_refs,
+        "change_history": change_history,
+        "first_update": first.map(|t| t.to_rfc3339()),
+        "last_update": last.map(|t| t.to_rfc3339()),
+        "duration_minutes": duration,
+        "vectorized_count": 0
+    })
 }
 
 /// Return a JSON catalog describing every available MCP tool and its usage.
@@ -525,4 +526,61 @@ pub async fn get_tool_catalog() -> Result<MCPToolResult> {
         "Retrieved tool catalog with 26 tools across 5 categories".to_string(),
         Some(catalog),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use post_cortex_core::core::context_update::{
+        ContextUpdate, EntityRelationship, RelationType, UpdateContent, UpdateType,
+    };
+    use std::sync::Arc;
+
+    fn update() -> ContextUpdate {
+        ContextUpdate {
+            id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            update_type: UpdateType::ConceptDefined,
+            content: UpdateContent {
+                title: "t".into(),
+                description: String::new(),
+                details: vec![],
+                examples: vec![],
+                implications: vec![],
+            },
+            related_code: None,
+            parent_update: None,
+            user_marked_important: false,
+            creates_entities: vec![],
+            creates_relationships: vec![],
+            references_entities: vec![],
+            typed_entities: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn statistics_do_not_double_count_tiers() {
+        let mut session = ActiveSession::new(Uuid::new_v4(), None, None);
+        for _ in 0..3 {
+            session.add_incremental_update_fast(update()).await.unwrap();
+        }
+        let graph = Arc::make_mut(&mut session.entity_graph);
+        for (from, to) in [("a", "b"), ("b", "c")] {
+            graph.add_relationship(EntityRelationship {
+                from_entity: from.into(),
+                to_entity: to.into(),
+                relation_type: RelationType::RelatedTo,
+                context: String::new(),
+            });
+        }
+
+        let stats = session_statistics("sid", &session);
+        assert_eq!(stats["hot_updates"], 3);
+        assert_eq!(stats["incremental_updates"], 3);
+        // Hot entries are also in the incremental log: total is 3, not 6.
+        assert_eq!(stats["total_updates"], 3);
+        assert_eq!(stats["relationship_count"], 2);
+        assert_eq!(stats["entity_count"], 3);
+        assert_eq!(stats["duration_minutes"], 0);
+    }
 }
