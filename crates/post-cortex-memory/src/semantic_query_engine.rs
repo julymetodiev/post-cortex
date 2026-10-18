@@ -148,15 +148,12 @@ impl SemanticQueryEngine {
 
         let results = self
             .vectorizer
-            .semantic_search(query, search_limit, None, options)
+            .semantic_search_shared(query, search_limit, None, options)
             .await
             .context("Failed to perform semantic search")?;
 
-        // Filter by similarity threshold
-        let filtered_results: Vec<_> = results
-            .into_iter()
-            .filter(|r| r.similarity_score >= self.config.similarity_threshold)
-            .collect();
+        // Filter by similarity threshold; copy only the survivors
+        let filtered_results = self.above_threshold(&results);
 
         debug!(
             "Global semantic search returned {} results (filtered from threshold {})",
@@ -194,15 +191,12 @@ impl SemanticQueryEngine {
 
         let results = self
             .vectorizer
-            .semantic_search(query, search_limit, Some(session_id), options)
+            .semantic_search_shared(query, search_limit, Some(session_id), options)
             .await
             .context("Failed to perform session semantic search")?;
 
         // Filter by similarity threshold (consistent with global search)
-        let filtered_results: Vec<_> = results
-            .into_iter()
-            .filter(|r| r.similarity_score >= self.config.similarity_threshold)
-            .collect();
+        let filtered_results = self.above_threshold(&results);
 
         debug!(
             "Session semantic search returned {} results (filtered from threshold {})",
@@ -238,15 +232,12 @@ impl SemanticQueryEngine {
 
         let results = self
             .vectorizer
-            .semantic_search_multisession(query, search_limit, session_ids, options)
+            .semantic_search_multisession_shared(query, search_limit, session_ids, options)
             .await
             .context("Failed to perform multisession semantic search")?;
 
         // Filter by similarity threshold (consistent with global/session search)
-        let filtered_results: Vec<_> = results
-            .into_iter()
-            .filter(|r| r.similarity_score >= self.config.similarity_threshold)
-            .collect();
+        let filtered_results = self.above_threshold(&results);
 
         debug!(
             "Multisession semantic search returned {} results (filtered from threshold {})",
@@ -275,7 +266,7 @@ impl SemanticQueryEngine {
         // Get semantic search results
         let search_results = self
             .vectorizer
-            .semantic_search(
+            .semantic_search_shared(
                 topic,
                 self.config.max_related_experiences * 2,
                 None,
@@ -285,7 +276,7 @@ impl SemanticQueryEngine {
 
         let mut related_experiences = Vec::new();
 
-        for result in search_results {
+        for result in search_results.iter() {
             // Skip current session
             if result.session_id == current_session_id {
                 continue;
@@ -301,7 +292,7 @@ impl SemanticQueryEngine {
 
             // Create context description
             let context = self
-                .generate_context_description(&result)
+                .generate_context_description(result)
                 .await
                 .unwrap_or_else(|_| "No context available".to_string());
 
@@ -518,6 +509,15 @@ impl SemanticQueryEngine {
     }
 
     // Helper methods
+
+    /// Copies of the results at or above the similarity threshold.
+    fn above_threshold(&self, results: &[SemanticSearchResult]) -> Vec<SemanticSearchResult> {
+        results
+            .iter()
+            .filter(|r| r.similarity_score >= self.config.similarity_threshold)
+            .cloned()
+            .collect()
+    }
 
     async fn generate_context_description(&self, result: &SemanticSearchResult) -> Result<String> {
         // Generate a brief context description for the result
