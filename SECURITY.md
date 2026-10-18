@@ -6,12 +6,13 @@ Active development happens on `main`. Released crates on crates.io carry semver 
 
 | Crate | Latest | Security patches |
 |-------|--------|------------------|
-| `post-cortex*` (all 8 workspace members) | 0.2.x | Yes |
+| `post-cortex*` (all 8 workspace members) | 0.4.x | Yes |
+| `post-cortex*` | 0.3.x and older | No — upgrade to 0.4 |
 | `post-cortex` 0.1.x (legacy single-crate) | 0.1.23 | No — superseded by the 8-crate workspace |
 
 ## Reporting a vulnerability
 
-Please **do not** open public GitHub issues for security vulnerabilities. Email `security@juliusbiascan.dev` (PGP key on the GitHub profile). Expect:
+Please **do not** open public GitHub issues for security vulnerabilities. Report them privately through GitHub: [Security → Report a vulnerability](https://github.com/julymetodiev/post-cortex/security/advisories/new). Expect:
 
 - Acknowledgement within 72 hours.
 - A coordinated-disclosure window of up to 90 days for the fix to land in a tagged release before public disclosure.

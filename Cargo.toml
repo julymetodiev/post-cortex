@@ -20,7 +20,7 @@ version = "0.4.0"
 edition = "2024"
 authors = ["Julius ML"]
 license = "MIT"
-repository = "https://github.com/juliusbiascan/post-cortex"
+repository = "https://github.com/julymetodiev/post-cortex"
 rust-version = "1.95"
 
 # Workspace-wide clippy lint overrides. The actionable lints stay denied

@@ -121,6 +121,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answer-only control).
 - Clippy 1.99: `double_must_use` (from `async_trait`) allowed workspace-wide;
   `fetch_update` deprecation allowed where the MSRV (1.90) lacks `try_update`.
+- **Partial `daemon.toml` files were ignored.** `host`, `port` and
+  `data_directory` had no defaults, so a file that set only some keys (for
+  example `host` plus `allowed_hosts`) failed to parse and the daemon started
+  with every setting at its default, logging only a warning. Every key is now
+  optional.
+- **Crate metadata pointed at the wrong repository** (`juliusbiascan/post-cortex`,
+  an unrelated account). `repository` is now
+  `https://github.com/julymetodiev/post-cortex`; `SECURITY.md` sends reports to
+  GitHub private vulnerability reporting instead of an unrelated e-mail domain.
+- Redaction tests used a Telegram-shaped token that GitHub secret scanning
+  reported as leaked, and fixtures with real-looking credentials and host IPs.
+  Fake values are now assembled at run time and fixtures use placeholder
+  credentials and documentation addresses (RFC 5737 / CGNAT).
+- READMEs: wrong default ports (51900/51901 → 3737/3738), stale MSRV, versions
+  and feature tables (`embeddings` is not BERT; `bert` is opt-in), removed
+  modules, and Rust examples that no longer compiled. Every README example now
+  compiles against 0.4.0.
 
 ### Changed
 
@@ -157,6 +174,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP and gRPC text payloads use compact JSON.
 - `assemble_context` description now says what it does (entity match, one-hop
   graph, impact analysis, recency) — it does not use embeddings.
+- **MSRV 1.90 → 1.95**: `surrealdb-common` 3.3.4 uses `std::hint::cold_path`.
+- Dependencies refreshed (`cargo update`, picking up fixes in h2, quinn-proto,
+  crossbeam-epoch and rkyv). `cargo deny` allows the BUSL-1.1 SurrealDB 3.3
+  sub-crates like `surrealdb` itself. quick-xml (via `surrealdb-core` →
+  `object_store`, unused) and zip (via candle, `bert` only, extraction unused)
+  advisories are ignored with the reason in `deny.toml` / `.cargo/audit.toml`.
+- MCP `tools/list` returns tools sorted by name (the order used to be arbitrary);
+  `serverInfo` reports the rmcp version (3.5.1).
 
 ### Performance
 

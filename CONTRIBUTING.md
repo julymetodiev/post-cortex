@@ -13,7 +13,7 @@ We appreciate your interest in contributing to Post-Cortex! This document provid
 
 2. **Repository Setup**
    ```bash
-   git clone https://github.com/juliusbiascan/post-cortex.git
+   git clone https://github.com/julymetodiev/post-cortex.git
    cd post-cortex
    cargo build --features embeddings
    ```
