@@ -594,17 +594,22 @@ impl PostCortex for PcxGrpcService {
                 let selected_json = match jsonpath::apply_select(
                     &full_payload,
                     req.select_string.as_deref(),
-                    if req.select_map.is_empty() { None } else { Some(&req.select_map) },
+                    if req.select_map.is_empty() {
+                        None
+                    } else {
+                        Some(&req.select_map)
+                    },
                 ) {
-                    Ok(filtered) => serde_json::to_string(&filtered)
-                        .unwrap_or_else(|_| "null".to_string()),
+                    Ok(filtered) => {
+                        serde_json::to_string(&filtered).unwrap_or_else(|_| "null".to_string())
+                    }
                     Err(e) => {
-                        return Err(Status::invalid_argument(
-                            format!("Invalid JSONPath expression at offset {}: {}. \
+                        return Err(Status::invalid_argument(format!(
+                            "Invalid JSONPath expression at offset {}: {}. \
                                      Allowed: $, .field, [n], [-n], [a:b], [*], [0,3,7]. \
                                      Forbidden: .., [?(...)], functions, [a:b:c]",
-                                    e.byte_offset, e.message),
-                        ));
+                            e.byte_offset, e.message
+                        )));
                     }
                 };
 
@@ -720,8 +725,7 @@ impl PostCortex for PcxGrpcService {
         {
             match self.memory.get_vectorization_stats() {
                 Ok(stats) => {
-                    let text =
-                        serde_json::to_string_pretty(&stats).unwrap_or_else(|_| "{}".to_string());
+                    let text = serde_json::to_string(&stats).unwrap_or_else(|_| "{}".to_string());
                     Ok(Response::new(TextResponse { text }))
                 }
                 Err(e) => {
@@ -778,8 +782,7 @@ impl PostCortex for PcxGrpcService {
         };
 
         let summary = SummaryGenerator::generate_structured_summary_filtered(&session, &options);
-        let text =
-            serde_json::to_string_pretty(&summary).unwrap_or_else(|_| format!("{summary:?}"));
+        let text = serde_json::to_string(&summary).unwrap_or_else(|_| format!("{summary:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -801,8 +804,7 @@ impl PostCortex for PcxGrpcService {
 
         use post_cortex_core::summary::SummaryGenerator;
         let decisions = SummaryGenerator::extract_decision_timeline(&session);
-        let text =
-            serde_json::to_string_pretty(&decisions).unwrap_or_else(|_| format!("{decisions:?}"));
+        let text = serde_json::to_string(&decisions).unwrap_or_else(|_| format!("{decisions:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -827,8 +829,7 @@ impl PostCortex for PcxGrpcService {
             &session,
             req.limit.map(|v| v as usize).unwrap_or(5),
         );
-        let text =
-            serde_json::to_string_pretty(&insights).unwrap_or_else(|_| format!("{insights:?}"));
+        let text = serde_json::to_string(&insights).unwrap_or_else(|_| format!("{insights:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -855,8 +856,7 @@ impl PostCortex for PcxGrpcService {
         if let Some(limit) = req.limit {
             analysis.truncate(limit as usize);
         }
-        let text =
-            serde_json::to_string_pretty(&analysis).unwrap_or_else(|_| format!("{analysis:?}"));
+        let text = serde_json::to_string(&analysis).unwrap_or_else(|_| format!("{analysis:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -887,8 +887,7 @@ impl PostCortex for PcxGrpcService {
                 }
             }
         };
-        let text =
-            serde_json::to_string_pretty(&network).unwrap_or_else(|_| format!("{network:?}"));
+        let text = serde_json::to_string(&network).unwrap_or_else(|_| format!("{network:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -910,7 +909,7 @@ impl PostCortex for PcxGrpcService {
 
         use post_cortex_core::summary::SummaryGenerator;
         let stats = SummaryGenerator::calculate_session_stats(&session);
-        let text = serde_json::to_string_pretty(&stats).unwrap_or_else(|_| format!("{stats:?}"));
+        let text = serde_json::to_string(&stats).unwrap_or_else(|_| format!("{stats:?}"));
 
         Ok(Response::new(TextResponse { text }))
     }
@@ -1043,17 +1042,22 @@ impl PostCortex for PcxGrpcService {
             let selected_json = match jsonpath::apply_select(
                 &full_payload,
                 req.select_string.as_deref(),
-                if req.select_map.is_empty() { None } else { Some(&req.select_map) },
+                if req.select_map.is_empty() {
+                    None
+                } else {
+                    Some(&req.select_map)
+                },
             ) {
-                Ok(filtered) => serde_json::to_string(&filtered)
-                    .unwrap_or_else(|_| "null".to_string()),
+                Ok(filtered) => {
+                    serde_json::to_string(&filtered).unwrap_or_else(|_| "null".to_string())
+                }
                 Err(e) => {
-                    return Err(Status::invalid_argument(
-                        format!("Invalid JSONPath expression at offset {}: {}. \
+                    return Err(Status::invalid_argument(format!(
+                        "Invalid JSONPath expression at offset {}: {}. \
                                  Allowed: $, .field, [n], [-n], [a:b], [*], [0,3,7]. \
                                  Forbidden: .., [?(...)], functions, [a:b:c]",
-                                e.byte_offset, e.message),
-                    ));
+                        e.byte_offset, e.message
+                    )));
                 }
             };
 
