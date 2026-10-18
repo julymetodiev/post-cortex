@@ -104,17 +104,19 @@ toml = "0.9.10"
 flate2 = "1.0"
 zstd = "0.13"
 rmcp = { version = "0.12.0", features = ["server", "transport-streamable-http-server"] }
-tonic = "0.12"
-tonic-build = "0.12"
-prost = "0.13"
-prost-types = "0.13"
+tonic = "0.14"
+# tonic 0.14 split prost codegen/runtime out of tonic-build / tonic.
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
+prost = "0.14"
+prost-types = "0.14"
 
 # Observability — added Phase 10; lifted here now so versions stay in lock-step
-# across crates when the otel feature lands.
-opentelemetry = "0.27"
-opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic", "trace", "metrics"] }
-tracing-opentelemetry = "0.28"
+# across crates when the otel feature lands. 0.31 is the line on tonic 0.14.
+opentelemetry = "0.31"
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.31", default-features = false, features = ["grpc-tonic", "trace", "metrics"] }
+tracing-opentelemetry = "0.32"
 
 # Dev / test helpers
 tokio-test = "0.4"
