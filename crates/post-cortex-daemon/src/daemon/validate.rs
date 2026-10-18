@@ -13,6 +13,7 @@
 //! - Business rule validation
 
 use crate::daemon::coerce::CoercionError;
+use post_cortex_core::core::context_update::CodeReference;
 use uuid::Uuid;
 
 /// Validate a session ID is a valid UUID and return the parsed value.
@@ -402,9 +403,201 @@ pub fn validate_limits(
     }
 }
 
+/// Parse an optional `code_reference` parameter.
+///
+/// Accepts the forms the tool schema documents, plus the canonical struct:
+/// - `null` / absent → `None`
+/// - `"src/main.rs"`, `"src/main.rs:42"`, `"src/main.rs:10-20"`
+/// - `{"file": "src/main.rs", "line": 42, "function": "process_data"}`
+///   (`file_path`, `start_line`, `end_line`, `code_snippet`,
+///   `change_description`, `commit_hash`, `branch` are honoured too)
+///
+/// Anything else is rejected instead of being silently dropped.
+pub fn validate_code_reference(
+    value: Option<&serde_json::Value>,
+    parameter_path: &str,
+) -> Result<Option<CodeReference>, CoercionError> {
+    use serde_json::Value;
+
+    let invalid = |why: &str, received: &Value| {
+        CoercionError::new(
+            &format!("Invalid code_reference: {why}"),
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid code_reference"),
+            Some(received.clone()),
+        )
+        .with_parameter_path(parameter_path.to_string())
+        .with_expected_type(
+            "\"path[:line[-end]]\" string or {\"file\": ..., \"line\": ..., \"function\": ...} object",
+        )
+        .with_hint("Examples: \"src/main.rs:42\" or {\"file\": \"src/main.rs\", \"line\": 42}")
+    };
+
+    let reference = |file_path: String, start: u32, end: u32| CodeReference {
+        file_path,
+        start_line: start,
+        end_line: end.max(start),
+        code_snippet: String::new(),
+        commit_hash: None,
+        branch: None,
+        change_description: String::new(),
+    };
+
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(v @ Value::String(s)) => {
+            let s = s.trim();
+            // Only treat a trailing `:N` / `:N-M` as a line spec, so paths
+            // containing ':' (e.g. Windows drives) still parse.
+            let (path, lines) = match s.rsplit_once(':') {
+                Some((p, spec))
+                    if !p.is_empty()
+                        && !spec.is_empty()
+                        && spec.chars().all(|c| c.is_ascii_digit() || c == '-') =>
+                {
+                    (p, Some(spec))
+                }
+                _ => (s, None),
+            };
+            if path.is_empty() {
+                return Err(invalid("empty file path", v));
+            }
+            let (start, end) = match lines {
+                None => (0, 0),
+                Some(spec) => {
+                    let mut parts = spec.splitn(2, '-');
+                    let start = parts.next().and_then(|p| p.parse::<u32>().ok());
+                    let end = match parts.next() {
+                        Some(p) => p.parse::<u32>().ok(),
+                        None => start,
+                    };
+                    match (start, end) {
+                        (Some(s), Some(e)) => (s, e),
+                        _ => return Err(invalid("malformed line range", v)),
+                    }
+                }
+            };
+            Ok(Some(reference(path.to_string(), start, end)))
+        }
+        Some(v @ Value::Object(map)) => {
+            let str_field = |k: &str| map.get(k).and_then(Value::as_str).map(str::to_string);
+            let line_field = |k: &str| -> Result<Option<u32>, CoercionError> {
+                match map.get(k) {
+                    None | Some(Value::Null) => Ok(None),
+                    Some(n) => n
+                        .as_u64()
+                        .and_then(|n| u32::try_from(n).ok())
+                        .map(Some)
+                        .ok_or_else(|| {
+                            invalid(&format!("'{k}' must be a non-negative integer"), v)
+                        }),
+                }
+            };
+
+            let file_path = str_field("file_path")
+                .or_else(|| str_field("file"))
+                .filter(|p| !p.trim().is_empty())
+                .ok_or_else(|| invalid("missing 'file' (or 'file_path')", v))?;
+            let start = line_field("start_line")?
+                .or(line_field("line")?)
+                .unwrap_or(0);
+            let end = line_field("end_line")?.unwrap_or(start);
+
+            let mut code_ref = reference(file_path, start, end);
+            code_ref.code_snippet = str_field("code_snippet").unwrap_or_default();
+            code_ref.commit_hash = str_field("commit_hash");
+            code_ref.branch = str_field("branch");
+            code_ref.change_description = str_field("change_description")
+                .or_else(|| str_field("description"))
+                .or_else(|| str_field("function").map(|f| format!("in {f}")))
+                .unwrap_or_default();
+            Ok(Some(code_ref))
+        }
+        Some(v) => Err(invalid("expected a string or an object", v)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_code_reference_string_forms() {
+        use serde_json::json;
+        let r = validate_code_reference(Some(&json!("src/main.rs:42")), "code_reference")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (r.file_path.as_str(), r.start_line, r.end_line),
+            ("src/main.rs", 42, 42)
+        );
+
+        let r = validate_code_reference(Some(&json!("src/lib.rs:10-20")), "code_reference")
+            .unwrap()
+            .unwrap();
+        assert_eq!((r.start_line, r.end_line), (10, 20));
+
+        let r = validate_code_reference(Some(&json!("C:\\x\\y.rs")), "code_reference")
+            .unwrap()
+            .unwrap();
+        assert_eq!((r.file_path.as_str(), r.start_line), ("C:\\x\\y.rs", 0));
+
+        assert!(
+            validate_code_reference(None, "code_reference")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            validate_code_reference(Some(&json!(null)), "code_reference")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_code_reference_object_forms() {
+        use serde_json::json;
+        let r = validate_code_reference(
+            Some(&json!({"file": "src/main.rs", "line": 42, "function": "process_data"})),
+            "code_reference",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(r.file_path, "src/main.rs");
+        assert_eq!((r.start_line, r.end_line), (42, 42));
+        assert_eq!(r.change_description, "in process_data");
+
+        // Canonical CodeReference shape still round-trips.
+        let canonical = json!({
+            "file_path": "a.rs", "start_line": 1, "end_line": 3,
+            "code_snippet": "fn a() {}", "commit_hash": "abc", "branch": "main",
+            "change_description": "added a"
+        });
+        let r = validate_code_reference(Some(&canonical), "code_reference")
+            .unwrap()
+            .unwrap();
+        assert_eq!((r.start_line, r.end_line), (1, 3));
+        assert_eq!(r.commit_hash.as_deref(), Some("abc"));
+        assert_eq!(r.change_description, "added a");
+    }
+
+    #[test]
+    fn test_code_reference_malformed_is_rejected() {
+        use serde_json::json;
+        for bad in [
+            json!(42),
+            json!(["a.rs"]),
+            json!({"line": 3}),
+            json!({"file": "a.rs", "line": "three"}),
+            json!(""),
+        ] {
+            let err = validate_code_reference(Some(&bad), "updates[0].code_reference")
+                .expect_err(&format!("{bad} should be rejected"));
+            assert_eq!(
+                err.parameter_path.as_deref(),
+                Some("updates[0].code_reference")
+            );
+        }
+    }
 
     #[test]
     fn test_validate_session_id_valid() {
