@@ -167,8 +167,9 @@ fn by_importance_desc(a: &&EntityData, b: &&EntityData) -> std::cmp::Ordering {
 }
 
 /// The `limit` smallest elements of `items` under `cmp`, sorted.
-/// O(n + k log k) instead of a full O(n log n) sort.
-fn top_k_by<T, F>(mut items: Vec<T>, limit: usize, mut cmp: F) -> Vec<T>
+/// O(n + k log k) instead of a full O(n log n) sort. Not stable: give `cmp`
+/// a total tie-break when the order of equal elements matters.
+pub(crate) fn top_k_by<T, F>(mut items: Vec<T>, limit: usize, mut cmp: F) -> Vec<T>
 where
     F: FnMut(&T, &T) -> std::cmp::Ordering,
 {
@@ -985,10 +986,26 @@ impl SimpleEntityGraph {
     }
 
     /// Analyze entity importance with graph metrics
+    ///
+    /// Sorted by enhanced importance (highest first), ties by name.
     pub fn analyze_entity_importance(&self) -> Vec<EntityAnalysis> {
-        // Pre-allocate capacity to avoid reallocations
-        let mut analyses = Vec::with_capacity(self.entities.len());
+        self.analyze_entity_importance_top(usize::MAX)
+    }
 
+    /// The `limit` highest-ranked entries of
+    /// [`analyze_entity_importance`](Self::analyze_entity_importance),
+    /// computed with top-k selection; only the survivors are materialised
+    /// (names cloned).
+    pub fn analyze_entity_importance_top(&self, limit: usize) -> Vec<EntityAnalysis> {
+        struct Scored<'a> {
+            score: f32,
+            name: &'a String,
+            entity: &'a EntityData,
+            relationship_count: usize,
+            update_references: usize,
+        }
+
+        let mut scored = Vec::with_capacity(self.entities.len());
         for (name, entity) in &self.entities {
             let node = self.entity_to_node.get(name);
             let relationship_count = match node {
@@ -1005,7 +1022,7 @@ impl SimpleEntityGraph {
                 }
             };
 
-            let mentions_in_updates = self
+            let update_references = self
                 .entity_mentions
                 .get(name)
                 .map(|mentions| mentions.len())
@@ -1013,24 +1030,31 @@ impl SimpleEntityGraph {
 
             // Enhanced importance with graph centrality
             let degree_centrality = relationship_count as f32;
-            let enhanced_importance = entity.importance_score + (degree_centrality * 0.1);
-
-            let entity_analysis = EntityAnalysis {
-                entity_name: name.clone(),
-                importance_score: enhanced_importance,
-                mention_count: entity.mention_count,
+            scored.push(Scored {
+                score: entity.importance_score + (degree_centrality * 0.1),
+                name,
+                entity,
                 relationship_count,
-                update_references: mentions_in_updates,
-                first_seen: entity.first_mentioned,
-                last_seen: entity.last_mentioned,
-            };
-
-            analyses.push(entity_analysis);
+                update_references,
+            });
         }
 
-        // Sort by enhanced importance score (stable, NaN-safe)
-        analyses.sort_by(|a, b| b.importance_score.total_cmp(&a.importance_score));
-        analyses
+        // Highest score first (NaN-safe); ties by name, which matches the
+        // previous stable sort over the BTreeMap's name order.
+        top_k_by(scored, limit, |a, b| {
+            b.score.total_cmp(&a.score).then_with(|| a.name.cmp(b.name))
+        })
+        .into_iter()
+        .map(|s| EntityAnalysis {
+            entity_name: s.name.clone(),
+            importance_score: s.score,
+            mention_count: s.entity.mention_count,
+            relationship_count: s.relationship_count,
+            update_references: s.update_references,
+            first_seen: s.entity.first_mentioned,
+            last_seen: s.entity.last_mentioned,
+        })
+        .collect()
     }
 
     /// New petgraph-specific methods
