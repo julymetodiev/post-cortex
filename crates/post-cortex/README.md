@@ -15,7 +15,7 @@ This is the **facade meta-crate**: one dependency line for the whole post-cortex
 | Domain types, traits, error | [`post-cortex-core`](https://docs.rs/post-cortex-core) |
 | gRPC client (no server) | [`post-cortex-proto`](https://docs.rs/post-cortex-proto) |
 | Custom storage backend | [`post-cortex-storage`](https://docs.rs/post-cortex-storage) |
-| Embedding engine + HNSW | [`post-cortex-embeddings`](https://docs.rs/post-cortex-embeddings) |
+| Embedding engine + vector index | [`post-cortex-embeddings`](https://docs.rs/post-cortex-embeddings) |
 | Full memory orchestrator | [`post-cortex-memory`](https://docs.rs/post-cortex-memory) |
 | MCP tool functions | [`post-cortex-mcp`](https://docs.rs/post-cortex-mcp) |
 | Running daemon + `pcx` CLI | [`post-cortex-daemon`](https://docs.rs/post-cortex-daemon) |
@@ -24,7 +24,7 @@ This is the **facade meta-crate**: one dependency line for the whole post-cortex
 
 ```toml
 [dependencies]
-post-cortex = "0.2"
+post-cortex = "0.4"
 ```
 
 ## Example
@@ -45,10 +45,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Feature | Default | What it enables |
 |---------|---------|-----------------|
-| `embeddings` | yes | BERT + HNSW via `post-cortex-embeddings` |
+| `embeddings` | yes | Semantic search and vectorization (Model2Vec `potion-multilingual-128M` by default) |
+| `bert` | no | BERT embedding backend (Candle) via `post-cortex-memory/bert` and `post-cortex-daemon/bert` |
 | `surrealdb-storage` | no | SurrealDB backend |
 | `surrealdb-tikv` | no | SurrealDB + TiKV distributed KV |
-| `otel` | no | OpenTelemetry exporter wiring |
+| `otel` | no | Placeholder; currently enables nothing (use `post-cortex-daemon/otel`) |
 
 ## Architecture
 
@@ -56,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 post-cortex            (this facade)
 ├── post-cortex-core         (domain — no I/O)
 ├── post-cortex-proto        (gRPC wire types)
-├── post-cortex-embeddings   (BERT + HNSW)
+├── post-cortex-embeddings   (Model2Vec / BERT + vector index)
 ├── post-cortex-storage      (RocksDB + SurrealDB)
 ├── post-cortex-memory       (orchestrator)
 ├── post-cortex-mcp          (MCP tools, pure lib)
@@ -67,7 +68,7 @@ Lock-free design (DashMap, ArcSwap, atomic ops, actor pattern) throughout the st
 
 ## MSRV
 
-Rust 1.85 (edition 2024).
+Rust 1.95 (edition 2024).
 
 ## License
 
