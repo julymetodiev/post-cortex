@@ -104,6 +104,20 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
 
     info!("Memory system initialized successfully");
 
+    // Load the embedding model and stored vectors in the background so the
+    // first search after a restart is not the one that pays for it.
+    #[cfg(feature = "embeddings")]
+    {
+        let warm = memory_system.clone();
+        tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            match warm.warm_up_embeddings().await {
+                Ok(()) => info!("Embeddings warmed up in {:?}", started.elapsed()),
+                Err(e) => error!("Embedding warm-up failed (search will retry lazily): {e}"),
+            }
+        });
+    }
+
     // Inject memory system into MCP tools so they use shared instance
     post_cortex_mcp::inject_memory_system(memory_system.clone());
     info!("Memory system injected into MCP tools");

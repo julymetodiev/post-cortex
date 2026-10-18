@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vector with the embedding time, so recency-biased search saw old records as
   new. Vectors now carry the update's timestamp (entities: `last_mentioned`),
   via `VectorMetadata::with_timestamp`.
+- **First search after a daemon restart was slow** (~6 s: embedding model plus
+  every stored vector loaded lazily), long enough to time out short-deadline
+  clients such as the Hermes memory provider. The daemon now warms embeddings
+  up in the background at startup (`ConversationMemorySystem::warm_up_embeddings`).
 - **`pcx start` ignored `daemon.toml` host/port and `PC_HOST`/`PC_PORT`**:
   the clap defaults always overwrote them. Flags now override only when
   given. The stdio proxy's background start also passed `PCX_*` instead of

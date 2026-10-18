@@ -82,6 +82,18 @@ impl ConversationMemorySystem {
         });
     }
 
+    /// Load the embedding model and the persisted vectors now instead of on
+    /// the first search. A daemon calls this in the background at startup:
+    /// the lazy path costs seconds (model + every stored vector), which made
+    /// the first query after a restart time out in short-deadline clients.
+    #[cfg(feature = "embeddings")]
+    pub async fn warm_up_embeddings(&self) -> Result<(), String> {
+        if !self.config.enable_embeddings {
+            return Ok(());
+        }
+        self.ensure_vectorizer_initialized().await.map(|_| ())
+    }
+
     /// Lazy-initialize content vectorizer on first use with retry mechanism
     #[cfg(feature = "embeddings")]
     pub(crate) async fn ensure_vectorizer_initialized(
