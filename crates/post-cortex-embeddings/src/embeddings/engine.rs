@@ -150,17 +150,17 @@ impl LocalEmbeddingEngine {
             return self.backend.process_batch(texts).await;
         }
 
+        let text_count = texts.len();
         info!(
             "Using BERT embeddings for model_type: {:?}, encoding {} texts",
-            self.config.model_type,
-            texts.len()
+            self.config.model_type, text_count
         );
 
         let total_start_time = std::time::Instant::now();
-        let result = self.encode_batch_with_controls(texts.clone()).await;
+        let result = self.encode_batch_with_controls(texts).await;
 
         let total_time = total_start_time.elapsed();
-        debug!("Encoded {} texts in {:?}", texts.len(), total_time);
+        debug!("Encoded {} texts in {:?}", text_count, total_time);
 
         result
     }
@@ -178,14 +178,22 @@ impl LocalEmbeddingEngine {
             self.current_batch_size()
         };
 
-        let mut all_embeddings = Vec::new();
+        let batch_size = batch_size.max(1);
+        let mut all_embeddings = Vec::with_capacity(texts.len());
+        // Move the strings into each chunk instead of copying them.
+        let mut remaining = texts.into_iter();
 
-        for chunk in texts.chunks(batch_size) {
+        loop {
+            let chunk: Vec<String> = remaining.by_ref().take(batch_size).collect();
+            if chunk.is_empty() {
+                break;
+            }
+            let chunk_len = chunk.len();
             let start_time = std::time::Instant::now();
 
             let batch_result = timeout(
                 Duration::from_secs(self.config.operation_timeout_secs),
-                self.backend.process_batch(chunk.to_vec()),
+                self.backend.process_batch(chunk),
             )
             .await;
 
@@ -193,12 +201,12 @@ impl LocalEmbeddingEngine {
                 Ok(Ok(batch_embeddings)) => {
                     all_embeddings.extend(batch_embeddings);
                     let time_ms = start_time.elapsed().as_millis() as f64;
-                    self.update_batch_performance(chunk.len(), time_ms, 1.0);
+                    self.update_batch_performance(chunk_len, time_ms, 1.0);
                 }
                 Ok(Err(e)) => {
                     error!("Batch processing failed: {}", e);
                     self.update_batch_performance(
-                        chunk.len(),
+                        chunk_len,
                         start_time.elapsed().as_millis() as f64,
                         0.0,
                     );
@@ -291,5 +299,61 @@ impl LocalEmbeddingEngine {
             self.concurrency_controller.current_load(),
             self.concurrency_controller.max_capacity(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+
+    /// BERT-flagged fake that records the chunks it receives.
+    struct RecordingBackend {
+        seen: parking_lot::Mutex<Vec<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl EmbeddingBackend for RecordingBackend {
+        fn embedding_dimension(&self) -> usize {
+            1
+        }
+        fn is_bert_based(&self) -> bool {
+            true
+        }
+        async fn process_batch(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
+            let out = texts.iter().map(|t| vec![t.len() as f32]).collect();
+            self.seen.lock().push(texts);
+            Ok(out)
+        }
+    }
+
+    #[tokio::test]
+    async fn bert_path_chunks_inputs_in_order_without_losing_any() {
+        let backend = Arc::new(RecordingBackend {
+            seen: parking_lot::Mutex::new(Vec::new()),
+        });
+        let config = EmbeddingConfig {
+            model_type: EmbeddingModelType::MiniLM,
+            max_batch_size: 8,
+            adaptive_batching: false,
+            max_concurrent_ops: 2,
+            ..Default::default()
+        };
+        let engine = LocalEmbeddingEngine {
+            backend: backend.clone(),
+            current_batch_size: AtomicUsize::new(config.max_batch_size),
+            batch_performance_cache: Arc::new(DashMap::new()),
+            concurrency_controller: Arc::new(ConcurrencyController::new(2)),
+            config,
+        };
+
+        let texts: Vec<String> = (0..21).map(|i| "x".repeat(i)).collect();
+        let embeddings = engine.encode_batch(texts.clone()).await.unwrap();
+
+        let expected: Vec<Vec<f32>> = (0..21).map(|i| vec![i as f32]).collect();
+        assert_eq!(embeddings, expected);
+        let seen = backend.seen.lock();
+        assert_eq!(seen.iter().map(Vec::len).collect::<Vec<_>>(), vec![8, 8, 5]);
+        assert_eq!(seen.concat(), texts);
     }
 }
