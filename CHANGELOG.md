@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`post-cortex-memory` skill** (`skills/post-cortex-memory/`): teaches an agent
+  when and how to use the nine MCP tools — find or create the session, search
+  before answering (session → workspace → global), use `assemble_context` for
+  "what depends on X", and record decisions and fixes with entities and
+  relations. Works without any project `CLAUDE.md`. In a context-free A/B run
+  (`claude -p` in an empty directory) it triggered on its own in every task and
+  raised the pass rate from 89% to 100%. `pcx setup` installs it to
+  `~/.claude/skills/post-cortex-memory/`; other agents can load the folder
+  directly.
+
 ### Changed
 
 - **`pcx setup` installs a deterministic Stop hook** (`.claude/hooks/pcx-stop-check.py`)
@@ -19,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   open. Existing projects keep their hooks — `pcx setup` skips a
   `settings.json` that already has `hooks`; replace the `Stop` entry by hand
   (see `crates/post-cortex-daemon/src/bin/templates/settings.json`).
+- `pcx setup` no longer writes the outdated `SKILL.md` (six tools, subagent
+  routing) and `error-handling.md` into `~/.claude/agents/post-cortex-agents/`;
+  the skill above replaces both.
 
 ## [0.4.0] - 2026-10-18 — Auth, redaction, row-backed storage and performance
 

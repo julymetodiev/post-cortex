@@ -336,11 +336,6 @@ pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result
         .join(".claude/agents/post-cortex-agents");
 
     let agent_files: &[(&str, &str)] = &[
-        ("SKILL.md", include_str!("../templates/agents/SKILL.md")),
-        (
-            "error-handling.md",
-            include_str!("../templates/agents/error-handling.md"),
-        ),
         (
             "agents/context-builder.md",
             include_str!("../templates/agents/agents/context-builder.md"),
@@ -377,6 +372,29 @@ pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result
                 rel_path
             );
         }
+    }
+
+    // 7. Install the post-cortex-memory skill to ~/.claude/skills/ so Claude Code
+    // can load it in any project. An existing copy is left alone: it may have
+    // been edited, and deleting the directory reinstalls the bundled version.
+    let skill_dir = dirs::home_dir()
+        .ok_or_else(|| "Cannot determine home directory".to_string())?
+        .join(".claude/skills/post-cortex-memory");
+    if skill_dir.join("SKILL.md").exists() {
+        println!(
+            "  ~/.claude/skills/post-cortex-memory already exists, skipping (delete it to reinstall)"
+        );
+    } else {
+        for (rel_path, content) in SKILL_FILES {
+            let target = skill_dir.join(rel_path);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create {}: {}", parent.display(), e))?;
+            }
+            std::fs::write(&target, content)
+                .map_err(|e| format!("Failed to write {}: {}", rel_path, e))?;
+        }
+        println!("  Created: ~/.claude/skills/post-cortex-memory/ (post-cortex usage skill)");
     }
 
     println!();
@@ -441,6 +459,24 @@ async fn create_workspace_for_setup(
     }
 }
 
+/// The post-cortex-memory skill bundled into `pcx`. The canonical copy lives in
+/// `skills/post-cortex-memory/` at the repository root; `templates/skills/` is
+/// kept identical (checked by `bundled_skill_matches_repository_copy`).
+const SKILL_FILES: &[(&str, &str)] = &[
+    (
+        "SKILL.md",
+        include_str!("../templates/skills/post-cortex-memory/SKILL.md"),
+    ),
+    (
+        "references/tools.md",
+        include_str!("../templates/skills/post-cortex-memory/references/tools.md"),
+    ),
+    (
+        "references/setup.md",
+        include_str!("../templates/skills/post-cortex-memory/references/setup.md"),
+    ),
+];
+
 fn generate_claude_md(session_id: &str, workspace_id: &str) -> String {
     include_str!("../templates/CLAUDE.md")
         .replace("<SESSION_ID>", session_id)
@@ -455,4 +491,30 @@ fn generate_compact_reinject_script(session_id: &str, workspace_id: &str) -> Str
     include_str!("../templates/pcx-compact-reinject.sh")
         .replace("<SESSION_ID>", session_id)
         .replace("<WORKSPACE_ID>", workspace_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SKILL_FILES;
+    use std::path::Path;
+
+    /// The bundled skill must not drift from `skills/post-cortex-memory/`.
+    /// Skipped when the repository copy is absent (e.g. building from the
+    /// crates.io package).
+    #[test]
+    fn bundled_skill_matches_repository_copy() {
+        let repo_skill =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills/post-cortex-memory");
+        if !repo_skill.exists() {
+            return;
+        }
+        for (rel_path, bundled) in SKILL_FILES {
+            let canonical = std::fs::read_to_string(repo_skill.join(rel_path))
+                .unwrap_or_else(|e| panic!("read skills/post-cortex-memory/{rel_path}: {e}"));
+            assert_eq!(
+                *bundled, canonical,
+                "templates/skills/post-cortex-memory/{rel_path} differs from skills/post-cortex-memory/{rel_path}; copy it over"
+            );
+        }
+    }
 }
