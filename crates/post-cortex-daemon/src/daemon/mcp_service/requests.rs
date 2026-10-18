@@ -561,9 +561,9 @@ Allowed syntax: $, .field, [n], [-n], [a:b], [*], .*, [0,3,7]
 Forbidden: .., [?(...)], functions, [a:b:c]
 
 Examples:
-- "$.results[0:3].content" → returns the first 3 result texts as array
-- "$.results[*].entry_id" → returns all entry IDs as array
-- "$.total_matches" → returns the count
+- "$.results[0:3].text_content" → returns the first 3 result texts as array
+- "$.results[*].content_id" → returns all content IDs as array
+- "$.results[*].similarity_score" → returns the scores
 
 Note: Mutually exclusive with select_map."#
     )]
@@ -579,8 +579,12 @@ the JSONPath match result. Empty matches produce null.
 Allowed syntax: same as select (Form A).
 
 Examples:
-- {"top3": "$.results[0:3].content", "ids": "$.results[*].entry_id"}
-- {"count": "$.total_matches", "first": "$.results[0].content"}
+- {"top3": "$.results[0:3].text_content", "ids": "$.results[*].content_id"}
+- {"scores": "$.results[*].similarity_score", "first": "$.results[0].text_content"}
+
+Every scope (session, workspace, global) returns the same result fields: content_id,
+session_id, content_type, text_content, similarity_score, importance_score,
+combined_score, timestamp.
 
 Note: Mutually exclusive with select (Form A)."#
     )]

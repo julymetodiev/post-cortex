@@ -167,15 +167,7 @@ pub async fn semantic_search(
             Ok(results) => {
                 let formatted: Vec<serde_json::Value> = results
                     .iter()
-                    .map(|r| {
-                        serde_json::json!({
-                            "content": r.text_content,
-                            "score": r.combined_score,
-                            "session_id": r.session_id,
-                            "type": format!("{:?}", r.content_type),
-                            "timestamp": r.timestamp.to_rfc3339()
-                        })
-                    })
+                    .map(|r| search_hit_to_json(r, true))
                     .collect();
 
                 Ok(MCPToolResult::success(

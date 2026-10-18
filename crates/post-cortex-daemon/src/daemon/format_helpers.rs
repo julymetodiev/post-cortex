@@ -46,20 +46,58 @@ use serde_json::Value;
 /// use post_cortex::daemon::format_helpers::format_search_results;
 ///
 /// let formatted = format_search_results(&results);
-/// // Returns: [{"content": "...", "score": 0.85, ...}, ...]
+/// // Returns: [{"text_content": "...", "similarity_score": 0.85, "combined_score": 0.9, ...}, ...]
 /// ```
 pub fn format_search_results(results: &[SemanticSearchResult]) -> Vec<Value> {
     results
         .iter()
         .map(|r| {
+            // Same fields as session and global scope (post_cortex_mcp search
+            // responses), so one JSONPath `select` works for every scope.
             serde_json::json!({
-                "entry_id": r.content_id,
-                "content": r.text_content,
-                "score": r.combined_score,
+                "content_id": r.content_id,
                 "session_id": r.session_id,
-                "type": format!("{:?}", r.content_type),
-                "timestamp": r.timestamp.to_rfc3339()
+                "content_type": format!("{:?}", r.content_type),
+                "text_content": r.text_content,
+                "similarity_score": r.similarity_score,
+                "importance_score": r.importance_score,
+                "timestamp": r.timestamp.to_rfc3339(),
+                "combined_score": r.combined_score
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use post_cortex_memory::content_vectorizer::ContentType;
+
+    #[test]
+    fn workspace_results_use_the_session_and_global_field_names() {
+        let r = SemanticSearchResult {
+            content_id: "c1".into(),
+            session_id: uuid::Uuid::nil(),
+            content_type: ContentType::DecisionPoint,
+            text_content: "chose Rust".into(),
+            similarity_score: 0.8,
+            importance_score: 1.0,
+            timestamp: chrono::Utc::now(),
+            combined_score: 0.86,
+        };
+        let v = &format_search_results(&[r])[0];
+        for key in [
+            "content_id",
+            "session_id",
+            "content_type",
+            "text_content",
+            "similarity_score",
+            "importance_score",
+            "combined_score",
+            "timestamp",
+        ] {
+            assert!(v.get(key).is_some(), "missing {key}");
+        }
+        assert!(v.get("content").is_none() && v.get("score").is_none());
+    }
 }
