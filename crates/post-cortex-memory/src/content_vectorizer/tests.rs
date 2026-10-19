@@ -28,7 +28,7 @@ use post_cortex_core::core::context_update::{
 };
 use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_embeddings::{
-    EmbeddingConfig, EmbeddingModelType, SearchMatch, VectorDbConfig, VectorMetadata,
+    EmbeddingConfig, EmbeddingModelType, Reranker, SearchMatch, VectorDbConfig, VectorMetadata,
 };
 use post_cortex_storage::traits::VectorStorage;
 
@@ -40,6 +40,9 @@ struct FakeStorage {
     rows: Mutex<HashMap<(String, String), (Vec<f32>, VectorMetadata)>>,
     fail_writes: AtomicBool,
     batch_calls: AtomicUsize,
+    /// When set, `search_text` answers like a full-text backend with these
+    /// content ids, in this order (restricted to the requested sessions).
+    full_text: Mutex<Option<Vec<String>>>,
 }
 
 impl FakeStorage {
@@ -101,6 +104,31 @@ impl VectorStorage for FakeStorage {
         Ok(Vec::new())
     }
 
+    async fn search_text(
+        &self,
+        _query: &str,
+        _query_vector: &[f32],
+        k: usize,
+        sources: &[String],
+    ) -> Result<Option<Vec<SearchMatch>>> {
+        let Some(ids) = self.full_text.lock().clone() else {
+            return Ok(None);
+        };
+        let rows = self.rows.lock();
+        Ok(Some(
+            ids.iter()
+                .flat_map(|id| rows.values().filter(move |(_, m)| &m.id == id))
+                .filter(|(_, m)| sources.is_empty() || sources.contains(&m.source))
+                .take(k)
+                .map(|(_, metadata)| SearchMatch {
+                    vector_id: 0,
+                    similarity: 0.0,
+                    metadata: metadata.clone(),
+                })
+                .collect(),
+        ))
+    }
+
     async fn remove_vector(&self, id: &str) -> Result<bool> {
         let mut rows = self.rows.lock();
         let before = rows.len();
@@ -151,6 +179,12 @@ impl VectorStorage for FakeStorage {
 }
 
 async fn vectorizer() -> (ContentVectorizer, Arc<FakeStorage>) {
+    vectorizer_with(false).await
+}
+
+/// Vectorizer on the fake storage; `full_text_index` turns on the vector
+/// DB's in-memory BM25 index (what RocksDB-backed daemons use).
+async fn vectorizer_with(full_text_index: bool) -> (ContentVectorizer, Arc<FakeStorage>) {
     let model_type = EmbeddingModelType::StaticSimilarityMRL;
     let config = ContentVectorizerConfig {
         embedding_config: EmbeddingConfig {
@@ -160,6 +194,7 @@ async fn vectorizer() -> (ContentVectorizer, Arc<FakeStorage>) {
         vector_db_config: VectorDbConfig {
             dimension: model_type.embedding_dimension(),
             max_vectors: usize::MAX,
+            full_text_index,
             ..Default::default()
         },
         ..Default::default()
@@ -399,4 +434,375 @@ async fn remove_session_vectors_and_reload_without_duplicates() {
     // Persisted copies are untouched and load back in bulk.
     assert_eq!(storage.len(), count);
     assert_eq!(v.load_all_embeddings_from_storage().await.unwrap(), count);
+}
+
+/// A record the vector search does not rank in the top `limit` comes back
+/// once the full-text backend ranks it first, and results never exceed
+/// `limit`. Without a full-text index the vector ranking is used as is.
+#[tokio::test]
+async fn full_text_hits_are_fused_with_vector_results() {
+    let (v, storage) = vectorizer().await;
+    let titles: Vec<(String, String)> = (0..30)
+        .map(|i| (format!("filler topic number {i}"), format!("e{i}")))
+        .chain([("zebracorn migration plan".to_string(), "zebra".to_string())])
+        .collect();
+    let refs: Vec<(&str, &str)> = titles
+        .iter()
+        .map(|(t, e)| (t.as_str(), e.as_str()))
+        .collect();
+    let session = session_with(&refs).await;
+    v.vectorize_session(&session).await.unwrap();
+    let zebra = session
+        .incremental_updates
+        .iter()
+        .find(|u| u.content.title.starts_with("zebracorn"))
+        .unwrap()
+        .id
+        .to_string();
+    let opts = || SearchOptions {
+        recency_bias: Some(0.0),
+        ..SearchOptions::default()
+    };
+    let has_zebra = |rs: &[super::SemanticSearchResult]| rs.iter().any(|r| r.content_id == zebra);
+
+    let vector_only = v
+        .semantic_search("filler topic number", 3, Some(session.id()), opts())
+        .await
+        .unwrap();
+    assert_eq!(vector_only.len(), 3);
+    assert!(!has_zebra(&vector_only));
+
+    *storage.full_text.lock() = Some(vec![zebra.clone()]);
+    // Words on most records are not searched for, so the query needs one
+    // that is not ("migration").
+    let fused = v
+        .semantic_search(
+            "filler topic number migration",
+            3,
+            Some(session.id()),
+            opts(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fused.len(), 3);
+    assert!(
+        has_zebra(&fused),
+        "{:?}",
+        fused.iter().map(|r| &r.text_content).collect::<Vec<_>>()
+    );
+
+    // Other sessions' full-text hits stay out of a session-scoped search.
+    let other = session_with(&[("unrelated", "u")]).await;
+    let fused_other = v
+        .semantic_search("filler topic number", 3, Some(other.id()), opts())
+        .await
+        .unwrap();
+    assert!(!has_zebra(&fused_other));
+}
+
+/// Scores a document by whether it contains `needle`; fails when `needle`
+/// is empty.
+struct FakeReranker {
+    needle: &'static str,
+}
+
+#[async_trait]
+impl Reranker for FakeReranker {
+    async fn score(&self, _query: &str, documents: &[String]) -> Result<Vec<f32>> {
+        anyhow::ensure!(!self.needle.is_empty(), "reranker down");
+        Ok(documents
+            .iter()
+            .map(|d| if d.contains(self.needle) { 1.0 } else { 0.0 })
+            .collect())
+    }
+}
+
+/// The reranker reorders the whole candidate pool, not just the top
+/// `limit`: a record the vector search ranks below `limit` comes first once
+/// the reranker prefers it. A failing reranker leaves the fused order.
+#[tokio::test]
+async fn reranker_reorders_the_candidate_pool() {
+    let titles: Vec<(String, String)> = (0..30)
+        .map(|i| (format!("filler topic number {i}"), format!("e{i}")))
+        .chain([("zebracorn migration plan".to_string(), "zebra".to_string())])
+        .collect();
+    let refs: Vec<(&str, &str)> = titles
+        .iter()
+        .map(|(t, e)| (t.as_str(), e.as_str()))
+        .collect();
+    let session = session_with(&refs).await;
+    let opts = || SearchOptions {
+        recency_bias: Some(0.0),
+        ..SearchOptions::default()
+    };
+    let texts = |rs: &[super::SemanticSearchResult]| {
+        rs.iter()
+            .map(|r| r.text_content.clone())
+            .collect::<Vec<_>>()
+    };
+
+    let (mut v, _) = vectorizer().await;
+    v.set_reranker(Arc::new(FakeReranker {
+        needle: "zebracorn",
+    }));
+    v.vectorize_session(&session).await.unwrap();
+    let reranked = v
+        .semantic_search("filler topic number", 3, Some(session.id()), opts())
+        .await
+        .unwrap();
+    assert_eq!(reranked.len(), 3);
+    assert!(
+        reranked[0].text_content.contains("zebracorn"),
+        "{:?}",
+        texts(&reranked)
+    );
+
+    let (mut down, _) = vectorizer().await;
+    down.set_reranker(Arc::new(FakeReranker { needle: "" }));
+    down.vectorize_session(&session).await.unwrap();
+    let fallback = down
+        .semantic_search("filler topic number", 3, Some(session.id()), opts())
+        .await
+        .unwrap();
+    assert_eq!(fallback.len(), 3);
+    assert!(
+        !fallback[0].text_content.contains("zebracorn"),
+        "{:?}",
+        texts(&fallback)
+    );
+}
+
+/// Each mode uses its own reranker, `accurate` is the default when a remote
+/// reranker is set, and the query cache keeps modes apart.
+#[tokio::test]
+async fn search_modes_pick_their_reranker() {
+    let titles: Vec<(String, String)> = (0..30)
+        .map(|i| (format!("filler topic number {i}"), format!("e{i}")))
+        .chain([
+            ("zebracorn migration plan".to_string(), "zebra".to_string()),
+            ("quokka release notes".to_string(), "quokka".to_string()),
+        ])
+        .collect();
+    let refs: Vec<(&str, &str)> = titles
+        .iter()
+        .map(|(t, e)| (t.as_str(), e.as_str()))
+        .collect();
+    let session = session_with(&refs).await;
+    let (mut v, _) = vectorizer().await;
+    v.set_reranker(Arc::new(FakeReranker {
+        needle: "zebracorn",
+    }));
+    v.set_accurate_reranker(Arc::new(FakeReranker { needle: "quokka" }));
+    v.vectorize_session(&session).await.unwrap();
+
+    use super::SearchMode::{Accurate, Fast, Local};
+    let id = session.id();
+    assert!(top(&v, id, Some(Local)).await.contains("zebracorn"));
+    assert!(top(&v, id, Some(Accurate)).await.contains("quokka"));
+    assert!(
+        top(&v, id, None).await.contains("quokka"),
+        "default is accurate"
+    );
+    let fast = top(&v, id, Some(Fast)).await;
+    assert!(
+        !fast.contains("zebracorn") && !fast.contains("quokka"),
+        "{fast}"
+    );
+
+    v.set_default_mode(Local);
+    assert!(top(&v, id, None).await.contains("zebracorn"));
+}
+
+/// Text of the best result for "filler topic number" in `mode`.
+async fn top(v: &ContentVectorizer, session: Uuid, mode: Option<super::SearchMode>) -> String {
+    let opts = SearchOptions {
+        recency_bias: Some(0.0),
+        mode,
+        ..SearchOptions::default()
+    };
+    v.semantic_search("filler topic number", 3, Some(session), opts)
+        .await
+        .unwrap()[0]
+        .text_content
+        .clone()
+}
+
+/// Vectorizing stores each update's graph terms and agent entities in the
+/// vector's metadata, and `graph_records` reads them back for the session's
+/// retrieval graph.
+#[tokio::test]
+async fn update_vectors_carry_graph_terms_and_entities() {
+    use post_cortex_core::graph::retrieval_graph::RetrievalGraph;
+
+    let titles: Vec<(String, String)> = (0..40)
+        .map(|i| (format!("filler topic number {i}"), format!("e{i}")))
+        .chain([
+            (
+                "Caroline adopted a puppy called Biscuit".to_string(),
+                "puppy".to_string(),
+            ),
+            (
+                "Biscuit chewed the sofa yesterday".to_string(),
+                "sofa".to_string(),
+            ),
+        ])
+        .collect();
+    let refs: Vec<(&str, &str)> = titles
+        .iter()
+        .map(|(t, e)| (t.as_str(), e.as_str()))
+        .collect();
+    let session = session_with(&refs).await;
+    let (v, _) = vectorizer().await;
+    v.vectorize_session(&session).await.unwrap();
+
+    let records = v.graph_records(session.id());
+    assert_eq!(records.len(), 42, "entity vectors are not records");
+    let adopted = records
+        .iter()
+        .find(|r| r.terms.contains("biscuit") && r.terms.contains("adopt"))
+        .expect("terms stored with the vector");
+    assert!(
+        adopted.entities.iter().any(|e| e == "puppy"),
+        "{:?}",
+        adopted.entities
+    );
+
+    let id_of = |title: &str| {
+        session
+            .incremental_updates
+            .iter()
+            .find(|u| u.content.title == title)
+            .unwrap()
+            .id
+            .to_string()
+    };
+    let ranked = RetrievalGraph::build(records, &[]).rank("What did Caroline's puppy chew?", 5);
+    assert_eq!(
+        ranked.first(),
+        Some(&id_of("Caroline adopted a puppy called Biscuit"))
+    );
+    assert!(
+        ranked.contains(&id_of("Biscuit chewed the sofa yesterday")),
+        "second hop"
+    );
+}
+
+/// With a storage backend that has no full-text index (RocksDB), BM25 comes
+/// from the vector DB's in-memory index, scoped to the session.
+#[tokio::test]
+async fn in_memory_bm25_when_storage_has_none() {
+    let titles: Vec<(String, String)> = (0..30)
+        .map(|i| (format!("filler topic number {i}"), format!("e{i}")))
+        .chain([("zebracorn migration plan".to_string(), "zebra".to_string())])
+        .collect();
+    let refs: Vec<(&str, &str)> = titles
+        .iter()
+        .map(|(t, e)| (t.as_str(), e.as_str()))
+        .collect();
+    let session = session_with(&refs).await;
+    let other = session_with(&[("zebracorn in another session", "z")]).await;
+    let sources = [session.id().to_string()];
+    let query_vector = vec![0.0; EmbeddingModelType::StaticSimilarityMRL.embedding_dimension()];
+
+    let (plain, _) = vectorizer_with(false).await;
+    plain.vectorize_session(&session).await.unwrap();
+    let terms = plain.vector_db.query_terms("zebracorn");
+    assert!(
+        plain
+            .vector_db
+            .search_text(&terms, &query_vector, 5, &sources)
+            .is_none()
+    );
+
+    let (v, storage) = vectorizer_with(true).await;
+    v.vectorize_session(&session).await.unwrap();
+    v.vectorize_session(&other).await.unwrap();
+    // "filler" is on most records, so it is not searched for.
+    let terms = v.vector_db.query_terms("filler zebracorn");
+    assert_eq!(terms, ["zebracorn"]);
+    let hits = v
+        .vector_db
+        .search_text(&terms, &query_vector, 5, &sources)
+        .unwrap();
+    assert!(
+        hits[0].metadata.text.contains("zebracorn migration"),
+        "{hits:?}"
+    );
+    assert!(hits.iter().all(|h| h.metadata.source == sources[0]));
+
+    // The fake storage reports no full-text index, so search falls back to
+    // the in-memory one: the rare word is found.
+    assert!(storage.full_text.lock().is_none());
+    let results = v
+        .semantic_search(
+            "zebracorn",
+            10,
+            Some(session.id()),
+            SearchOptions {
+                recency_bias: Some(0.0),
+                ..SearchOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(results.iter().any(|r| r.text_content.contains("zebracorn")));
+}
+
+/// A long update is embedded as chunks, so a passage far past the first
+/// chunk is found; the hit is the update itself (one result, the update's
+/// id), and removing the update removes every chunk.
+#[tokio::test]
+async fn long_updates_are_chunked_and_found_whole() {
+    let mut long = update("design notes", "notes");
+    let filler: String = (0..300)
+        .map(|i| format!("ordinary sentence {i}. "))
+        .collect();
+    long.content.description = format!("{filler} The quokkaplan deadline is Friday. {filler}");
+    let mut session = ActiveSession::new(Uuid::new_v4(), None, None);
+    session.add_incremental_update(long.clone()).await.unwrap();
+    for i in 0..5 {
+        session
+            .add_incremental_update(update(&format!("short note {i}"), &format!("n{i}")))
+            .await
+            .unwrap();
+    }
+
+    let (v, _) = vectorizer_with(true).await;
+    v.vectorize_session(&session).await.unwrap();
+    let long_id = long.id.to_string();
+    let chunk_ids: Vec<String> = (2..)
+        .map(|n| format!("{long_id}#{n}"))
+        .take_while(|id| v.vector_db.find_vector_id_by_content_id(id).is_some())
+        .collect();
+    assert!(chunk_ids.len() > 3, "long update split into chunks");
+
+    let results = v
+        .semantic_search(
+            "quokkaplan deadline",
+            5,
+            Some(session.id()),
+            SearchOptions {
+                recency_bias: Some(0.0),
+                ..SearchOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        results[0].content_id, long_id,
+        "the chunk answers for the update"
+    );
+    assert_eq!(
+        results.iter().filter(|r| r.content_id == long_id).count(),
+        1,
+        "one result per update"
+    );
+
+    v.remove_content(session.id(), &long_id).await.unwrap();
+    assert!(v.vector_db.find_vector_id_by_content_id(&long_id).is_none());
+    assert!(
+        chunk_ids
+            .iter()
+            .all(|id| v.vector_db.find_vector_id_by_content_id(id).is_none())
+    );
 }

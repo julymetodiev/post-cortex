@@ -41,6 +41,9 @@ port = 3737
 auth_token = "<long random string>"  # clients send Authorization: Bearer <token>
 allowed_hosts = ["my-mac.tailnet.ts.net", "100.64.0.7"]  # Host headers clients use
 storage_backend = "rocksdb"          # or "surrealdb" + surrealdb_endpoint / _username / _password
+reranker_model = "cross-encoder/ms-marco-MiniLM-L4-v2"  # local reranker; Linux needs ORT_DYLIB_PATH
+voyage_api_key = "pa-..."            # optional: Voyage reranking (sends candidate text to Voyage)
+search_mode = "local"                # default ranking effort: fast | local | accurate
 ```
 
 Without `allowed_hosts`, a daemon bound to `0.0.0.0` answers remote clients with `403 Host header is not allowed` (DNS-rebinding protection). Without `auth_token`, anyone who can reach the port can read and write the memory — set one for anything beyond loopback.

@@ -31,9 +31,13 @@
 
 pub mod embeddings;
 pub mod error;
+pub mod rerank;
+pub mod text;
 pub mod vector_db;
 
 pub use error::{Error, Result};
+
+pub use rerank::Reranker;
 
 pub use embeddings::{EmbeddingBackend, EmbeddingConfig, EmbeddingModelType, LocalEmbeddingEngine};
 pub use vector_db::{

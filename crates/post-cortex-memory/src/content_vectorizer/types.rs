@@ -74,6 +74,11 @@ pub struct SemanticSearchResult {
     pub timestamp: DateTime<Utc>,
     /// Blended score combining similarity and importance.
     pub combined_score: f32,
+    /// Set when this record was not matched itself but returned as a
+    /// neighbour (an adjacent update in the same session) of the hit with
+    /// this content id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub neighbour_of: Option<String>,
 }
 
 impl SemanticSearchResult {
@@ -122,6 +127,10 @@ impl SemanticSearchResult {
     }
 }
 
+/// Metadata key naming the update a chunk vector belongs to; set on every
+/// chunk but the first (whose content id is the update's id).
+pub const CHUNK_PARENT_KEY: &str = "parent";
+
 /// Configuration for content vectorization
 #[derive(Debug, Clone)]
 pub struct ContentVectorizerConfig {
@@ -131,7 +140,9 @@ pub struct ContentVectorizerConfig {
     pub vector_db_config: VectorDbConfig,
     /// Minimum character length for text to be vectorised.
     pub min_text_length: usize,
-    /// Maximum character length for text to be vectorised.
+    /// Updates longer than this many characters are embedded as several
+    /// overlapping chunks of about this size (the rerankers see about 1000
+    /// characters, so a longer passage would be cut off for them).
     pub max_text_length: usize,
     /// Number of items per vectorisation batch.
     pub batch_size: usize,
@@ -156,7 +167,7 @@ impl Default for ContentVectorizerConfig {
             embedding_config: EmbeddingConfig::default(),
             vector_db_config: VectorDbConfig::default(),
             min_text_length: 10,
-            max_text_length: 2000,
+            max_text_length: 1000,
             batch_size: 32,
             enable_entity_vectorization: true,
             enable_cross_session_search: true,
@@ -181,4 +192,42 @@ pub struct SearchOptions {
 
     /// Recency bias parameter (0.0 = disabled, higher = more recent content preferred)
     pub recency_bias: Option<f32>,
+
+    /// Ranking effort (None = the configured default)
+    pub mode: Option<SearchMode>,
+
+    /// Content ids ranked by the session's retrieval graph, best first
+    /// (`post_cortex_core::graph::retrieval_graph`). In a single-session
+    /// search that is reranked they join the vector and BM25 candidates.
+    pub graph_candidates: Option<std::sync::Arc<[String]>>,
+}
+
+/// How much work a search puts into ranking. LoCoMo all@50 with ±1
+/// neighbours: `fast` 0.789, `local` 0.870 (MiniLM-L4), `accurate` 0.938
+/// (Voyage rerank-3-lite).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchMode {
+    /// Vector and BM25 rankings fused, no reranker (~40 ms).
+    Fast,
+    /// The fused top 300 reranked by the local cross-encoder (~1 s on CPU).
+    Local,
+    /// Reranked by the remote reranker (Voyage), the local one as fallback;
+    /// the local one alone when no remote reranker is configured.
+    Accurate,
+}
+
+impl std::str::FromStr for SearchMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "fast" => Ok(Self::Fast),
+            "local" => Ok(Self::Local),
+            "accurate" => Ok(Self::Accurate),
+            other => Err(format!(
+                "unknown search mode '{other}' (expected fast, local or accurate)"
+            )),
+        }
+    }
 }

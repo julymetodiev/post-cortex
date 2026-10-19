@@ -64,6 +64,11 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
         system_config.enable_embeddings = true;
         system_config.auto_vectorize_on_update = true;
         system_config.cross_session_search_enabled = true;
+        system_config.reranker_model = config.reranker_model.clone();
+        system_config.neighbour_radius = config.neighbour_radius;
+        system_config.voyage_api_key = config.voyage_api_key.clone();
+        system_config.voyage_model = config.voyage_model.clone();
+        system_config.search_mode = config.search_mode.clone();
         info!(
             "Embeddings enabled in daemon config (model={}, dim={})",
             system_config.embeddings_model_type, system_config.vector_dimension,

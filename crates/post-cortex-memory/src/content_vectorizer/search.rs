@@ -18,16 +18,35 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
+use post_cortex_core::graph::retrieval_graph::{self, GraphRecord};
 use post_cortex_core::session::active_session::ActiveSession;
-use post_cortex_embeddings::{SearchMatch, cosine_similarity};
+use post_cortex_embeddings::{Reranker, SearchMatch, cosine_similarity};
 
 use crate::query_cache::CacheScope;
 
-use super::types::{ContentType, SearchOptions, SemanticSearchResult};
+use super::types::{
+    CHUNK_PARENT_KEY, ContentType, SearchMode, SearchOptions, SemanticSearchResult,
+};
 use super::vectorizer::ContentVectorizer;
+
+/// Candidates taken from each ranking (vector and BM25) before fusion. Short
+/// lists fused best in the retrieval prototype (LoCoMo all@50: 0.709 fusing
+/// the top 50 of each, 0.691 the top 100, 0.662 the top 200).
+const FUSION_DEPTH: usize = 50;
+
+/// Candidates the reranker scores, taken from each ranking and from their
+/// fusion. A cross-encoder over a deeper pool keeps gaining: LoCoMo all@50
+/// with ±1 neighbours 0.878 reranking the top 300, 0.854 the top 200, 0.823
+/// the top 100.
+pub(crate) const RERANK_POOL: usize = 300;
+
+/// Reciprocal rank fusion constant.
+const RRF_K: f32 = 60.0;
+
+type DateRange = Option<(DateTime<Utc>, DateTime<Utc>)>;
 
 impl ContentVectorizer {
     /// Perform semantic search across all vectorized content.
@@ -72,6 +91,7 @@ impl ContentVectorizer {
             Some(session_id) => (1u8, CacheScope::Session(session_id)),
             None => (0u8, CacheScope::Global),
         };
+        let (mode, reranker) = self.reranker_for(options.mode);
         let params_hash = params_hash(
             query,
             limit,
@@ -79,6 +99,7 @@ impl ContentVectorizer {
             session_filter.as_slice(),
             date_range,
             recency_bias,
+            mode,
         );
 
         // Check the cache before paying for the embedding.
@@ -91,30 +112,55 @@ impl ContentVectorizer {
 
         let query_embedding = self.embedding_engine.encode_text(query).await?;
 
+        let sources: Vec<String> = session_filter.iter().map(Uuid::to_string).collect();
+        let lexical = self
+            .lexical_search(
+                query,
+                &query_embedding,
+                limit,
+                &sources,
+                date_range,
+                reranker.is_some(),
+            )
+            .await;
+        let depth = search_depth(limit, lexical.as_ref(), reranker.is_some());
+
         let search_results = match (session_filter, date_range) {
             (Some(session_id), Some((start, end))) => {
                 self.vector_db.search_in_sources_with_filter(
                     &query_embedding,
-                    limit,
+                    depth,
                     &[session_id.to_string()],
                     |metadata| metadata.timestamp >= start && metadata.timestamp <= end,
                 )?
             }
             (Some(session_id), None) => {
                 self.vector_db
-                    .search_in_source(&query_embedding, limit, &session_id.to_string())?
+                    .search_in_source(&query_embedding, depth, &session_id.to_string())?
             }
             (None, Some((start, end))) => {
                 self.vector_db
-                    .search_with_filter(&query_embedding, limit, |metadata| {
+                    .search_with_filter(&query_embedding, depth, |metadata| {
                         metadata.timestamp >= start && metadata.timestamp <= end
                     })?
             }
-            (None, None) => self.vector_db.search(&query_embedding, limit)?,
+            (None, None) => self.vector_db.search(&query_embedding, depth)?,
+        };
+        let graph = match (
+            reranker,
+            session_filter,
+            options.graph_candidates.as_deref(),
+        ) {
+            (Some(_), Some(session_id), Some(ids)) => {
+                Some(self.graph_matches(ids, &query_embedding, &session_id.to_string(), date_range))
+            }
+            _ => None,
         };
 
-        let results: Arc<[SemanticSearchResult]> =
-            Arc::from(self.process_search_results(search_results, Some(recency_bias))?);
+        let ranked = rerank(reranker, query, rank(search_results, [lexical, graph])).await;
+        let mut results = self.process_search_results(ranked, Some(recency_bias))?;
+        results.truncate(limit);
+        let results: Arc<[SemanticSearchResult]> = Arc::from(results);
 
         if let Some(ref cache) = self.query_cache {
             cache.insert(query.to_string(), Arc::clone(&results), params_hash, scope);
@@ -167,7 +213,8 @@ impl ContentVectorizer {
         sessions.sort_unstable();
         sessions.dedup();
 
-        let params_hash = params_hash(query, limit, 2, &sessions, date_range, recency_bias);
+        let (mode, reranker) = self.reranker_for(options.mode);
+        let params_hash = params_hash(query, limit, 2, &sessions, date_range, recency_bias, mode);
 
         if let Some(ref cache) = self.query_cache
             && let Some(cached) = cache.get(params_hash, query)
@@ -182,20 +229,33 @@ impl ContentVectorizer {
         let query_embedding = self.embedding_engine.encode_text(query).await?;
 
         let sources: Vec<String> = sessions.iter().map(Uuid::to_string).collect();
+        let lexical = self
+            .lexical_search(
+                query,
+                &query_embedding,
+                limit,
+                &sources,
+                date_range,
+                reranker.is_some(),
+            )
+            .await;
+        let depth = search_depth(limit, lexical.as_ref(), reranker.is_some());
         let search_results = if let Some((start, end)) = date_range {
             self.vector_db.search_in_sources_with_filter(
                 &query_embedding,
-                limit,
+                depth,
                 &sources,
                 |metadata| metadata.timestamp >= start && metadata.timestamp <= end,
             )?
         } else {
             self.vector_db
-                .search_in_sources(&query_embedding, limit, &sources)?
+                .search_in_sources(&query_embedding, depth, &sources)?
         };
 
-        let results: Arc<[SemanticSearchResult]> =
-            Arc::from(self.process_search_results(search_results, Some(recency_bias))?);
+        let ranked = rerank(reranker, query, rank(search_results, [lexical, None])).await;
+        let mut results = self.process_search_results(ranked, Some(recency_bias))?;
+        results.truncate(limit);
+        let results: Arc<[SemanticSearchResult]> = Arc::from(results);
 
         if let Some(ref cache) = self.query_cache {
             cache.insert(
@@ -209,10 +269,145 @@ impl ContentVectorizer {
         Ok(results)
     }
 
-    /// Process raw vector search results into semantic results.
+    /// BM25 hits over the same sessions (`sources`; empty means all) and date
+    /// range, for the query's words that are not too common
+    /// ([`VectorDB::query_terms`](post_cortex_embeddings::VectorDB::query_terms)):
+    /// from the storage backend's full-text index (SurrealDB), else from the
+    /// vector DB's in-memory one (RocksDB). `None` when neither has one, no
+    /// word is left or the query failed; search then uses vectors only.
+    async fn lexical_search(
+        &self,
+        query: &str,
+        query_embedding: &[f32],
+        limit: usize,
+        sources: &[String],
+        date_range: DateRange,
+        reranking: bool,
+    ) -> Option<Vec<SearchMatch>> {
+        let terms = self.vector_db.query_terms(query);
+        if terms.is_empty() {
+            return None;
+        }
+        let depth = limit.max(pool_depth(reranking));
+        let from_storage = match &self.persistent_storage {
+            Some(storage) => storage
+                .search_text(&terms.join(" "), query_embedding, depth, sources)
+                .await
+                .unwrap_or_else(|e| {
+                    debug!("Full-text search failed, using vectors only: {:#}", e);
+                    None
+                }),
+            None => None,
+        };
+        let mut hits = from_storage.or_else(|| {
+            self.vector_db
+                .search_text(&terms, query_embedding, depth, sources)
+        })?;
+        if let Some((start, end)) = date_range {
+            hits.retain(|m| m.metadata.timestamp >= start && m.metadata.timestamp <= end);
+        }
+        Some(hits)
+    }
+
+    /// Whether a search in `mode` is reranked (and so takes graph
+    /// candidates, see [`SearchOptions::graph_candidates`]).
+    pub fn reranks(&self, mode: Option<SearchMode>) -> bool {
+        self.reranker_for(mode).1.is_some()
+    }
+
+    /// The session's update vectors as retrieval-graph records: content id,
+    /// the terms and entity names stored in the vector's metadata. Vectors
+    /// stored before terms were get them extracted from their text.
+    pub fn graph_records(&self, session_id: Uuid) -> Vec<GraphRecord<String>> {
+        self.vector_db
+            .source_vector_ids(&session_id.to_string())
+            .into_iter()
+            .filter_map(|id| self.vector_db.get_metadata(id))
+            // Records, not chunks: the first chunk carries the whole update's
+            // terms.
+            .filter(|m| {
+                m.content_type != "EntityDescription" && !m.metadata.contains_key(CHUNK_PARENT_KEY)
+            })
+            .map(|m| {
+                let terms = match m.metadata.get(retrieval_graph::TERMS_KEY) {
+                    Some(joined) => retrieval_graph::split_keys(joined)
+                        .map(String::from)
+                        .collect(),
+                    None => retrieval_graph::terms(&m.text),
+                };
+                let entities = m
+                    .metadata
+                    .get(retrieval_graph::ENTITIES_KEY)
+                    .map(|joined| {
+                        retrieval_graph::split_keys(joined)
+                            .map(String::from)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                GraphRecord {
+                    id: m.id,
+                    terms,
+                    entities,
+                }
+            })
+            .collect()
+    }
+
+    /// Vector-store matches for the content ids the retrieval graph ranked,
+    /// in its order, limited to `source` and `date_range`.
+    fn graph_matches(
+        &self,
+        ids: &[String],
+        query_embedding: &[f32],
+        source: &str,
+        date_range: DateRange,
+    ) -> Vec<SearchMatch> {
+        let query_norm = post_cortex_embeddings::l2_norm(query_embedding);
+        ids.iter()
+            .filter_map(|id| {
+                let vector_id = self.vector_db.find_vector_id_by_content_id(id)?;
+                let metadata = self.vector_db.get_metadata(vector_id)?;
+                let in_range = date_range.is_none_or(|(start, end)| {
+                    metadata.timestamp >= start && metadata.timestamp <= end
+                });
+                (metadata.source == source && in_range).then(|| SearchMatch {
+                    vector_id,
+                    similarity: self
+                        .vector_db
+                        .similarity_to(query_embedding, query_norm, vector_id)
+                        .unwrap_or(0.0),
+                    metadata,
+                })
+            })
+            .collect()
+    }
+
+    /// The mode a search runs in and the reranker it uses. `mode` None means
+    /// the configured default, else the best mode the rerankers allow.
+    fn reranker_for(&self, mode: Option<SearchMode>) -> (SearchMode, Option<&Arc<dyn Reranker>>) {
+        let mode = mode
+            .or(self.default_mode)
+            .unwrap_or(if self.accurate_reranker.is_some() {
+                SearchMode::Accurate
+            } else if self.reranker.is_some() {
+                SearchMode::Local
+            } else {
+                SearchMode::Fast
+            });
+        let reranker = match mode {
+            SearchMode::Fast => None,
+            SearchMode::Local => self.reranker.as_ref(),
+            SearchMode::Accurate => self.accurate_reranker.as_ref().or(self.reranker.as_ref()),
+        };
+        (mode, reranker)
+    }
+
+    /// Turn ranked matches into semantic results. Each match comes with its
+    /// relevance in [0, 1] (cosine similarity, or the fused score), which is
+    /// what the combined score ranks by; `similarity_score` stays the cosine.
     fn process_search_results(
         &self,
-        search_results: Vec<SearchMatch>,
+        search_results: Vec<(SearchMatch, f32)>,
         recency_bias_override: Option<f32>,
     ) -> Result<Vec<SemanticSearchResult>> {
         let now = Utc::now();
@@ -234,13 +429,13 @@ impl ContentVectorizer {
         let mut decay_count = 0;
 
         let mut results = Vec::new();
-        for result in search_results {
+        for (result, relevance) in search_results {
             let content_type = parse_content_type(&result.metadata.content_type);
             let session_id = Uuid::parse_str(&result.metadata.source)
                 .context("Invalid session ID in metadata")?;
 
             let importance_weight = content_type.importance_weight();
-            let base_score = result.similarity.mul_add(0.7, importance_weight * 0.3);
+            let base_score = relevance.mul_add(0.7, importance_weight * 0.3);
 
             let combined_score = if let Some(ref adjuster) = score_adjuster {
                 decay_count += 1;
@@ -249,8 +444,13 @@ impl ContentVectorizer {
                 base_score
             };
 
+            // A chunk of a long update answers for the update.
+            let content_id = match result.metadata.metadata.get(CHUNK_PARENT_KEY) {
+                Some(parent) => parent.clone(),
+                None => result.metadata.id,
+            };
             results.push(SemanticSearchResult {
-                content_id: result.metadata.id,
+                content_id,
                 session_id,
                 content_type,
                 text_content: result.metadata.text,
@@ -258,6 +458,7 @@ impl ContentVectorizer {
                 importance_score: importance_weight,
                 timestamp: result.metadata.timestamp,
                 combined_score,
+                neighbour_of: None,
             });
         }
 
@@ -382,6 +583,123 @@ impl ContentVectorizer {
     }
 }
 
+/// Candidates taken from each ranking: the reranker's pool when the search
+/// is reranked, else the depth that fuses best on its own.
+fn pool_depth(reranking: bool) -> usize {
+    if reranking { RERANK_POOL } else { FUSION_DEPTH }
+}
+
+/// How many vector candidates to fetch: deeper when they will be fused with
+/// BM25 hits or reranked.
+fn search_depth(limit: usize, lexical: Option<&Vec<SearchMatch>>, reranking: bool) -> usize {
+    match lexical {
+        _ if reranking => limit.max(RERANK_POOL),
+        Some(hits) if !hits.is_empty() => limit.max(FUSION_DEPTH),
+        _ => limit,
+    }
+}
+
+/// Reorder the best [`RERANK_POOL`] candidates by the reranker's score;
+/// the rest are dropped. The reranker's relevance replaces the fused score. If
+/// scoring fails the fused order stands.
+async fn rerank(
+    reranker: Option<&Arc<dyn Reranker>>,
+    query: &str,
+    mut ranked: Vec<(SearchMatch, f32)>,
+) -> Vec<(SearchMatch, f32)> {
+    let Some(reranker) = reranker else {
+        return ranked;
+    };
+    ranked.truncate(RERANK_POOL);
+    let documents: Vec<String> = ranked
+        .iter()
+        .map(|(m, _)| m.metadata.text.clone())
+        .collect();
+    let scores = match reranker.score(query, &documents).await {
+        Ok(scores) if scores.len() == ranked.len() => scores,
+        Ok(scores) => {
+            warn!(
+                "Reranker returned {} scores for {} candidates, keeping the fused order",
+                scores.len(),
+                ranked.len()
+            );
+            return ranked;
+        }
+        Err(e) => {
+            warn!("Reranking failed, keeping the fused order: {:#}", e);
+            return ranked;
+        }
+    };
+    let mut reranked: Vec<(SearchMatch, f32)> = ranked
+        .into_iter()
+        .zip(scores)
+        .map(|((m, _), relevance)| (m, relevance))
+        .collect();
+    reranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+    reranked
+}
+
+/// Pair each match with the relevance it ranks by: the cosine similarity for
+/// vector search alone, the fused score when other rankings (BM25, the
+/// retrieval graph) have candidates.
+fn rank<const N: usize>(
+    vector: Vec<SearchMatch>,
+    others: [Option<Vec<SearchMatch>>; N],
+) -> Vec<(SearchMatch, f32)> {
+    let others: Vec<Vec<SearchMatch>> = others
+        .into_iter()
+        .flatten()
+        .filter(|list| !list.is_empty())
+        .collect();
+    if others.is_empty() {
+        return vector
+            .into_iter()
+            .map(|m| {
+                let similarity = m.similarity;
+                (m, similarity)
+            })
+            .collect();
+    }
+    fuse(std::iter::once(vector).chain(others).collect())
+}
+
+/// Reciprocal rank fusion of the rankings, best first. Records are matched
+/// by (session, content id); the copy from the earliest list is kept (the
+/// vector one first). Adjacent records with the same text share a rank.
+/// Scores are normalised so that ranking first in every list gives 1.0.
+fn fuse(lists: Vec<Vec<SearchMatch>>) -> Vec<(SearchMatch, f32)> {
+    let best = lists.len() as f32 / (RRF_K + 1.0);
+    let mut fused: HashMap<(String, String), (SearchMatch, f32)> = HashMap::new();
+    for list in lists {
+        let mut position = 0usize;
+        let mut rank = 0usize;
+        let mut previous_text: Option<String> = None;
+        let mut seen = std::collections::HashSet::new();
+        for m in list {
+            let key = (m.metadata.source.clone(), m.metadata.id.clone());
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            // Records with the same text score the same in every ranking;
+            // they share a rank so the tie survives fusion.
+            if previous_text.as_deref() != Some(m.metadata.text.as_str()) {
+                rank = position;
+                previous_text = Some(m.metadata.text.clone());
+            }
+            position += 1;
+            let score = 1.0 / (RRF_K + rank as f32 + 1.0);
+            fused
+                .entry(key)
+                .and_modify(|(_, s)| *s += score)
+                .or_insert((m, score));
+        }
+    }
+    let mut out: Vec<(SearchMatch, f32)> =
+        fused.into_values().map(|(m, s)| (m, s / best)).collect();
+    out.sort_by(|a, b| b.1.total_cmp(&a.1));
+    out
+}
+
 /// Cache key over every parameter that changes the result set.
 /// `scope_tag` keeps global, single-session and multi-session keys apart.
 fn params_hash(
@@ -391,6 +709,7 @@ fn params_hash(
     sessions: &[Uuid],
     date_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
     recency_bias: f32,
+    mode: SearchMode,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     query.hash(&mut hasher);
@@ -405,6 +724,7 @@ fn params_hash(
     if recency_bias != 0.0 {
         recency_bias.to_bits().hash(&mut hasher);
     }
+    mode.hash(&mut hasher);
     hasher.finish()
 }
 

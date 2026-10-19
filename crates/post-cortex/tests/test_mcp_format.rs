@@ -80,7 +80,14 @@ async fn test_mcp_format_semantic_search() -> Result<()> {
     // Search with just the question (like user does)
     println!("\nSearching with query: {}", question);
     let results = system
-        .semantic_search_session(session_id, question, Some(5), None, None)
+        .semantic_search_session(
+            session_id,
+            question,
+            post_cortex_memory::content_vectorizer::SearchOptions {
+                limit: Some(5),
+                ..Default::default()
+            },
+        )
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
 

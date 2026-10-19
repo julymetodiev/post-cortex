@@ -144,6 +144,7 @@ impl SemanticQueryEngine {
             limit: Some(search_limit),
             date_range,
             recency_bias,
+            ..Default::default()
         };
 
         let results = self
@@ -187,6 +188,7 @@ impl SemanticQueryEngine {
             limit: Some(search_limit),
             date_range,
             recency_bias,
+            ..Default::default()
         };
 
         let results = self
@@ -228,6 +230,7 @@ impl SemanticQueryEngine {
             limit: Some(search_limit),
             date_range,
             recency_bias,
+            ..Default::default()
         };
 
         let results = self

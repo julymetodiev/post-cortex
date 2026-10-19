@@ -48,6 +48,7 @@ rand.workspace = true
 
 # Domain
 petgraph.workspace = true
+rust-stemmers.workspace = true
 
 # Observability
 log.workspace = true

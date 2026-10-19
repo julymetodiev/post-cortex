@@ -54,7 +54,7 @@ pub fn format_search_results(results: &[SemanticSearchResult]) -> Vec<Value> {
         .map(|r| {
             // Same fields as session and global scope (post_cortex_mcp search
             // responses), so one JSONPath `select` works for every scope.
-            serde_json::json!({
+            let mut obj = serde_json::json!({
                 "content_id": r.content_id,
                 "session_id": r.session_id,
                 "content_type": format!("{:?}", r.content_type),
@@ -63,7 +63,11 @@ pub fn format_search_results(results: &[SemanticSearchResult]) -> Vec<Value> {
                 "importance_score": r.importance_score,
                 "timestamp": r.timestamp.to_rfc3339(),
                 "combined_score": r.combined_score
-            })
+            });
+            if let (Some(hit), Some(map)) = (&r.neighbour_of, obj.as_object_mut()) {
+                map.insert("neighbour_of".to_string(), Value::String(hit.clone()));
+            }
+            obj
         })
         .collect()
 }
@@ -84,6 +88,7 @@ mod tests {
             importance_score: 1.0,
             timestamp: chrono::Utc::now(),
             combined_score: 0.86,
+            neighbour_of: None,
         };
         let v = &format_search_results(&[r])[0];
         for key in [

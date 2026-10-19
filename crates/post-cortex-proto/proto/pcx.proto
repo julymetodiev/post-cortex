@@ -273,6 +273,8 @@ message SemanticSearchRequest {
   optional string select_string = 6;
   // Form B: map of output-key → JSONPath expression → object with same keys returned.
   map<string, string> select_map = 7;
+  // Ranking effort: "fast", "local" or "accurate". Unset = the server default.
+  optional string mode = 8;
 }
 
 message SearchResult {

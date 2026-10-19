@@ -336,6 +336,24 @@ pub trait VectorStorage: Send + Sync {
         content_type: &str,
     ) -> Result<Vec<SearchMatch>>;
 
+    /// Lexical (BM25) search over the stored embedding texts, best match first.
+    ///
+    /// `sources` restricts the search to those sessions; empty means all.
+    /// Each hit's `similarity` is its cosine similarity to `query_vector`, so
+    /// it reads like a vector hit; the order is the lexical one. Returns
+    /// `Ok(None)` when the backend has no full-text index, and callers then
+    /// search vectors only.
+    async fn search_text(
+        &self,
+        query: &str,
+        query_vector: &[f32],
+        k: usize,
+        sources: &[String],
+    ) -> Result<Option<Vec<SearchMatch>>> {
+        let _ = (query, query_vector, k, sources);
+        Ok(None)
+    }
+
     /// Remove the vectors stored under content id `id`, in every session.
     ///
     /// Content ids are not unique across sessions (e.g. `entity:<name>`);

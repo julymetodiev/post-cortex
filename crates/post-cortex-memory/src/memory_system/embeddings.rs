@@ -7,6 +7,8 @@ use tokio::sync::Semaphore;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+#[cfg(feature = "embeddings")]
+use post_cortex_core::graph::retrieval_graph::RetrievalGraph;
 use post_cortex_core::session::active_session::ActiveSession;
 
 #[cfg(feature = "embeddings")]
@@ -25,8 +27,130 @@ const MAX_VECTORIZER_INIT_RETRIES: u32 = 10;
 
 // Parallel processing constants
 const MAX_PARALLEL_VECTORIZATION: usize = 4;
+/// Results a semantic search returns when the caller sets no limit.
+#[cfg(feature = "embeddings")]
+const DEFAULT_SEARCH_LIMIT: usize = 20;
+
+/// Retrieval graph per session, with the session's vector and relation
+/// counts it was built from; rebuilt when either changes.
+#[cfg(feature = "embeddings")]
+pub(crate) type SessionGraphs = dashmap::DashMap<Uuid, (usize, usize, Arc<RetrievalGraph<String>>)>;
+/// Tokens per (query, record) pair the cross-encoder sees; the retrieval
+/// prototype was measured at 256.
+#[cfg(all(feature = "embeddings", feature = "rerank"))]
+const RERANKER_MAX_LENGTH: usize = 256;
+
+/// Each document sent to Voyage is cut to about this many tokens: 31% fewer
+/// tokens than whole records, no loss on LongMemEval.
+#[cfg(all(feature = "embeddings", feature = "rerank-voyage"))]
+const VOYAGE_MAX_DOC_TOKENS: usize = 256;
+
+/// A Voyage call slower than this fails over to the local reranker.
+#[cfg(all(feature = "embeddings", feature = "rerank-voyage"))]
+const VOYAGE_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl ConversationMemorySystem {
+    /// Set up the rerankers: `reranker_model` (local cross-encoder) serves
+    /// `local` mode; Voyage, with the local model as fallback, serves
+    /// `accurate` mode. Anything that fails to load is logged and left out,
+    /// and searches in its mode fall back to a cheaper one rather than fail.
+    #[cfg(feature = "embeddings")]
+    async fn attach_reranker(&self, vectorizer: &mut ContentVectorizer) {
+        use post_cortex_embeddings::Reranker;
+
+        let holder = &self.embedding_config_holder;
+        let local: Option<Arc<dyn Reranker>> = match &holder.reranker_model {
+            Some(model) => self.load_local_reranker(model).await,
+            None => None,
+        };
+        let remote: Option<Arc<dyn Reranker>> = match &holder.voyage {
+            Some((key, model)) => self.load_voyage_reranker(key, model),
+            None => None,
+        };
+        if let Some(local) = &local {
+            vectorizer.set_reranker(Arc::clone(local));
+        }
+        if let Some(remote) = remote {
+            let accurate: Arc<dyn Reranker> = match local {
+                Some(local) => Arc::new(post_cortex_embeddings::rerank::FallbackReranker::new(
+                    remote, local,
+                )),
+                None => remote,
+            };
+            vectorizer.set_accurate_reranker(accurate);
+        }
+        if let Some(mode) = &holder.search_mode {
+            match mode.parse::<crate::content_vectorizer::SearchMode>() {
+                Ok(mode) => vectorizer.set_default_mode(mode),
+                Err(e) => warn!("Ignoring search_mode: {}", e),
+            }
+        }
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "rerank"))]
+    async fn load_local_reranker(
+        &self,
+        model: &str,
+    ) -> Option<Arc<dyn post_cortex_embeddings::Reranker>> {
+        match post_cortex_embeddings::rerank::OnnxCrossEncoder::load(model, RERANKER_MAX_LENGTH)
+            .await
+        {
+            Ok(reranker) => {
+                info!("Reranking search results with {}", model);
+                Some(Arc::new(reranker))
+            }
+            Err(e) => {
+                warn!("Failed to load reranker {}: {:#}", model, e);
+                None
+            }
+        }
+    }
+
+    #[cfg(all(feature = "embeddings", not(feature = "rerank")))]
+    async fn load_local_reranker(
+        &self,
+        model: &str,
+    ) -> Option<Arc<dyn post_cortex_embeddings::Reranker>> {
+        warn!(
+            "reranker_model = {} is set but this build has no `rerank` feature",
+            model
+        );
+        None
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "rerank-voyage"))]
+    fn load_voyage_reranker(
+        &self,
+        key: &str,
+        model: &str,
+    ) -> Option<Arc<dyn post_cortex_embeddings::Reranker>> {
+        match post_cortex_embeddings::rerank::VoyageReranker::new(
+            key.to_string(),
+            model.to_string(),
+            VOYAGE_MAX_DOC_TOKENS,
+            VOYAGE_TIMEOUT,
+        ) {
+            Ok(reranker) => {
+                info!("Reranking search results with Voyage {}", model);
+                Some(Arc::new(reranker))
+            }
+            Err(e) => {
+                warn!("Failed to set up the Voyage reranker: {:#}", e);
+                None
+            }
+        }
+    }
+
+    #[cfg(all(feature = "embeddings", not(feature = "rerank-voyage")))]
+    fn load_voyage_reranker(
+        &self,
+        _key: &str,
+        _model: &str,
+    ) -> Option<Arc<dyn post_cortex_embeddings::Reranker>> {
+        warn!("A Voyage API key is set but this build has no `rerank-voyage` feature");
+        None
+    }
+
     /// Vectorize one update in the background. Fire-and-forget; failures
     /// are logged. Returns immediately **after** the vectorizer has been
     /// initialised — on first call this still waits for the model download
@@ -151,6 +275,7 @@ impl ConversationMemorySystem {
                     // sessions); the deprecated `max_vectors_per_session` is not
                     // that and is ignored, so stay unbounded.
                     max_vectors: usize::MAX,
+                    full_text_index: !self.config.storage_has_full_text(),
                     ..Default::default()
                 };
 
@@ -169,6 +294,8 @@ impl ConversationMemorySystem {
 
                 // Set persistent storage for embedding persistence
                 vectorizer.set_persistent_storage(self.vector_storage.clone());
+
+                self.attach_reranker(&mut vectorizer).await;
 
                 // Load persisted embeddings from storage (best-effort, don't fail init)
                 match vectorizer.load_all_embeddings_from_storage().await {
@@ -482,42 +609,35 @@ impl ConversationMemorySystem {
         Ok((total, success, failed))
     }
 
-    /// Perform semantic search across all sessions
+    /// Semantic search across all sessions. `options.limit` defaults to
+    /// [`DEFAULT_SEARCH_LIMIT`].
     #[cfg(feature = "embeddings")]
     pub async fn semantic_search_global(
         &self,
         query: &str,
-        limit: Option<usize>,
-        date_range: Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
-        recency_bias: Option<f32>,
+        mut options: crate::content_vectorizer::SearchOptions,
     ) -> Result<Vec<crate::content_vectorizer::SemanticSearchResult>, String> {
         // Lazy-initialize vectorizer if needed
         let vectorizer = self.ensure_vectorizer_initialized().await?;
 
-        let options = crate::content_vectorizer::SearchOptions {
-            limit: Some(limit.unwrap_or(20)),
-            date_range,
-            recency_bias,
-        };
-
+        let limit = *options.limit.get_or_insert(DEFAULT_SEARCH_LIMIT);
         match vectorizer
-            .semantic_search(query, limit.unwrap_or(20), None, options)
+            .semantic_search(query, limit, None, options)
             .await
         {
-            Ok(results) => Ok(results),
+            Ok(results) => Ok(self.complete_results(results).await),
             Err(e) => Err(format!("Semantic search failed: {e}")),
         }
     }
 
-    /// Perform semantic search within a specific session
+    /// Semantic search within a specific session. `options.limit` defaults
+    /// to [`DEFAULT_SEARCH_LIMIT`].
     #[cfg(feature = "embeddings")]
     pub async fn semantic_search_session(
         &self,
         session_id: Uuid,
         query: &str,
-        limit: Option<usize>,
-        date_range: Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
-        recency_bias: Option<f32>,
+        mut options: crate::content_vectorizer::SearchOptions,
     ) -> Result<Vec<crate::content_vectorizer::SemanticSearchResult>, String> {
         // Lazy-initialize vectorizer if needed
         let vectorizer = self.ensure_vectorizer_initialized().await?;
@@ -542,22 +662,86 @@ impl ConversationMemorySystem {
             }
         }
 
-        let options = crate::content_vectorizer::SearchOptions {
-            limit: Some(limit.unwrap_or(20)),
-            date_range,
-            recency_bias,
-        };
-
+        if vectorizer.reranks(options.mode) {
+            let session = session_arc.load();
+            options.graph_candidates = Some(self.graph_candidates(&vectorizer, &session, query));
+        }
+        let limit = *options.limit.get_or_insert(DEFAULT_SEARCH_LIMIT);
         match vectorizer
-            .semantic_search(query, limit.unwrap_or(20), Some(session_id), options)
+            .semantic_search(query, limit, Some(session_id), options)
             .await
         {
             Ok(results) => {
-                let session = session_arc.load();
-                Ok(enrich_results_with_graph(&session, query, results))
+                let session = session_arc.load_full();
+                let results = enrich_results_with_graph(&session, query, results);
+                let sessions = std::collections::HashMap::from([(session_id, session)]);
+                Ok(super::neighbours::complete_results(
+                    results,
+                    &sessions,
+                    self.config.neighbour_radius,
+                ))
             }
             Err(e) => Err(format!("Session semantic search failed: {e}")),
         }
+    }
+
+    /// Content ids the session's retrieval graph ranks for `query`, best
+    /// first. The graph joins the session's records through the terms and
+    /// agent entities stored with their vectors and the entity relations; it
+    /// is cached per session and rebuilt when the session's vector or
+    /// relation count changes.
+    #[cfg(feature = "embeddings")]
+    fn graph_candidates(
+        &self,
+        vectorizer: &crate::content_vectorizer::ContentVectorizer,
+        session: &ActiveSession,
+        query: &str,
+    ) -> Arc<[String]> {
+        let session_id = session.id();
+        let vectors = vectorizer.count_session_embeddings(session_id);
+        let relations = session.entity_graph.edge_count();
+        let cached = self
+            .retrieval_graphs
+            .get(&session_id)
+            .filter(|entry| entry.0 == vectors && entry.1 == relations)
+            .map(|entry| Arc::clone(&entry.2));
+        let graph = cached.unwrap_or_else(|| {
+            let graph = Arc::new(RetrievalGraph::build(
+                vectorizer.graph_records(session_id),
+                &session.entity_graph.get_all_relationships(),
+            ));
+            self.retrieval_graphs
+                .insert(session_id, (vectors, relations, Arc::clone(&graph)));
+            graph
+        });
+        graph
+            .rank(query, crate::content_vectorizer::RERANK_POOL)
+            .into()
+    }
+
+    /// Complete results from their sessions: full text for long update hits
+    /// and the neighbours of every update hit
+    /// (`SystemConfig::neighbour_radius`). Sessions that fail to load keep
+    /// their results as they are.
+    #[cfg(feature = "embeddings")]
+    async fn complete_results(
+        &self,
+        results: Vec<crate::content_vectorizer::SemanticSearchResult>,
+    ) -> Vec<crate::content_vectorizer::SemanticSearchResult> {
+        if results.is_empty() {
+            return results;
+        }
+        let ids: std::collections::HashSet<Uuid> = results.iter().map(|r| r.session_id).collect();
+        let mut sessions = std::collections::HashMap::with_capacity(ids.len());
+        for id in ids {
+            match self.get_session(id).await {
+                Ok(session) => {
+                    sessions.insert(id, session.load_full());
+                }
+                Err(e) => warn!("Results of session {} left incomplete: {}", id, e),
+            }
+        }
+        super::neighbours::complete_results(results, &sessions, self.config.neighbour_radius)
     }
 
     /// Find related content across sessions
@@ -599,30 +783,24 @@ impl ConversationMemorySystem {
         }
     }
 
-    /// Perform semantic search across multiple sessions
+    /// Semantic search across `session_ids`. `options.limit` defaults to
+    /// [`DEFAULT_SEARCH_LIMIT`].
     #[cfg(feature = "embeddings")]
     pub async fn semantic_search_multisession(
         &self,
         session_ids: &[Uuid],
         query: &str,
-        limit: Option<usize>,
-        date_range: Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
-        recency_bias: Option<f32>,
+        mut options: crate::content_vectorizer::SearchOptions,
     ) -> Result<Vec<crate::content_vectorizer::SemanticSearchResult>, String> {
         // Lazy-initialize vectorizer if needed
         let vectorizer = self.ensure_vectorizer_initialized().await?;
 
-        let options = crate::content_vectorizer::SearchOptions {
-            limit: Some(limit.unwrap_or(20)),
-            date_range,
-            recency_bias,
-        };
-
+        let limit = *options.limit.get_or_insert(DEFAULT_SEARCH_LIMIT);
         match vectorizer
-            .semantic_search_multisession(query, limit.unwrap_or(20), session_ids, options)
+            .semantic_search_multisession(query, limit, session_ids, options)
             .await
         {
-            Ok(results) => Ok(results),
+            Ok(results) => Ok(self.complete_results(results).await),
             Err(e) => Err(format!("Multisession semantic search failed: {e}")),
         }
     }

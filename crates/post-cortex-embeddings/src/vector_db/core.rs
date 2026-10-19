@@ -36,6 +36,7 @@ use super::config::{SearchMode, SearchQualityPreset, VectorDbConfig};
 use super::hnsw_index::HnswIndex;
 use super::product_quantization::ProductQuantizationCodebook;
 use super::similarity::{cosine_with_norms, l2_norm};
+use super::text_index::TextIndex;
 use super::types::{
     SearchMatch, StoredVector, VectorDbStats, VectorDbStatsSnapshot, VectorMetadata,
 };
@@ -81,6 +82,9 @@ pub struct VectorDB {
     quantization_params: QuantizationParams,
     /// Product Quantization codebook (if enabled)
     pq_codebook: Option<Arc<ProductQuantizationCodebook>>,
+    /// Word document frequencies, and BM25 postings with
+    /// `config.full_text_index`
+    text_index: TextIndex,
 }
 
 impl VectorDB {
@@ -131,6 +135,7 @@ impl VectorDB {
             metadata: Arc::new(DashMap::new()),
             by_source: DashMap::new(),
             by_content_id: DashMap::new(),
+            text_index: TextIndex::new(config.full_text_index),
             config,
             next_id: Arc::new(AtomicU32::new(0)),
             stats,
@@ -258,6 +263,7 @@ impl VectorDB {
             .entry(metadata.id.clone())
             .or_default()
             .push(id);
+        self.text_index.add(id, &metadata.text);
     }
 
     fn unindex_metadata(&self, id: u32, metadata: &VectorMetadata) {
@@ -271,6 +277,7 @@ impl VectorDB {
             ids.retain(|&v| v != id);
             ids.is_empty()
         });
+        self.text_index.remove(id, &metadata.text);
     }
 
     /// Bring freshly stored vectors into the HNSW graph if it is live
@@ -557,7 +564,14 @@ impl VectorDB {
         Some(results.into_sorted_vec().into_iter().map(|r| r.0).collect())
     }
 
-    fn similarity_to(&self, query_vector: &[f32], query_norm: f32, vector_id: u32) -> Option<f32> {
+    /// Cosine similarity of `query_vector` (whose L2 norm is `query_norm`) to
+    /// the stored vector `vector_id`.
+    pub fn similarity_to(
+        &self,
+        query_vector: &[f32],
+        query_norm: f32,
+        vector_id: u32,
+    ) -> Option<f32> {
         self.vectors.get(&vector_id).map(|stored| {
             cosine_with_norms(query_vector, &stored.vector, query_norm, stored.magnitude)
         })
@@ -837,6 +851,53 @@ impl VectorDB {
 
     /// Find vector_id by content_id (for removal operations). O(1).
     ///
+    /// The words of `query` worth searching for: deduplicated, without the
+    /// ones too common in the stored text to discriminate (see
+    /// `text_index`). For every lexical search, whatever the backend.
+    pub fn query_terms(&self, query: &str) -> Vec<String> {
+        self.text_index.query_terms(query)
+    }
+
+    /// BM25 top-`k` for `terms` (from [`Self::query_terms`]) over the
+    /// vectors' text, restricted to `sources` (empty = all), best first;
+    /// `similarity` is the cosine to `query_vector`. `None` when BM25
+    /// postings are off (`VectorDbConfig::full_text_index`).
+    pub fn search_text(
+        &self,
+        terms: &[String],
+        query_vector: &[f32],
+        k: usize,
+        sources: &[String],
+    ) -> Option<Vec<SearchMatch>> {
+        if !self.text_index.has_postings() {
+            return None;
+        }
+        let keep = |id: u32| {
+            sources.is_empty()
+                || self
+                    .metadata
+                    .get(&id)
+                    .is_some_and(|m| sources.iter().any(|s| *s == m.source))
+        };
+        let query_norm = l2_norm(query_vector);
+        Some(
+            self.text_index
+                .search(terms, k, keep)
+                .into_iter()
+                .filter_map(|(id, _)| {
+                    let metadata = self.metadata.get(&id)?.clone();
+                    Some(SearchMatch {
+                        vector_id: id,
+                        similarity: self
+                            .similarity_to(query_vector, query_norm, id)
+                            .unwrap_or(0.0),
+                        metadata,
+                    })
+                })
+                .collect(),
+        )
+    }
+
     /// If several vectors share the content id, returns the oldest; use
     /// [`Self::find_vector_ids_by_content_id`] to get all of them.
     pub fn find_vector_id_by_content_id(&self, content_id: &str) -> Option<u32> {
@@ -894,6 +955,7 @@ impl VectorDB {
         self.metadata.clear();
         self.by_source.clear();
         self.by_content_id.clear();
+        self.text_index.clear();
         self.hnsw_index.clear();
         self.hnsw_active.store(false, Ordering::Release);
 

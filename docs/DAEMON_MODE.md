@@ -259,6 +259,40 @@ USE NS post_cortex;
 DEFINE USER pcx ON NAMESPACE PASSWORD '…' ROLES OWNER;
 ```
 
+## Search quality
+
+`semantic_search` fuses vector and BM25 (keyword) rankings, optionally adds
+candidates from the session's retrieval graph, reranks the top 300 and
+returns each hit with the records right before and after it in its session
+(`neighbour_of` names the hit). Measured on LoCoMo (share of questions whose
+evidence is in the top 50, with neighbours):
+
+| `mode` | Reranker | all@50 | Latency (server CPU) |
+|---|---|---|---|
+| `fast` | none | 0.789 | ~40 ms |
+| `local` | local cross-encoder (`reranker_model`) | 0.870 | ~1 s |
+| `accurate` | Voyage (`voyage_api_key`), local as fallback | 0.927 | ~0.5 s |
+
+The mode is a per-call `mode` argument; `search_mode` sets the default,
+otherwise the best mode the configured rerankers allow.
+
+```toml
+# ~/.post-cortex/daemon.toml
+reranker_model = "cross-encoder/ms-marco-MiniLM-L4-v2"  # local reranker (build feature `rerank`)
+voyage_api_key = "pa-..."                               # or VOYAGE_API_KEY (build feature `rerank-voyage`)
+voyage_model = "rerank-3-lite"                          # or "rerank-3"
+search_mode = "local"                                   # fast | local | accurate
+neighbour_radius = 1                                    # records on each side of a hit; 0 = hits only
+```
+
+- The local reranker runs int8 weights on ONNX Runtime. On Linux the daemon
+  loads `libonnxruntime.so` at start: install ONNX Runtime 1.31 (Microsoft's
+  release build needs glibc 2.28+) and point `ORT_DYLIB_PATH` at the
+  library. If it cannot be loaded, the daemon logs an error and searches
+  without the local reranker.
+- With `voyage_api_key` set, the top-300 candidate texts (each cut to about
+  256 tokens) are sent to Voyage AI on every reranked search.
+
 ## Troubleshooting
 
 **Port already in use:**

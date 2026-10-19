@@ -26,7 +26,10 @@ pub mod search;
 pub mod types;
 pub mod vectorizer;
 
-pub use types::{ContentType, ContentVectorizerConfig, SearchOptions, SemanticSearchResult};
+pub(crate) use search::RERANK_POOL;
+pub use types::{
+    ContentType, ContentVectorizerConfig, SearchMode, SearchOptions, SemanticSearchResult,
+};
 pub use vectorizer::ContentVectorizer;
 
 #[cfg(test)]

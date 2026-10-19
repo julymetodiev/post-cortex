@@ -297,6 +297,18 @@ impl VectorStorage for SurrealDBStorage {
         Ok(matches)
     }
 
+    async fn search_text(
+        &self,
+        query: &str,
+        query_vector: &[f32],
+        k: usize,
+        sources: &[String],
+    ) -> Result<Option<Vec<SearchMatch>>> {
+        self.text_search(query, query_vector, k, sources)
+            .await
+            .map(Some)
+    }
+
     /// Removes the vectors stored under content id `id` in every session.
     async fn remove_vector(&self, id: &str) -> Result<bool> {
         let mut response = self

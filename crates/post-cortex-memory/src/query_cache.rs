@@ -543,6 +543,7 @@ mod tests {
             importance_score: 0.7,
             timestamp: Utc::now(),
             combined_score: 0.84,
+            neighbour_of: None,
         }
     }
 

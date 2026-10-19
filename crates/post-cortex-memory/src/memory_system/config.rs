@@ -51,6 +51,12 @@ pub struct EmbeddingConfigHolder {
     pub data_directory: String,
     /// Whether cross-session semantic search is enabled
     pub cross_session_search_enabled: bool,
+    /// Cross-encoder to rerank search results with, if any
+    pub reranker_model: Option<String>,
+    /// Voyage API key and model; Voyage reranks when the key is set
+    pub voyage: Option<(String, String)>,
+    /// Default search mode (`fast`, `local`, `accurate`), if configured
+    pub search_mode: Option<String>,
     /// Tracks initialization attempts for retry mechanism
     pub init_attempt_count: AtomicU64,
     /// Last initialization error (for diagnostics)
@@ -100,6 +106,22 @@ pub struct SystemConfig {
     pub auto_vectorize_on_update: bool,
     /// Whether cross-session semantic search is enabled
     pub cross_session_search_enabled: bool,
+    /// HuggingFace id of a cross-encoder that reranks semantic search
+    /// results (e.g. `cross-encoder/ms-marco-MiniLM-L4-v2`). `None` keeps the
+    /// fused vector + BM25 order. Needs the `rerank` feature.
+    pub reranker_model: Option<String>,
+    /// Voyage AI API key. When set, Voyage reranks search results (with the
+    /// local `reranker_model` as fallback); candidate text is sent to Voyage.
+    /// Needs the `rerank-voyage` feature.
+    pub voyage_api_key: Option<String>,
+    /// Voyage rerank model (default `rerank-3-lite`).
+    pub voyage_model: String,
+    /// Search mode when a search does not name one: `fast`, `local` or
+    /// `accurate`. Default: the best the configured rerankers allow.
+    pub search_mode: Option<String>,
+    /// Updates returned on each side of every update hit, from the same
+    /// session (0 = hits only). Default 1.
+    pub neighbour_radius: usize,
     /// Secret / personal-data redaction on the canonical write path
     pub redaction: post_cortex_core::redact::RedactionConfig,
     /// Storage backend type
@@ -120,6 +142,21 @@ pub struct SystemConfig {
     /// SurrealDB database name
     #[cfg(feature = "surrealdb-storage")]
     pub surrealdb_database: Option<String>,
+}
+
+impl SystemConfig {
+    /// Whether the storage backend has a full-text (BM25) index of its own.
+    /// SurrealDB does; with RocksDB the vector DB keeps one in memory.
+    pub fn storage_has_full_text(&self) -> bool {
+        #[cfg(feature = "surrealdb-storage")]
+        {
+            self.storage_backend == post_cortex_storage::traits::StorageBackendType::SurrealDB
+        }
+        #[cfg(not(feature = "surrealdb-storage"))]
+        {
+            false
+        }
+    }
 }
 
 impl Default for SystemConfig {
@@ -147,6 +184,11 @@ impl Default for SystemConfig {
             semantic_search_threshold: 0.7,
             auto_vectorize_on_update: true,
             cross_session_search_enabled: true,
+            reranker_model: None,
+            voyage_api_key: None,
+            voyage_model: "rerank-3-lite".to_string(),
+            search_mode: None,
+            neighbour_radius: 1,
             redaction: post_cortex_core::redact::RedactionConfig::default(),
             // Storage backend defaults
             #[cfg(feature = "surrealdb-storage")]

@@ -3,6 +3,8 @@
 use crate::{MCPToolResult, get_memory_system};
 use anyhow::Result;
 use post_cortex_core::core::timeout_utils::with_storage_timeout;
+#[cfg(feature = "embeddings")]
+use post_cortex_memory::content_vectorizer::SearchOptions;
 use tracing::{error, info};
 use uuid::Uuid;
 
@@ -35,6 +37,14 @@ fn parse_date_range(
     }
 }
 
+/// Parse an optional `mode` argument (`fast`, `local`, `accurate`).
+#[cfg(feature = "embeddings")]
+pub fn parse_mode(
+    mode: Option<String>,
+) -> std::result::Result<Option<post_cortex_memory::content_vectorizer::SearchMode>, String> {
+    mode.map(|m| m.parse()).transpose()
+}
+
 /// Render a single semantic-search hit as a json object. When
 /// `include_session_id` is true a `session_id` field is appended (used by the
 /// global search response; session search omits it since the scope is implicit).
@@ -52,53 +62,84 @@ fn search_hit_to_json(
         "timestamp": r.timestamp.to_rfc3339(),
         "combined_score": r.combined_score,
     });
-    if include_session_id && let Some(map) = obj.as_object_mut() {
-        map.insert(
-            "session_id".to_string(),
-            serde_json::Value::String(r.session_id.to_string()),
-        );
+    if let Some(map) = obj.as_object_mut() {
+        if include_session_id {
+            map.insert(
+                "session_id".to_string(),
+                serde_json::Value::String(r.session_id.to_string()),
+            );
+        }
+        if let Some(hit) = &r.neighbour_of {
+            map.insert(
+                "neighbour_of".to_string(),
+                serde_json::Value::String(hit.clone()),
+            );
+        }
     }
     obj
 }
 
-/// Build the human-readable summary block listed alongside the JSON payload.
-/// Differs between global vs session scopes only in (a) the header line, (b)
-/// whether each hit carries its session id, and (c) the snippet truncation
-/// length.
+/// Build the text block returned alongside the JSON payload, the part an
+/// agent reads. Results come as excerpts: each hit with the neighbours
+/// returned for it (see `neighbour_of`), records in time order inside an
+/// excerpt and excerpts oldest first, every record with its absolute time.
+/// Matched records are marked `*`. `include_session` adds the session id to
+/// each excerpt (global search).
 #[cfg(feature = "embeddings")]
 fn format_results_message(
     results: &[post_cortex_memory::content_vectorizer::SemanticSearchResult],
     header: String,
     include_session: bool,
-    truncate_at: usize,
 ) -> String {
-    let mut message = format!("{}\n\n", header);
-    for (idx, r) in results.iter().enumerate() {
-        message.push_str(&format!(
-            "{}. [{:?}] Score: {:.3}\n",
-            idx + 1,
-            r.content_type,
-            r.combined_score
-        ));
+    use std::collections::HashMap;
+
+    // Excerpt key: the hit's content id; a neighbour joins its hit's excerpt.
+    let mut order: Vec<&str> = Vec::new();
+    let mut excerpts: HashMap<
+        &str,
+        Vec<&post_cortex_memory::content_vectorizer::SemanticSearchResult>,
+    > = HashMap::new();
+    for r in results {
+        let key = r.neighbour_of.as_deref().unwrap_or(r.content_id.as_str());
+        excerpts
+            .entry(key)
+            .or_insert_with(|| {
+                order.push(key);
+                Vec::new()
+            })
+            .push(r);
+    }
+    let mut excerpts: Vec<_> = order
+        .into_iter()
+        .filter_map(|k| excerpts.remove(k))
+        .map(|mut records| {
+            records.sort_by_key(|r| r.timestamp);
+            records
+        })
+        .collect();
+    excerpts.sort_by_key(|records| records[0].timestamp);
+
+    let matches = results.iter().filter(|r| r.neighbour_of.is_none()).count();
+    let mut message = format!(
+        "{header} ({matches} matches, {} neighbouring records), oldest first:\n",
+        results.len() - matches
+    );
+    for records in excerpts {
+        message.push('\n');
         if include_session {
-            message.push_str(&format!(
-                "   Session: {}  Time: {}\n",
-                r.session_id,
-                r.timestamp.format("%Y-%m-%d %H:%M")
-            ));
+            message.push_str(&format!("--- session {}\n", records[0].session_id));
         } else {
+            message.push_str("---\n");
+        }
+        for r in records {
+            let mark = if r.neighbour_of.is_none() { "*" } else { " " };
             message.push_str(&format!(
-                "   Time: {}\n",
-                r.timestamp.format("%Y-%m-%d %H:%M:%S")
+                "{mark} {} [{:?}] {}\n",
+                r.timestamp.format("%Y-%m-%d %H:%M"),
+                r.content_type,
+                r.text_content.trim()
             ));
         }
-        let content = if r.text_content.chars().count() > truncate_at {
-            let truncated: String = r.text_content.chars().take(truncate_at).collect();
-            format!("{}...", truncated)
-        } else {
-            r.text_content.clone()
-        };
-        message.push_str(&format!("   Content: {}\n\n", content));
     }
     message
 }
@@ -128,7 +169,7 @@ pub async fn semantic_search(
                 let session_id = scope_id
                     .ok_or_else(|| anyhow::anyhow!("Missing session ID for session scope"))?;
                 system
-                    .semantic_search_session(session_id, &query, None, None, None)
+                    .semantic_search_session(session_id, &query, SearchOptions::default())
                     .await
                     .map_err(|e| anyhow::anyhow!(e))
             }
@@ -147,12 +188,12 @@ pub async fn semantic_search(
                     .collect();
 
                 system
-                    .semantic_search_multisession(&session_ids, &query, None, None, None)
+                    .semantic_search_multisession(&session_ids, &query, SearchOptions::default())
                     .await
                     .map_err(|e| anyhow::anyhow!(e))
             }
             "global" => system
-                .semantic_search_global(&query, None, None, None)
+                .semantic_search_global(&query, SearchOptions::default())
                 .await
                 .map_err(|e| anyhow::anyhow!(e)),
             _ => {
@@ -200,6 +241,7 @@ pub async fn semantic_search_global(
     date_to: Option<String>,
     interaction_type: Option<Vec<String>>,
     recency_bias: Option<f32>,
+    mode: Option<String>,
 ) -> Result<MCPToolResult> {
     info!(
         "MCP-TOOLS: semantic_search_global() called with query: '{}' and recency_bias: {:?}",
@@ -223,9 +265,22 @@ pub async fn semantic_search_global(
     // pretending to honour it.
     let _ = interaction_type;
 
+    let mode = match parse_mode(mode) {
+        Ok(m) => m,
+        Err(msg) => return Ok(MCPToolResult::error(msg)),
+    };
     let limit = limit.unwrap_or(10);
     let results = match system
-        .semantic_search_global(&query, Some(limit), date_range, recency_bias)
+        .semantic_search_global(
+            &query,
+            SearchOptions {
+                limit: Some(limit),
+                date_range,
+                recency_bias,
+                mode,
+                ..Default::default()
+            },
+        )
         .await
     {
         Ok(r) => r,
@@ -245,7 +300,6 @@ pub async fn semantic_search_global(
         &results,
         format!("Found {} results across all sessions", results.len()),
         /* include_session */ true,
-        200,
     );
 
     Ok(MCPToolResult::success(
@@ -268,6 +322,7 @@ pub async fn semantic_search_session(
     date_to: Option<String>,
     interaction_type: Option<Vec<String>>,
     recency_bias: Option<f32>,
+    mode: Option<String>,
 ) -> Result<MCPToolResult> {
     info!(
         "MCP-TOOLS: semantic_search_session() called for session {} with query: '{}'",
@@ -288,9 +343,23 @@ pub async fn semantic_search_session(
 
     let _ = interaction_type; // not yet honoured by the embedding engine
 
+    let mode = match parse_mode(mode) {
+        Ok(m) => m,
+        Err(msg) => return Ok(MCPToolResult::error(msg)),
+    };
     let limit = limit.unwrap_or(10);
     let results = match system
-        .semantic_search_session(session_id, &query, Some(limit), date_range, recency_bias)
+        .semantic_search_session(
+            session_id,
+            &query,
+            SearchOptions {
+                limit: Some(limit),
+                date_range,
+                recency_bias,
+                mode,
+                ..Default::default()
+            },
+        )
         .await
     {
         Ok(r) => r,
@@ -310,7 +379,6 @@ pub async fn semantic_search_session(
         &results,
         format!("Found {} results in session {}", results.len(), session_id),
         /* include_session */ false,
-        500,
     );
 
     Ok(MCPToolResult::success(
@@ -486,6 +554,7 @@ pub async fn semantic_search_global(
     _date_to: Option<String>,
     _interaction_type: Option<Vec<String>>,
     _recency_bias: Option<f32>,
+    _mode: Option<String>,
 ) -> Result<MCPToolResult> {
     Ok(MCPToolResult::error(
         "Semantic search requires the 'embeddings' feature to be enabled. Please rebuild with --features embeddings".to_string()
@@ -502,6 +571,7 @@ pub async fn semantic_search_session(
     _date_to: Option<String>,
     _interaction_type: Option<Vec<String>>,
     _recency_bias: Option<f32>,
+    _mode: Option<String>,
 ) -> Result<MCPToolResult> {
     Ok(MCPToolResult::error(
         "Semantic search requires the 'embeddings' feature to be enabled. Please rebuild with --features embeddings".to_string()
@@ -534,4 +604,45 @@ pub async fn get_vectorization_stats() -> Result<MCPToolResult> {
     Ok(MCPToolResult::error(
         "Vectorization stats require the 'embeddings' feature to be enabled. Please rebuild with --features embeddings".to_string()
     ))
+}
+
+#[cfg(all(test, feature = "embeddings"))]
+mod tests {
+    use super::format_results_message;
+    use chrono::{Duration, Utc};
+    use post_cortex_memory::content_vectorizer::{ContentType, SemanticSearchResult};
+    use uuid::Uuid;
+
+    fn record(id: &str, minutes: i64, neighbour_of: Option<&str>) -> SemanticSearchResult {
+        SemanticSearchResult {
+            content_id: id.into(),
+            session_id: Uuid::nil(),
+            content_type: ContentType::UserMessage,
+            text_content: format!("text {id}"),
+            similarity_score: 0.5,
+            importance_score: 0.8,
+            timestamp: Utc::now() + Duration::minutes(minutes),
+            combined_score: 0.5,
+            neighbour_of: neighbour_of.map(Into::into),
+        }
+    }
+
+    /// Hits come with their neighbours as one excerpt, records and excerpts
+    /// oldest first, matches marked.
+    #[test]
+    fn results_read_as_chronological_excerpts() {
+        let results = vec![
+            record("a", 10, None),
+            record("a-1", 9, Some("a")),
+            record("b", 0, None),
+        ];
+        let message = format_results_message(&results, "Found 3 results".into(), false);
+        let lines: Vec<&str> = message.lines().filter(|l| l.contains("text")).collect();
+        assert_eq!(lines.len(), 3, "{message}");
+        assert!(lines[0].starts_with('*') && lines[0].ends_with("text b"));
+        assert!(lines[1].starts_with(' ') && lines[1].ends_with("text a-1"));
+        assert!(lines[2].starts_with('*') && lines[2].ends_with("text a"));
+        assert!(message.contains("(2 matches, 1 neighbouring records)"));
+        assert_eq!(message.matches("---").count(), 2);
+    }
 }

@@ -93,6 +93,12 @@ pub struct VectorDbConfig {
     pub pq_subvectors: usize,
     /// Bits per PQ code (2^bits centroids per subvector)
     pub pq_bits: usize,
+    /// Keep in-memory BM25 postings over the vectors' text
+    /// ([`VectorDB::search_text`](super::VectorDB::search_text)), for storage
+    /// backends without full-text search of their own. Word frequencies for
+    /// [`VectorDB::query_terms`](super::VectorDB::query_terms) are kept
+    /// regardless.
+    pub full_text_index: bool,
 }
 
 impl Default for VectorDbConfig {
@@ -116,6 +122,7 @@ impl Default for VectorDbConfig {
             enable_product_quantization: false, // Disabled by default (experimental)
             pq_subvectors: 8,                   // 384/8 = 48 dims per subvector
             pq_bits: 8,                         // 256 centroids per subvector
+            full_text_index: false,
         }
     }
 }

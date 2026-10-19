@@ -263,7 +263,10 @@ impl SurrealDBStorage {
             DEFINE FIELD IF NOT EXISTS text ON embedding TYPE string;
             DEFINE FIELD IF NOT EXISTS content_type ON embedding TYPE string;
             DEFINE FIELD IF NOT EXISTS timestamp ON embedding TYPE string;
-            DEFINE FIELD IF NOT EXISTS metadata ON embedding TYPE object;
+            -- Free-form string map (`VectorMetadata::metadata`). FLEXIBLE: a
+            -- SCHEMAFULL object field otherwise rejects every key. OVERWRITE
+            -- updates databases created with the old definition.
+            DEFINE FIELD OVERWRITE metadata ON embedding TYPE object FLEXIBLE;
             -- Content ids are unique per session only (e.g. `entity:<name>`
             -- exists in many sessions); records are keyed `{session}_{content}`.
             -- The old globally-unique index made sessions overwrite each other.
@@ -272,6 +275,13 @@ impl SurrealDBStorage {
             DEFINE INDEX IF NOT EXISTS idx_embedding_session_content ON embedding FIELDS session_id, content_id UNIQUE;
             DEFINE INDEX IF NOT EXISTS idx_embedding_session ON embedding FIELDS session_id;
             DEFINE INDEX IF NOT EXISTS idx_embedding_type ON embedding FIELDS content_type;
+            -- BM25 full-text index over the embedded text (title + description),
+            -- the lexical half of hybrid search. `ascii` folds accents and
+            -- transliterates Cyrillic, so one analyzer serves English and
+            -- Bulgarian. Built in the background on existing databases.
+            DEFINE ANALYZER IF NOT EXISTS pcx_text TOKENIZERS class, punct FILTERS lowercase, ascii;
+            DEFINE INDEX IF NOT EXISTS idx_embedding_text ON embedding FIELDS text
+                FULLTEXT ANALYZER pcx_text BM25 CONCURRENTLY;
             -- HNSW vector index for fast similarity search.
             -- The dimension is fixed at index-creation time; if it later
             -- needs to change (e.g. embedding-model swap) the
@@ -327,13 +337,28 @@ impl SurrealDBStorage {
         // recreate to honour the requested dimension. Existing rows stay
         // in the `embedding` table but won't be indexed; re-vectorise the
         // affected sessions to rebuild the HNSW catalogue.
-        let hnsw_sql = format!(
-            "REMOVE INDEX IF EXISTS idx_embedding_hnsw ON embedding; \
-             DEFINE INDEX idx_embedding_hnsw ON embedding FIELDS vector \
-             HNSW DIMENSION {dim} DIST COSINE;",
-            dim = vector_dimension,
-        );
-        self.db.query(&hnsw_sql).await?;
+        //
+        // Only when the dimension differs: the DEFINE builds the index over
+        // every existing row before it returns, which on a large database
+        // holds up startup for minutes.
+        let mut response = self
+            .db
+            .query("RETURN (INFO FOR TABLE embedding).indexes.idx_embedding_hnsw;")
+            .await?;
+        let current: Option<String> = response.take(0)?;
+        if current.as_deref().and_then(hnsw_dimension) != Some(vector_dimension) {
+            info!(
+                "SurrealDBStorage: (Re)defining idx_embedding_hnsw (was {:?})",
+                current
+            );
+            let hnsw_sql = format!(
+                "REMOVE INDEX IF EXISTS idx_embedding_hnsw ON embedding; \
+                 DEFINE INDEX idx_embedding_hnsw ON embedding FIELDS vector \
+                 HNSW DIMENSION {dim} DIST COSINE;",
+                dim = vector_dimension,
+            );
+            self.db.query(&hnsw_sql).await?.check()?;
+        }
 
         info!(
             "SurrealDBStorage: Schema initialized successfully (HNSW dim = {})",
@@ -416,5 +441,30 @@ impl SurrealDBStorage {
             "codecomponent" | "code_component" => EntityType::CodeComponent,
             _ => EntityType::Concept,
         }
+    }
+}
+
+/// The `DIMENSION` of an HNSW index definition as `INFO FOR TABLE` prints it,
+/// e.g. `DEFINE INDEX ... HNSW DIMENSION 256 DIST COSINE ...`.
+pub(super) fn hnsw_dimension(definition: &str) -> Option<usize> {
+    let mut words = definition.split_whitespace();
+    words.find(|w| w.eq_ignore_ascii_case("DIMENSION"))?;
+    words.next()?.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hnsw_dimension;
+
+    #[test]
+    fn reads_hnsw_dimension() {
+        assert_eq!(
+            hnsw_dimension(
+                "DEFINE INDEX idx_embedding_hnsw ON embedding FIELDS vector \
+                 HNSW DIMENSION 256 DIST COSINE TYPE F32 EFC 150 M 12"
+            ),
+            Some(256)
+        );
+        assert_eq!(hnsw_dimension("DEFINE INDEX x ON t FIELDS a UNIQUE"), None);
     }
 }

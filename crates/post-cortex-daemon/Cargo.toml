@@ -86,6 +86,10 @@ embeddings = ["post-cortex-memory/embeddings", "post-cortex-mcp/embeddings"]
 surrealdb-storage = ["post-cortex-memory/surrealdb-storage"]
 # Opt-in BERT embedding backend (see post-cortex-memory's `bert` feature).
 bert = ["post-cortex-memory/bert"]
+# Local cross-encoder reranking (`reranker_model` in daemon.toml).
+rerank = ["post-cortex-memory/rerank"]
+# Voyage AI reranking (`voyage_api_key` in daemon.toml or VOYAGE_API_KEY).
+rerank-voyage = ["post-cortex-memory/rerank-voyage"]
 surrealdb-tikv = ["surrealdb-storage", "post-cortex-storage/surrealdb-tikv"]
 # Wires the OpenTelemetry OTLP exporter into observability::init().
 # Forwards to post-cortex-memory so trait-method spans are also

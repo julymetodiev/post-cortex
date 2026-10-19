@@ -63,6 +63,8 @@ embeddings = ["post-cortex-memory/embeddings", "post-cortex-mcp/embeddings", "po
 surrealdb-storage = ["post-cortex-memory/surrealdb-storage", "post-cortex-daemon/surrealdb-storage"]
 # Opt-in BERT embedding backend; default builds use model2vec only.
 bert = ["post-cortex-memory/bert", "post-cortex-daemon/bert"]
+rerank = ["post-cortex-memory/rerank", "post-cortex-daemon/rerank"]
+rerank-voyage = ["post-cortex-memory/rerank-voyage", "post-cortex-daemon/rerank-voyage"]
 surrealdb-tikv = ["surrealdb-storage", "post-cortex-storage/surrealdb-tikv"]
 otel = []
 

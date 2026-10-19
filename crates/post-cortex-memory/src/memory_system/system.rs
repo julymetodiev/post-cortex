@@ -9,7 +9,7 @@ use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
 use post_cortex_core::core::context_update::ContextUpdate;
-use post_cortex_core::session::active_session::ActiveSession;
+use post_cortex_core::session::active_session::{ActiveSession, MAX_DESCRIPTION_BYTES};
 use post_cortex_core::workspace::WorkspaceManager;
 use post_cortex_storage::rocksdb_storage::RealRocksDBStorage;
 use post_cortex_storage::traits::SessionSummary;
@@ -124,6 +124,10 @@ pub struct ConversationMemorySystem {
     /// Configuration holder used for lazy embedding initialization
     #[cfg(feature = "embeddings")]
     pub embedding_config_holder: Arc<EmbeddingConfigHolder>,
+
+    /// Retrieval graph per session (see `graph_candidates`)
+    #[cfg(feature = "embeddings")]
+    pub(crate) retrieval_graphs: Arc<super::embeddings::SessionGraphs>,
 }
 
 impl ConversationMemorySystem {
@@ -286,6 +290,12 @@ impl ConversationMemorySystem {
                     max_vectors_per_session: config.max_vectors_per_session,
                     data_directory: config.data_directory.clone(),
                     cross_session_search_enabled: config.cross_session_search_enabled,
+                    reranker_model: config.reranker_model.clone(),
+                    voyage: config
+                        .voyage_api_key
+                        .clone()
+                        .map(|key| (key, config.voyage_model.clone())),
+                    search_mode: config.search_mode.clone(),
                     init_attempt_count: AtomicU64::new(0),
                     last_init_error: parking_lot::RwLock::new(None),
                 });
@@ -306,6 +316,9 @@ impl ConversationMemorySystem {
                         max_vectors_per_session: 10000,
                         data_directory: config.data_directory.clone(),
                         cross_session_search_enabled: false,
+                        reranker_model: None,
+                        voyage: None,
+                        search_mode: None,
                         init_attempt_count: AtomicU64::new(0),
                         last_init_error: parking_lot::RwLock::new(None),
                     }),
@@ -333,6 +346,8 @@ impl ConversationMemorySystem {
             semantic_query_engine,
             #[cfg(feature = "embeddings")]
             embedding_config_holder,
+            #[cfg(feature = "embeddings")]
+            retrieval_graphs: Arc::default(),
         })
     }
 
@@ -458,8 +473,11 @@ impl ConversationMemorySystem {
             .await?;
 
         #[cfg(feature = "embeddings")]
-        if let Some(vectorizer) = self.content_vectorizer.get() {
-            vectorizer.remove_session_vectors(session_id);
+        {
+            if let Some(vectorizer) = self.content_vectorizer.get() {
+                vectorizer.remove_session_vectors(session_id);
+            }
+            self.retrieval_graphs.remove(&session_id);
         }
 
         Ok(deleted)
@@ -845,16 +863,16 @@ impl ConversationMemorySystem {
         metadata: Option<serde_json::Value>,
         mode: WriteMode,
     ) -> Result<CommittedUpdate, String> {
-        // Content size limit to prevent timeouts
-        if description.len() > 2000 {
-            // Truncate at nearest UTF-8 boundary at or before 1800 bytes
-            let mut safe_len = 1800;
+        // Content size limit (see `MAX_DESCRIPTION_BYTES`).
+        if description.len() > MAX_DESCRIPTION_BYTES {
+            // Truncate at the nearest UTF-8 boundary at or before the limit
+            let mut safe_len = MAX_DESCRIPTION_BYTES;
             while safe_len > 0 && !description.is_char_boundary(safe_len) {
                 safe_len -= 1;
             }
             description.truncate(safe_len);
             description.push_str("... (truncated)");
-            debug!("Truncated long description to prevent timeout (UTF-8 safe)");
+            debug!("Truncated description over {} bytes", MAX_DESCRIPTION_BYTES);
         }
 
         // Get or create session

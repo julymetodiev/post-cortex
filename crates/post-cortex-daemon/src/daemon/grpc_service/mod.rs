@@ -14,6 +14,8 @@
 
 use post_cortex_core::services::PostCortexService;
 use post_cortex_memory::ConversationMemorySystem;
+#[cfg(feature = "embeddings")]
+use post_cortex_memory::content_vectorizer::SearchOptions;
 use post_cortex_memory::services::MemoryServiceImpl;
 use post_cortex_storage::rocksdb_storage::SessionCheckpoint;
 use std::sync::Arc;
@@ -493,10 +495,21 @@ impl PostCortex for PcxGrpcService {
 
         #[cfg(feature = "embeddings")]
         {
-            // workspace_id takes precedence: search each session independently and merge results
+            let mode = match req.mode.as_deref() {
+                Some(m) => Some(
+                    m.parse::<post_cortex_memory::content_vectorizer::SearchMode>()
+                        .map_err(Status::invalid_argument)?,
+                ),
+                None => None,
+            };
+            let options = SearchOptions {
+                limit: Some(max_results),
+                mode,
+                ..Default::default()
+            };
+            // workspace_id takes precedence over session_id
             let workspace_id_str = req.workspace_id.as_deref().unwrap_or("");
             let search_results = if !workspace_id_str.is_empty() {
-                // Workspace-scoped: search all sessions in the workspace and merge
                 let workspace_id = parse_uuid(workspace_id_str)?;
                 let workspace = self
                     .memory
@@ -511,37 +524,27 @@ impl PostCortex for PcxGrpcService {
                     .into_iter()
                     .map(|(sid, _)| sid)
                     .collect();
-
-                let mut merged = Vec::new();
-                for sid in session_ids {
-                    match self
-                        .memory
-                        .semantic_search_session(sid, &req.query, Some(max_results), None, None)
+                if session_ids.is_empty() {
+                    Vec::new()
+                } else {
+                    // One search over all the workspace's sessions, as the MCP
+                    // workspace scope does.
+                    self.memory
+                        .semantic_search_multisession(&session_ids, &req.query, options)
                         .await
-                    {
-                        Ok(results) => merged.extend(results),
-                        Err(e) => warn!("SemanticSearch: session {} search failed: {}", sid, e),
-                    }
+                        .map_err(|e| Status::internal(format!("Search failed: {e}")))?
                 }
-                // Sort by combined_score descending and cap at max_results
-                merged.sort_by(|a, b| {
-                    b.combined_score
-                        .partial_cmp(&a.combined_score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-                merged.truncate(max_results);
-                merged
             } else if req.session_id.is_empty() {
                 // Global search
                 self.memory
-                    .semantic_search_global(&req.query, Some(max_results), None, None)
+                    .semantic_search_global(&req.query, options)
                     .await
                     .map_err(|e| Status::internal(format!("Search failed: {e}")))?
             } else {
                 // Session-scoped search
                 let session_id = parse_uuid(&req.session_id)?;
                 self.memory
-                    .semantic_search_session(session_id, &req.query, Some(max_results), None, None)
+                    .semantic_search_session(session_id, &req.query, options)
                     .await
                     .map_err(|e| Status::internal(format!("Search failed: {e}")))?
             };
@@ -561,7 +564,12 @@ impl PostCortex for PcxGrpcService {
                     score: r.combined_score,
                     session_id: r.session_id.to_string(),
                     content_type: format!("{:?}", r.content_type),
-                    metadata: std::collections::HashMap::new(),
+                    metadata: r
+                        .neighbour_of
+                        .map(|hit| {
+                            std::collections::HashMap::from([("neighbour_of".to_string(), hit)])
+                        })
+                        .unwrap_or_default(),
                 })
                 .collect();
 
@@ -650,7 +658,14 @@ impl PostCortex for PcxGrpcService {
 
             let search_results = self
                 .memory
-                .semantic_search_session(session_id, &req.topic, Some(max_results), None, None)
+                .semantic_search_session(
+                    session_id,
+                    &req.topic,
+                    SearchOptions {
+                        limit: Some(max_results),
+                        ..Default::default()
+                    },
+                )
                 .await
                 .map_err(|e| Status::internal(format!("Search failed: {e}")))?;
 
@@ -662,7 +677,12 @@ impl PostCortex for PcxGrpcService {
                     score: r.combined_score,
                     session_id: r.session_id.to_string(),
                     content_type: format!("{:?}", r.content_type),
-                    metadata: std::collections::HashMap::new(),
+                    metadata: r
+                        .neighbour_of
+                        .map(|hit| {
+                            std::collections::HashMap::from([("neighbour_of".to_string(), hit)])
+                        })
+                        .unwrap_or_default(),
                 })
                 .collect();
 

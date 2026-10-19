@@ -419,3 +419,132 @@ async fn embeddings_are_session_scoped() {
     assert!(storage.remove_vector("entity:rust").await.unwrap());
     assert_eq!(storage.total_count().await, 0);
 }
+
+fn text_meta(content_id: &str, session: &str, text: &str) -> VectorMetadata {
+    VectorMetadata {
+        text: text.to_string(),
+        content_type: "UpdateContent".into(),
+        ..vector_meta(content_id, session)
+    }
+}
+
+/// BM25 finds records by their words, ranks the record with more matching
+/// terms first, honours the session scope, reports the cosine similarity to
+/// the query vector, and ignores stopword-only queries.
+#[tokio::test]
+async fn text_search_bm25() {
+    let storage = test_storage().await;
+    let (s1, s2) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
+    let (x, y) = (
+        vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    );
+    storage
+        .add_vectors_batch(vec![
+            (
+                x.clone(),
+                text_meta("a", &s1, "Decided to keep RocksDB for the local daemon"),
+            ),
+            (
+                y.clone(),
+                text_meta("b", &s1, "SurrealDB HNSW index and RocksDB column families"),
+            ),
+            (y.clone(), text_meta("c", &s1, "Lunch plans for Friday")),
+            (x.clone(), text_meta("d", &s2, "RocksDB compaction tuning")),
+            (
+                x.clone(),
+                text_meta("e", &s1, "Решихме да ползваме базата SurrealDB"),
+            ),
+        ])
+        .await
+        .unwrap();
+
+    let all = storage
+        .search_text("What about RocksDB and SurrealDB?", &x, 10, &[])
+        .await
+        .unwrap()
+        .expect("SurrealDB has a full-text index");
+    let ids: Vec<&str> = all.iter().map(|m| m.metadata.id.as_str()).collect();
+    let pos = |id: &str| ids.iter().position(|i| *i == id).expect(id);
+    assert!(
+        pos("b") < pos("a") && pos("b") < pos("d"),
+        "both query terms beat one: {ids:?}"
+    );
+    assert!(ids.contains(&"e") && !ids.contains(&"c"), "{ids:?}");
+    let a = all.iter().find(|m| m.metadata.id == "a").unwrap();
+    assert!(
+        (a.similarity - 1.0).abs() < 1e-5,
+        "cosine to the query vector"
+    );
+    let b = all.iter().find(|m| m.metadata.id == "b").unwrap();
+    assert!(b.similarity.abs() < 1e-5);
+
+    let scoped = storage
+        .search_text("rocksdb", &x, 10, std::slice::from_ref(&s2))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        scoped
+            .iter()
+            .map(|m| m.metadata.id.as_str())
+            .collect::<Vec<_>>(),
+        ["d"]
+    );
+
+    let cyrillic = storage
+        .search_text("базата", &x, 10, &[])
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cyrillic.len(), 1);
+    assert_eq!(cyrillic[0].metadata.id, "e");
+
+    assert!(
+        storage
+            .search_text("what is it?", &x, 10, &[])
+            .await
+            .unwrap()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Startup reads the HNSW dimension back from `INFO FOR TABLE` to decide
+/// whether the index must be rebuilt; the server's format must parse.
+#[tokio::test]
+async fn hnsw_dimension_reads_back_from_server() {
+    let storage = test_storage().await;
+    let mut response = storage
+        .db
+        .query("RETURN (INFO FOR TABLE embedding).indexes.idx_embedding_hnsw;")
+        .await
+        .unwrap();
+    let definition: Option<String> = response.take(0).unwrap();
+    assert_eq!(
+        definition.as_deref().and_then(super::core::hnsw_dimension),
+        Some(8),
+        "{definition:?}"
+    );
+}
+
+/// Keys in an embedding's `metadata` survive a round trip (the field is an
+/// `object` in a SCHEMAFULL table).
+#[tokio::test]
+async fn embedding_metadata_round_trips() {
+    let storage = test_storage().await;
+    let session = Uuid::new_v4().to_string();
+    let mut meta = text_meta("m", &session, "metadata round trip");
+    meta.metadata
+        .insert("terms".into(), "decid keep rocksdb".into());
+    storage
+        .add_vectors_batch(vec![(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], meta)])
+        .await
+        .unwrap();
+    let loaded = storage.get_session_vectors(&session).await.unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(
+        loaded[0].1.metadata.get("terms").map(String::as_str),
+        Some("decid keep rocksdb")
+    );
+}

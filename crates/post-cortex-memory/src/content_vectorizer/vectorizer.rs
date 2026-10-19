@@ -22,9 +22,9 @@ use uuid::Uuid;
 use crate::query_cache::QueryCache;
 use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_embeddings::LocalEmbeddingEngine;
-use post_cortex_embeddings::{VectorDB, VectorMetadata};
+use post_cortex_embeddings::{Reranker, VectorDB, VectorMetadata};
 
-use super::types::ContentVectorizerConfig;
+use super::types::{ContentVectorizerConfig, SearchMode};
 
 /// Main content vectorization pipeline
 pub struct ContentVectorizer {
@@ -34,6 +34,12 @@ pub struct ContentVectorizer {
     pub(super) query_cache: Option<Arc<QueryCache>>,
     /// Optional persistent storage for embeddings (RocksDB/SurrealDB)
     pub(super) persistent_storage: Option<Arc<dyn post_cortex_storage::traits::VectorStorage>>,
+    /// Local reranker (`local` mode)
+    pub(super) reranker: Option<Arc<dyn Reranker>>,
+    /// Remote reranker, with the local one as fallback (`accurate` mode)
+    pub(super) accurate_reranker: Option<Arc<dyn Reranker>>,
+    /// Mode for searches that do not name one; None = the best available
+    pub(super) default_mode: Option<SearchMode>,
     /// Recency bias performance metrics — all atomic for lock-free access
     pub(super) recency_bias_total_duration_ns: Arc<AtomicU64>,
     pub(super) recency_bias_total_results: Arc<AtomicU64>,
@@ -53,6 +59,9 @@ impl Clone for ContentVectorizer {
             config: self.config.clone(),
             query_cache: self.query_cache.clone(),
             persistent_storage: self.persistent_storage.clone(),
+            reranker: self.reranker.clone(),
+            accurate_reranker: self.accurate_reranker.clone(),
+            default_mode: self.default_mode,
             // Atomics are shared between clones via Arc for metrics aggregation
             recency_bias_total_duration_ns: Arc::clone(&self.recency_bias_total_duration_ns),
             recency_bias_total_results: Arc::clone(&self.recency_bias_total_results),
@@ -97,6 +106,9 @@ impl ContentVectorizer {
             config,
             query_cache: query_cache.map(Arc::new),
             persistent_storage: None,
+            reranker: None,
+            accurate_reranker: None,
+            default_mode: None,
             recency_bias_total_duration_ns: Arc::new(AtomicU64::new(0)),
             recency_bias_total_results: Arc::new(AtomicU64::new(0)),
             recency_bias_calculation_count: Arc::new(AtomicU64::new(0)),
@@ -122,25 +134,28 @@ impl ContentVectorizer {
         self.persistent_storage = Some(storage);
     }
 
-    /// Add a vector to the in-memory DB **and** persist it. Returns `Ok(true)` only when
-    /// both succeed — matches the existing semantics: an in-memory add that fails to
-    /// persist must NOT be marked as vectorized (so a retry will pick it up next time).
-    /// A failed persist also rolls the in-memory add back, so the retry does not
-    /// leave a duplicate behind.
-    pub(super) async fn add_and_persist(
-        &self,
-        embedding: Vec<f32>,
-        metadata: VectorMetadata,
-    ) -> bool {
-        !self
-            .add_and_persist_many(vec![(embedding, metadata)])
-            .await
-            .is_empty()
+    /// The local reranker used in `local` mode (e.g. a cross-encoder).
+    pub fn set_reranker(&mut self, reranker: Arc<dyn Reranker>) {
+        self.reranker = Some(reranker);
     }
 
-    /// Batch form of [`Self::add_and_persist`]: in-memory adds, then one
+    /// The reranker used in `accurate` mode (e.g. Voyage with the local one
+    /// as fallback).
+    pub fn set_accurate_reranker(&mut self, reranker: Arc<dyn Reranker>) {
+        self.accurate_reranker = Some(reranker);
+    }
+
+    /// Mode for searches that do not name one. Unset, it is the best mode
+    /// the configured rerankers allow.
+    pub fn set_default_mode(&mut self, mode: SearchMode) {
+        self.default_mode = Some(mode);
+    }
+
+    /// Add vectors to the in-memory DB **and** persist them: in-memory adds, then one
     /// storage batch write. Returns the content ids that were both added and
-    /// persisted. The in-memory DB takes ownership of each vector; only the
+    /// persisted. An add that fails to persist is rolled back and not
+    /// returned, so the caller does not mark it vectorized and a retry leaves
+    /// no duplicate behind. The in-memory DB takes ownership of each vector; only the
     /// copy handed to storage is cloned.
     pub(super) async fn add_and_persist_many(
         &self,
@@ -237,17 +252,32 @@ impl ContentVectorizer {
     /// # Errors
     /// Returns an error if the persisted embedding could not be deleted.
     pub async fn remove_content(&self, session_id: Uuid, content_id: &str) -> Result<usize> {
-        let ids = source_content_ids(&self.vector_db, content_id, &session_id.to_string());
-        let removed = self.vector_db.remove_vectors(&ids);
+        let source = session_id.to_string();
+        // The content and the chunks of a long update (`<id>#2`, `<id>#3`, ...).
+        let mut content_ids = vec![content_id.to_string()];
+        for n in 2.. {
+            let chunk = format!("{content_id}#{n}");
+            if source_content_ids(&self.vector_db, &chunk, &source).is_empty() {
+                break;
+            }
+            content_ids.push(chunk);
+        }
+        let mut removed = 0;
+        for id in &content_ids {
+            let ids = source_content_ids(&self.vector_db, id, &source);
+            removed += self.vector_db.remove_vectors(&ids);
+        }
         self.invalidate_cached(session_id);
 
         if let Some(storage) = &self.persistent_storage {
             // Session-scoped: entity content ids (`entity:<name>`) repeat
             // across sessions, and other sessions' copies must stay.
-            storage
-                .remove_session_vector(&session_id.to_string(), content_id)
-                .await
-                .with_context(|| format!("Failed to delete persisted embedding {content_id}"))?;
+            for id in &content_ids {
+                storage
+                    .remove_session_vector(&source, id)
+                    .await
+                    .with_context(|| format!("Failed to delete persisted embedding {id}"))?;
+            }
         }
         Ok(removed)
     }

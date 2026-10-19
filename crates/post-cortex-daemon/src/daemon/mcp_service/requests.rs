@@ -548,6 +548,15 @@ Examples:
 Note: Only affects ranking order, doesn't filter out old results."#
     )]
     pub recency_bias: Option<f32>,
+    /// Ranking effort: `fast`, `local` or `accurate`.
+    #[schemars(description = r#"Ranking effort (optional; default set by the server).
+
+- fast: vector + keyword search fused, no reranking (~40 ms)
+- local: plus a local cross-encoder reranker (~1 s on CPU)
+- accurate: plus the Voyage reranker if the server has a key (~0.5 s), else as local
+
+Use fast for quick lookups; accurate when the answer must not be missed."#)]
+    pub mode: Option<String>,
     /// Form A: single JSONPath expression. The matched value is returned
     /// directly instead of the full response payload.
     #[schemars(

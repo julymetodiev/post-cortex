@@ -19,10 +19,11 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use post_cortex_core::core::context_update::ContextUpdate;
+use post_cortex_core::graph::retrieval_graph;
 use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_embeddings::VectorMetadata;
 
-use super::types::ContentType;
+use super::types::{CHUNK_PARENT_KEY, ContentType};
 use super::vectorizer::{ContentVectorizer, source_content_ids};
 
 /// Threshold for switching to parallel processing.
@@ -124,43 +125,32 @@ impl ContentVectorizer {
             return Ok(0);
         }
 
-        let prepared_text = self.prepare_text_for_vectorization(&raw_text);
-        debug!(
-            "Prepared text for vectorization: {} chars (original: {} chars)",
-            prepared_text.len(),
-            raw_text.len()
+        let vectors = update_vectors(
+            session.id(),
+            &update,
+            &raw_text,
+            self.config.max_text_length,
         );
+        let attempted = vectors.len();
+        let (texts, metadata): (Vec<String>, Vec<VectorMetadata>) = vectors.into_iter().unzip();
+        let embeddings = self.embedding_engine.encode_batch(texts).await?;
+        if embeddings.len() != attempted {
+            tracing::warn!("No embedding generated for update {}", update.id);
+            return Ok(0);
+        }
 
-        let content_type = determine_content_type(&update);
-        let embeddings = self
-            .embedding_engine
-            .encode_batch(vec![prepared_text.clone()])
-            .await?;
-
-        let embedding = match embeddings.into_iter().next() {
-            Some(e) => e,
-            None => {
-                tracing::warn!("No embedding generated for update {}", update.id);
-                return Ok(0);
-            }
-        };
-
-        let metadata = VectorMetadata::new(
-            update.id.to_string(),
-            prepared_text,
-            session.id().to_string(),
-            format!("{content_type:?}"),
-        )
-        .with_timestamp(update.timestamp);
-
-        if self.add_and_persist(embedding, metadata).await {
-            debug!("Successfully vectorized and persisted update {}", update.id);
+        let added = self
+            .add_and_persist_many(embeddings.into_iter().zip(metadata).collect())
+            .await;
+        if added.len() == attempted {
+            debug!(
+                "Vectorized and persisted update {} ({} vectors)",
+                update.id, attempted
+            );
             session.vectorized_update_ids.insert(update.id);
             self.invalidate_cached(session.id());
-            Ok(1)
-        } else {
-            Ok(0)
         }
+        Ok(added.len())
     }
 
     /// Vectorize context updates from a session. Returns how many were added
@@ -379,18 +369,12 @@ impl ContentVectorizer {
 
             let raw_text = extract_text_from_update(update);
             if self.should_vectorize_text(&raw_text) {
-                let content_type = determine_content_type(update);
-                let prepared_text = self.prepare_text_for_vectorization(&raw_text);
-                texts_to_embed.push(prepared_text.clone());
-                metadata_list.push(
-                    VectorMetadata::new(
-                        update.id.to_string(),
-                        prepared_text,
-                        session.id().to_string(),
-                        format!("{content_type:?}"),
-                    )
-                    .with_timestamp(update.timestamp),
-                );
+                for (text, metadata) in
+                    update_vectors(session.id(), update, &raw_text, self.config.max_text_length)
+                {
+                    texts_to_embed.push(text);
+                    metadata_list.push(metadata);
+                }
             }
         }
 
@@ -405,25 +389,13 @@ impl ContentVectorizer {
         let results: Vec<(String, VectorMetadata)> = session
             .incremental_updates
             .par_iter()
-            .filter_map(|update| {
-                if session.vectorized_update_ids.contains(&update.id) {
-                    return None;
-                }
-
+            .filter(|update| !session.vectorized_update_ids.contains(&update.id))
+            .flat_map_iter(|update| {
                 let raw_text = extract_text_from_update(update);
                 if self.should_vectorize_text(&raw_text) {
-                    let content_type = determine_content_type(update);
-                    let prepared_text = self.prepare_text_for_vectorization(&raw_text);
-                    let metadata = VectorMetadata::new(
-                        update.id.to_string(),
-                        prepared_text.clone(),
-                        session.id().to_string(),
-                        format!("{content_type:?}"),
-                    )
-                    .with_timestamp(update.timestamp);
-                    Some((prepared_text, metadata))
+                    update_vectors(session.id(), update, &raw_text, self.config.max_text_length)
                 } else {
-                    None
+                    Vec::new()
                 }
             })
             .collect();
@@ -433,19 +405,6 @@ impl ContentVectorizer {
 
     fn should_vectorize_text(&self, text: &str) -> bool {
         text.trim().len() >= self.config.min_text_length
-    }
-
-    fn prepare_text_for_vectorization(&self, text: &str) -> String {
-        let len = text.trim().len();
-        if len <= self.config.max_text_length {
-            return text.to_string();
-        }
-
-        debug!(
-            "Text length {} exceeds max {}, applying smart summarization",
-            len, self.config.max_text_length
-        );
-        extract_key_points(text, self.config.max_text_length)
     }
 }
 
@@ -477,8 +436,103 @@ fn build_entity_description(
     description_parts.join(". ")
 }
 
+/// Characters shared by consecutive chunks of a long update, so a passage cut
+/// at a chunk boundary is whole in one of them.
+const CHUNK_OVERLAP: usize = 200;
+
+/// The vectors for an update: its text and metadata, one per chunk. Text up
+/// to `chunk_size` characters is one vector with the update's id; longer
+/// text is split into overlapping chunks of about `chunk_size` characters
+/// (the rerankers see about that much), the first keeping the update's id,
+/// the others `<id>#<n>` with [`CHUNK_PARENT_KEY`] naming the update. The
+/// first also carries the retrieval-graph terms of the whole update and the
+/// names of the entities the agent attached to it (see
+/// `post_cortex_core::graph::retrieval_graph`).
+fn update_vectors(
+    session_id: Uuid,
+    update: &ContextUpdate,
+    raw_text: &str,
+    chunk_size: usize,
+) -> Vec<(String, VectorMetadata)> {
+    let content_type = format!("{:?}", determine_content_type(update));
+    let entities = update
+        .typed_entities
+        .iter()
+        .map(|e| e.name.as_str())
+        .chain(update.creates_entities.iter().map(String::as_str))
+        .chain(update.references_entities.iter().map(String::as_str));
+    let terms = retrieval_graph::terms(raw_text);
+    chunk_text(raw_text, chunk_size, CHUNK_OVERLAP)
+        .into_iter()
+        .enumerate()
+        .map(|(n, chunk)| {
+            let id = match n {
+                0 => update.id.to_string(),
+                n => format!("{}#{}", update.id, n + 1),
+            };
+            let mut metadata = VectorMetadata::new(
+                id,
+                chunk.to_string(),
+                session_id.to_string(),
+                content_type.clone(),
+            )
+            .with_timestamp(update.timestamp);
+            if n == 0 {
+                metadata = metadata
+                    .with_metadata(
+                        retrieval_graph::TERMS_KEY.to_string(),
+                        retrieval_graph::join_keys(terms.iter().map(String::as_str)),
+                    )
+                    .with_metadata(
+                        retrieval_graph::ENTITIES_KEY.to_string(),
+                        retrieval_graph::join_keys(entities.clone()),
+                    );
+            } else {
+                metadata =
+                    metadata.with_metadata(CHUNK_PARENT_KEY.to_string(), update.id.to_string());
+            }
+            (chunk.to_string(), metadata)
+        })
+        .collect()
+}
+
+/// `text` as windows of at most `size` characters, consecutive ones sharing
+/// about `overlap` characters, cut at whitespace where there is any in the
+/// second half of a window. Text up to `size` characters is one window.
+fn chunk_text(text: &str, size: usize, overlap: usize) -> Vec<&str> {
+    let starts: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
+    let chars = starts.len();
+    if chars <= size || size == 0 {
+        return vec![text];
+    }
+    let byte = |c: usize| starts.get(c).copied().unwrap_or(text.len());
+    let is_space = |c: usize| text[byte(c)..].starts_with(char::is_whitespace);
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    loop {
+        let mut end = (start + size).min(chars);
+        if end < chars {
+            // Back off to the last whitespace in the second half.
+            if let Some(cut) = (start + size / 2..end).rev().find(|&c| is_space(c)) {
+                end = cut;
+            }
+        }
+        chunks.push(text[byte(start)..byte(end)].trim());
+        if end >= chars {
+            break;
+        }
+        let mut next = end.saturating_sub(overlap).max(start + 1);
+        // Start the next window at a word.
+        while next < end && !is_space(next) {
+            next += 1;
+        }
+        start = if next < end { next + 1 } else { end };
+    }
+    chunks
+}
+
 /// Extract text content from a context update.
-pub(super) fn extract_text_from_update(update: &ContextUpdate) -> String {
+pub(crate) fn extract_text_from_update(update: &ContextUpdate) -> String {
     let mut text_parts = Vec::new();
 
     // ALWAYS include title (question) for all update types.
@@ -508,7 +562,7 @@ pub(super) fn extract_text_from_update(update: &ContextUpdate) -> String {
 }
 
 /// Determine content type from context update.
-pub(super) const fn determine_content_type(update: &ContextUpdate) -> ContentType {
+pub(crate) const fn determine_content_type(update: &ContextUpdate) -> ContentType {
     use post_cortex_core::core::context_update::UpdateType;
     match &update.update_type {
         UpdateType::QuestionAnswered => ContentType::UserMessage,
@@ -519,110 +573,37 @@ pub(super) const fn determine_content_type(update: &ContextUpdate) -> ContentTyp
     }
 }
 
-/// Extract key points from long text using smart heuristics.
-///
-/// Strategy:
-/// 1. Preserve Title and Description (most important context)
-/// 2. Extract code snippets (technical details)
-/// 3. Extract bullet points and numbered lists (structured info)
-/// 4. Include beginning (context) and end (conclusion)
-/// 5. Preserve key phrases and technical terms
-fn extract_key_points(text: &str, max_length: usize) -> String {
-    let mut parts = Vec::new();
-    let mut current_length = 0;
+#[cfg(test)]
+mod tests {
+    use super::chunk_text;
 
-    let add_part = |parts: &mut Vec<String>, current_len: &mut usize, part: &str| -> bool {
-        let part_len = part.len();
-        if *current_len + part_len + 3 <= max_length {
-            // +3 for " | "
-            parts.push(part.to_string());
-            *current_len += part_len + 3;
-            true
-        } else {
-            false
-        }
-    };
-
-    // 1. Always preserve Title and Description (highest priority)
-    for line in text.lines() {
-        if (line.starts_with("Title:") || line.starts_with("Description:"))
-            && !add_part(&mut parts, &mut current_length, line)
-        {
-            // Title/Description alone exceeds max_length — truncate it
-            let truncated = &line.chars().take(max_length - 20).collect::<String>();
-            parts.push(format!("{}...", truncated));
-            return parts.join(" | ");
-        }
+    #[test]
+    fn short_text_is_one_chunk() {
+        assert_eq!(chunk_text("a few words", 1000, 200), ["a few words"]);
     }
 
-    // 2. Extract code snippets
-    let code_blocks: Vec<&str> = text
-        .split("Code:")
-        .skip(1)
-        .filter_map(|segment| segment.split('|').next().map(|s| s.trim()))
-        .collect();
-
-    for code in code_blocks.iter().take(2) {
-        if !add_part(&mut parts, &mut current_length, &format!("Code: {}", code)) {
-            break;
+    #[test]
+    fn long_text_is_cut_at_words_with_overlap() {
+        let text: String = (0..400).map(|i| format!("word{i} ")).collect();
+        let chunks = chunk_text(&text, 1000, 200);
+        assert!(chunks.len() > 1);
+        for chunk in &chunks {
+            assert!(chunk.chars().count() <= 1000);
+            assert!(chunk.starts_with("word") && chunk.ends_with(|c: char| c.is_ascii_digit()));
         }
+        // Consecutive chunks overlap, and together they cover the text.
+        for pair in chunks.windows(2) {
+            let last = pair[0].split(' ').next_back().unwrap();
+            assert!(pair[1].contains(last), "no overlap at {last}");
+        }
+        assert!(chunks.last().unwrap().ends_with("word399"));
     }
 
-    // 3. Extract bullet points and key technical terms
-    let mut key_lines = Vec::new();
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('-')
-            || trimmed.starts_with('*')
-            || trimmed.chars().next().is_some_and(|c| c.is_ascii_digit())
-            || trimmed.contains("Performance:")
-            || trimmed.contains("Algorithm:")
-            || trimmed.contains("O(") // Big-O notation
-            || trimmed.contains("speedup")
-            || trimmed.contains("optimization")
-        {
-            key_lines.push(trimmed);
-        }
-    }
-
-    for line in key_lines.iter().take(5) {
-        if !add_part(&mut parts, &mut current_length, line) {
-            break;
-        }
-    }
-
-    // 4. If we still have space, add beginning context
-    if current_length < max_length * 3 / 4 {
-        let intro_budget = (max_length - current_length).min(300);
-        if intro_budget > 50 {
-            let intro: String = text.chars().take(intro_budget).collect();
-            if let Some(last_space) = intro.rfind(' ') {
-                let _ = add_part(
-                    &mut parts,
-                    &mut current_length,
-                    &format!("Context: {}...", &intro[..last_space]),
-                );
-            }
-        }
-    }
-
-    // 5. Metadata footer
-    if current_length < max_length - 50 {
-        let _ = add_part(
-            &mut parts,
-            &mut current_length,
-            &format!("[Summarized from {} chars]", text.len()),
-        );
-    }
-
-    if parts.is_empty() {
-        let truncated: String = text.chars().take(max_length - 20).collect();
-        if let Some(last_space) = truncated.rfind(' ') {
-            format!("{}... [Truncated]", &truncated[..last_space])
-        } else {
-            format!("{}... [Truncated]", truncated)
-        }
-    } else {
-        parts.join(" | ")
+    #[test]
+    fn multibyte_text_is_cut_on_char_boundaries() {
+        let text = "дума ".repeat(500);
+        let chunks = chunk_text(&text, 300, 50);
+        assert!(chunks.len() > 1);
+        assert!(chunks.iter().all(|c| c.chars().count() <= 300));
     }
 }

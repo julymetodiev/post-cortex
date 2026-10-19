@@ -33,6 +33,7 @@ mod graph;
 mod import_export;
 mod records;
 mod sessions;
+mod text_search;
 mod vectors;
 
 #[cfg(test)]

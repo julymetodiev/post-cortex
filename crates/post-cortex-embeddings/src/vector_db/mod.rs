@@ -22,6 +22,7 @@ pub mod core;
 mod hnsw_index;
 pub mod product_quantization;
 pub mod similarity;
+mod text_index;
 
 #[cfg(test)]
 mod tests;

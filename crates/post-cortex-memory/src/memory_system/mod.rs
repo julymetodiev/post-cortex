@@ -21,6 +21,8 @@ mod embeddings;
 pub mod managers;
 /// System-level and session-level metrics snapshots
 pub mod metrics;
+#[cfg(feature = "embeddings")]
+mod neighbours;
 /// Coalescing, per-session ordered session persistence
 mod persister;
 /// Session lifecycle management with DashMap-based caching

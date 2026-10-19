@@ -391,6 +391,11 @@ impl Default for ActiveSession {
     }
 }
 
+/// Largest update description kept, in bytes; longer ones are cut. Long
+/// enough for whole answers, code and logs: search embeds a summary of long
+/// records and returns them in full.
+pub const MAX_DESCRIPTION_BYTES: usize = 64 * 1024;
+
 /// Truncate a string to at most `max_bytes` without splitting a multi-byte
 /// UTF-8 character. Finds the largest char boundary ≤ `max_bytes`.
 fn truncate_safe(s: &mut String, max_bytes: usize) {
@@ -620,13 +625,19 @@ impl ActiveSession {
 
         // Limit content size to prevent processing issues
         let mut limited_update = update;
-        if limited_update.content.description.len() > 2000 {
-            truncate_safe(&mut limited_update.content.description, 1800);
+        if limited_update.content.description.len() > MAX_DESCRIPTION_BYTES {
+            truncate_safe(
+                &mut limited_update.content.description,
+                MAX_DESCRIPTION_BYTES,
+            );
             limited_update
                 .content
                 .description
                 .push_str("... (truncated)");
-            warn!("ActiveSession: Content description truncated to prevent timeout");
+            warn!(
+                "ActiveSession: description over {} bytes truncated",
+                MAX_DESCRIPTION_BYTES
+            );
         }
         if limited_update.content.title.len() > 200 {
             truncate_safe(&mut limited_update.content.title, 190);
@@ -718,13 +729,19 @@ impl ActiveSession {
 
         // Limit content size to prevent processing issues
         let mut limited_update = update;
-        if limited_update.content.description.len() > 2000 {
-            truncate_safe(&mut limited_update.content.description, 1800);
+        if limited_update.content.description.len() > MAX_DESCRIPTION_BYTES {
+            truncate_safe(
+                &mut limited_update.content.description,
+                MAX_DESCRIPTION_BYTES,
+            );
             limited_update
                 .content
                 .description
                 .push_str("... (truncated)");
-            warn!("ActiveSession: Content description truncated to prevent timeout");
+            warn!(
+                "ActiveSession: description over {} bytes truncated",
+                MAX_DESCRIPTION_BYTES
+            );
         }
         if limited_update.content.title.len() > 200 {
             truncate_safe(&mut limited_update.content.title, 190);

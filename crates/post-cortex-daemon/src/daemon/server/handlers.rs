@@ -270,6 +270,7 @@ pub(super) async fn handle_semantic_search(
         date_to,
         interaction_type,
         recency_bias,
+        None,
     )
     .await
     .map_err(|e| format!("Failed to search: {}", e))?;
@@ -298,6 +299,7 @@ pub(super) async fn handle_semantic_search_global(
         date_to,
         interaction_type,
         recency_bias,
+        None,
     )
     .await
     .map_err(|e| format!("Failed to search globally: {}", e))?;

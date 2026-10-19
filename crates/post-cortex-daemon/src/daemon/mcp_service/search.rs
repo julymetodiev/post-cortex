@@ -112,6 +112,7 @@ pub(super) async fn handle(
                 req.date_to.clone(),
                 req.interaction_type.clone(),
                 validated_recency_bias,
+                req.mode.clone(),
             )
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -182,13 +183,20 @@ pub(super) async fn handle(
             let validated_recency_bias =
                 validate_recency_bias(req.recency_bias).map_err(|e| e.to_mcp_error())?;
 
+            let mode = post_cortex_mcp::search::parse_mode(req.mode.clone()).map_err(|e| {
+                McpError::invalid_params(e, Some(serde_json::json!({"parameter": "mode"})))
+            })?;
             let results = system
                 .semantic_search_multisession(
                     &session_ids,
                     &req.query,
-                    Some(validated_limit),
-                    date_range,
-                    validated_recency_bias,
+                    post_cortex_memory::content_vectorizer::SearchOptions {
+                        limit: Some(validated_limit),
+                        date_range,
+                        recency_bias: validated_recency_bias,
+                        mode,
+                        ..Default::default()
+                    },
                 )
                 .await
                 .map_err(|e| McpError::internal_error(e, None))?;
@@ -213,6 +221,7 @@ pub(super) async fn handle(
                 req.date_to.clone(),
                 req.interaction_type.clone(),
                 validated_recency_bias,
+                req.mode.clone(),
             )
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;

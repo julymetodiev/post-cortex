@@ -199,7 +199,14 @@ async fn test_end_to_end_semantic_search_pipeline() -> Result<()> {
 
     // Search with the question
     let results = system
-        .semantic_search_session(session_id, question, Some(5), None, None)
+        .semantic_search_session(
+            session_id,
+            question,
+            post_cortex_memory::content_vectorizer::SearchOptions {
+                limit: Some(5),
+                ..Default::default()
+            },
+        )
         .await
         .map_err(|e| anyhow::anyhow!(e))?;
 

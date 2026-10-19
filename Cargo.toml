@@ -84,12 +84,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
 tracing-appender = "0.2"
 petgraph = { version = "0.8.2", features = ["serde-1"] }
+rust-stemmers = "1.2"
 async-trait = "0.1"
 candle-core = "0.9"
 candle-nn = "0.9"
 candle-transformers = "0.9"
 tokenizers = "0.22"
 hf-hub = "0.4"
+ort = { version = "=2.0.0-rc.15", default-features = false }
 model2vec-rs = "0.2"
 surrealdb = { version = "3.3.4", features = ["kv-mem", "protocol-ws"] }
 surrealdb-types = "3.3.4"

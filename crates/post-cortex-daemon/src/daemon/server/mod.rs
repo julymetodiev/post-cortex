@@ -120,6 +120,12 @@ impl DaemonServer {
             }
         }
 
+        system_config.reranker_model = config.reranker_model.clone();
+        system_config.neighbour_radius = config.neighbour_radius;
+        system_config.voyage_api_key = config.voyage_api_key.clone();
+        system_config.voyage_model = config.voyage_model.clone();
+        system_config.search_mode = config.search_mode.clone();
+
         let memory_system = Arc::new(
             ConversationMemorySystem::new(system_config)
                 .await

@@ -92,6 +92,41 @@ pub struct DaemonConfig {
     /// See [`crate::daemon::host_allowlist`].
     #[serde(default)]
     pub allowed_hosts: Vec<String>,
+
+    /// HuggingFace id of a cross-encoder that reranks search results, e.g.
+    /// `cross-encoder/ms-marco-MiniLM-L4-v2` (default: none). Needs a build
+    /// with the `rerank` feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reranker_model: Option<String>,
+
+    /// Voyage AI API key (or `VOYAGE_API_KEY`). When set, Voyage reranks
+    /// search results, with `reranker_model` as fallback. Candidate text is
+    /// sent to Voyage. Needs a build with the `rerank-voyage` feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voyage_api_key: Option<String>,
+
+    /// Voyage rerank model (default: `rerank-3-lite`).
+    #[serde(default = "default_voyage_model")]
+    pub voyage_model: String,
+
+    /// Search mode when a call does not name one: `fast` (no reranker),
+    /// `local` (`reranker_model`) or `accurate` (Voyage). Default: the best
+    /// the configured rerankers allow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_mode: Option<String>,
+
+    /// Updates returned on each side of every search hit from the same
+    /// session (default: 1; 0 = hits only).
+    #[serde(default = "default_neighbour_radius")]
+    pub neighbour_radius: usize,
+}
+
+fn default_neighbour_radius() -> usize {
+    1
+}
+
+fn default_voyage_model() -> String {
+    "rerank-3-lite".to_string()
 }
 
 fn default_redact() -> bool {
@@ -131,6 +166,11 @@ impl Default for DaemonConfig {
             redact: default_redact(),
             redact_patterns: Vec::new(),
             allowed_hosts: Vec::new(),
+            reranker_model: None,
+            voyage_api_key: None,
+            voyage_model: default_voyage_model(),
+            search_mode: None,
+            neighbour_radius: default_neighbour_radius(),
         }
     }
 }
@@ -172,6 +212,12 @@ impl DaemonConfig {
         }
 
         // Apply environment variable overrides (highest priority)
+        if let Ok(key) = std::env::var("VOYAGE_API_KEY")
+            && !key.is_empty()
+        {
+            config.voyage_api_key = Some(key);
+            tracing::debug!("Voyage API key taken from VOYAGE_API_KEY");
+        }
         if let Ok(host) = std::env::var("PC_HOST") {
             config.host = host;
             tracing::debug!("Overriding host from PC_HOST environment variable");
