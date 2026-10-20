@@ -38,7 +38,7 @@ Write queries as natural-language questions or the key terms of what you need ("
 - `date_from` / `date_to` (ISO 8601) for time windows.
 - `select` / `select_map` (JSONPath, e.g. `$.results[*].text_content`) to keep the payload small — results are verbose, and trimming them saves your context.
 
-Results carry `similarity_score`, `content_type`, `timestamp` and `session_id`; a record returned for context next to a hit has `neighbour_of` set to that hit's `content_id`. Check timestamps before trusting an old entry, and say when you are relying on memory rather than on the code. If memory and the code disagree, the code wins; consider logging the correction.
+Results carry `similarity_score`, `content_type`, `timestamp`, `session_id` and, when known, `author` (who wrote it: an agent, the user, a teammate; `author` filters by it); a record returned for context next to a hit has `neighbour_of` set to that hit's `content_id`. Check timestamps before trusting an old entry, and say when you are relying on memory rather than on the code. If memory and the code disagree, the code wins; consider logging the correction.
 
 Other read tools, by question:
 

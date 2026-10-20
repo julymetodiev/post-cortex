@@ -796,6 +796,7 @@ mod tests {
                 creates_relationships: vec![],
                 references_entities: vec![],
                 typed_entities: vec![],
+                author: None,
             },
             ContextUpdate {
                 id: uuid::Uuid::new_v4(),
@@ -815,6 +816,7 @@ mod tests {
                 creates_relationships: vec![],
                 references_entities: vec![],
                 typed_entities: vec![],
+                author: None,
             },
         ];
 
@@ -905,6 +907,7 @@ mod tests {
             creates_relationships: vec![],
             references_entities: vec![],
             typed_entities: vec![],
+            author: None,
         });
         let shared = vec![std::sync::Arc::clone(&update)];
         let from_shared = assemble_context("rocksdb", &graph, &shared, 1000);
@@ -969,6 +972,7 @@ mod tests {
             creates_relationships: vec![],
             references_entities: vec![],
             typed_entities: vec![],
+            author: None,
         }];
 
         let result = assemble_context("changing RocksDB", &graph, &updates, 2000);

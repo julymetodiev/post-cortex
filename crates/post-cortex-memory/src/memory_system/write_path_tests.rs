@@ -68,6 +68,7 @@ fn update_metadata(title: &str) -> serde_json::Value {
                 entity_type: EntityType::Concept,
             },
         ],
+        author: None,
     };
     serde_json::to_value(update).unwrap()
 }

@@ -359,17 +359,18 @@ impl PostCortex for PcxGrpcService {
         let mut failure_count = 0u32;
 
         for item in req.updates {
-            let service_req = match proto_bulk_item_to_request(batch_session_id, item) {
-                Ok(r) => r,
-                Err(status) => {
-                    warn!(
-                        "gRPC BulkUpdateContext item translation failed: {}",
-                        status.message()
-                    );
-                    failure_count += 1;
-                    continue;
-                }
-            };
+            let service_req =
+                match proto_bulk_item_to_request(batch_session_id, item, req.author.clone()) {
+                    Ok(r) => r,
+                    Err(status) => {
+                        warn!(
+                            "gRPC BulkUpdateContext item translation failed: {}",
+                            status.message()
+                        );
+                        failure_count += 1;
+                        continue;
+                    }
+                };
 
             match self.service.update_context(service_req).await {
                 Ok(resp) => {
@@ -536,6 +537,7 @@ impl PostCortex for PcxGrpcService {
                 limit: Some(max_results),
                 mode,
                 corpus,
+                author: req.author.clone().filter(|a| !a.trim().is_empty()),
                 ..Default::default()
             };
             // workspace_id takes precedence over session_id
@@ -597,10 +599,10 @@ impl PostCortex for PcxGrpcService {
                     content_type: format!("{:?}", r.content_type),
                     metadata: r
                         .neighbour_of
-                        .map(|hit| {
-                            std::collections::HashMap::from([("neighbour_of".to_string(), hit)])
-                        })
-                        .unwrap_or_default(),
+                        .map(|hit| ("neighbour_of".to_string(), hit))
+                        .into_iter()
+                        .chain(r.author.map(|a| ("author".to_string(), a)))
+                        .collect(),
                 })
                 .collect();
 
@@ -710,10 +712,10 @@ impl PostCortex for PcxGrpcService {
                     content_type: format!("{:?}", r.content_type),
                     metadata: r
                         .neighbour_of
-                        .map(|hit| {
-                            std::collections::HashMap::from([("neighbour_of".to_string(), hit)])
-                        })
-                        .unwrap_or_default(),
+                        .map(|hit| ("neighbour_of".to_string(), hit))
+                        .into_iter()
+                        .chain(r.author.map(|a| ("author".to_string(), a)))
+                        .collect(),
                 })
                 .collect();
 

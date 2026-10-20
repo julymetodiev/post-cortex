@@ -176,6 +176,7 @@ pub(super) async fn handle_update_context(
         relations,
         code_reference,
         session_id,
+        None,
     )
     .await
     .map_err(|e| format!("Failed to update context: {}", e))?;
@@ -235,7 +236,7 @@ pub(super) async fn handle_bulk_update_context(
         updates.push(update);
     }
 
-    let result = bulk_update_conversation_context(updates, session_id)
+    let result = bulk_update_conversation_context(updates, session_id, None)
         .await
         .map_err(|e| format!("Failed to bulk update: {}", e))?;
 
@@ -272,6 +273,7 @@ pub(super) async fn handle_semantic_search(
         recency_bias,
         None,
         None,
+        None,
     )
     .await
     .map_err(|e| format!("Failed to search: {}", e))?;
@@ -300,6 +302,7 @@ pub(super) async fn handle_semantic_search_global(
         date_to,
         interaction_type,
         recency_bias,
+        None,
         None,
         None,
     )

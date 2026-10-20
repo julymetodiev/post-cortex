@@ -103,6 +103,7 @@ fn neighbour(update: &ContextUpdate, hit: &SemanticSearchResult) -> SemanticSear
         timestamp: update.timestamp,
         combined_score: hit.combined_score,
         neighbour_of: Some(hit.content_id.clone()),
+        author: update.author.clone(),
     }
 }
 
@@ -131,6 +132,7 @@ mod tests {
             creates_relationships: Vec::new(),
             references_entities: Vec::new(),
             typed_entities: Vec::new(),
+            author: None,
         }
     }
 
@@ -156,6 +158,7 @@ mod tests {
             timestamp: u.timestamp,
             combined_score: score,
             neighbour_of: None,
+            author: None,
         }
     }
 

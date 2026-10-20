@@ -546,6 +546,7 @@ fn build_context_update(req: &UpdateContextRequest) -> ContextUpdate {
         creates_relationships,
         references_entities: Vec::new(),
         typed_entities,
+        author: req.author.clone(),
     }
 }
 
@@ -655,6 +656,7 @@ mod tests {
             entities: vec![entity("Foo"), entity("Bar")],
             relations: vec![relation("Foo", "Bar")],
             code_reference: None,
+            author: None,
         }
     }
 

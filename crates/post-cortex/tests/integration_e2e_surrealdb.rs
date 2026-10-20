@@ -158,6 +158,7 @@ async fn e2e_update_context_against_remote_surrealdb_and_real_embeddings() {
             "Initial warm-up touches the pipeline",
         )],
         code_reference: None,
+        author: None,
     };
     let _ = svc
         .update_context(warmup_req)
@@ -198,6 +199,7 @@ async fn e2e_update_context_against_remote_surrealdb_and_real_embeddings() {
             ),
         ],
         code_reference: None,
+        author: None,
     };
 
     let start = std::time::Instant::now();

@@ -20,6 +20,7 @@ fn create_test_results() -> Arc<[SemanticSearchResult]> {
             timestamp: Utc::now(),
             combined_score: 0.78,
             neighbour_of: None,
+            author: None,
         },
         SemanticSearchResult {
             content_id: Uuid::new_v4().to_string(),
@@ -31,6 +32,7 @@ fn create_test_results() -> Arc<[SemanticSearchResult]> {
             timestamp: Utc::now(),
             combined_score: 0.71,
             neighbour_of: None,
+            author: None,
         },
     ])
 }

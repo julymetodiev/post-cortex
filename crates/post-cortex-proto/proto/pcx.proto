@@ -178,6 +178,8 @@ message UpdateContextRequest {
   SourceReference source_ref = 4;
   repeated EntityInfo entities = 5;
   repeated RelationInfo relations = 6;
+  // Who writes it (agent name, user or teammate). Unset = unknown.
+  optional string author = 7;
 }
 
 message ContextContent {
@@ -217,6 +219,8 @@ message ContextUpdateItem {
 message BulkUpdateContextRequest {
   string session_id = 1;
   repeated ContextUpdateItem updates = 2;
+  // Who writes the updates (agent name, user or teammate). Unset = unknown.
+  optional string author = 3;
 }
 
 message BulkUpdateContextResponse {
@@ -282,6 +286,8 @@ message SemanticSearchRequest {
   optional string mode = 8;
   // What to search: "records", "messages" or "all". Unset = records.
   optional string sources = 9;
+  // Only results by this author. Results carry "author" in metadata when known.
+  optional string author = 10;
 }
 
 message SearchResult {

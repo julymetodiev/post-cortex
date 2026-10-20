@@ -53,6 +53,7 @@ async fn test_mcp_format_semantic_search() -> Result<()> {
         creates_relationships: vec![],
         references_entities: vec![],
         typed_entities: vec![],
+        author: None,
     };
 
     // The real update (question as title) and a control with the same answer

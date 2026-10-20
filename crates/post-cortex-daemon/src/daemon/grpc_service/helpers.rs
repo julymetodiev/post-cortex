@@ -162,6 +162,7 @@ pub(super) fn proto_update_to_request(
         proto.content,
         &proto.entities,
         &proto.relations,
+        proto.author,
     )
 }
 
@@ -170,6 +171,7 @@ pub(super) fn proto_update_to_request(
 pub(super) fn proto_bulk_item_to_request(
     session_id: Uuid,
     item: ProtoUpdateItem,
+    author: Option<String>,
 ) -> Result<ServiceUpdateRequest, Status> {
     translate_payload(
         session_id,
@@ -177,6 +179,7 @@ pub(super) fn proto_bulk_item_to_request(
         item.content,
         &item.entities,
         &item.relations,
+        author,
     )
 }
 
@@ -186,6 +189,7 @@ fn translate_payload(
     content_proto: Option<super::pb::ContextContent>,
     entities_proto: &[super::pb::EntityInfo],
     relations_proto: &[super::pb::RelationInfo],
+    author: Option<String>,
 ) -> Result<ServiceUpdateRequest, Status> {
     let interaction_type = parse_update_type(interaction_type);
     let content_proto = content_proto.unwrap_or_default();
@@ -234,6 +238,9 @@ fn translate_payload(
         entities,
         relations,
         code_reference: proto_code_ref_to_domain(content_proto.code_ref.as_ref()),
+        author: author
+            .map(|a| a.trim().to_string())
+            .filter(|a| !a.is_empty()),
     })
 }
 

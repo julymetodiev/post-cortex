@@ -56,6 +56,7 @@ Cards: one markdown note per project (stack, conventions, current goals) and one
 | `interaction_type` | array filter, e.g. `["decision_made","problem_solved"]` |
 | `date_from`, `date_to` | `YYYY-MM-DD` or RFC 3339 |
 | `mode` | `fast` \| `local` \| `accurate`; default set by the server |
+| `author` | only records and messages by this author, e.g. `claude-code`, `hermes:eq-lead`; results show `author` when known |
 | `sources` | `records` (default) \| `messages` \| `all`; `messages` searches the raw conversation turns captured by client hooks, each returned with the turns around it |
 | `select` | one JSONPath, e.g. `$.results[0:3].text_content` |
 | `select_map` | `{key: JSONPath}`, e.g. `{"texts":"$.results[*].text_content","ids":"$.results[*].content_id"}` |
@@ -66,7 +67,7 @@ Result fields (all scopes): `content_id`, `session_id`, `content_type`, `text_co
 
 ## update_conversation_context
 
-Single mode: `session_id`, `interaction_type`, `content`, `entities`, `relations`, optional `code_reference`, optional `dry_run`.
+Single mode: `session_id`, `interaction_type`, `content`, `entities`, `relations`, optional `code_reference`, optional `dry_run`, optional `author`.
 Bulk mode: `session_id`, `updates: [{interaction_type, content, entities, relations, code_reference?}]`.
 
 - `interaction_type`: `qa`, `decision_made`, `problem_solved`, `code_change`, `requirement_added`, `concept_defined`
@@ -75,6 +76,7 @@ Bulk mode: `session_id`, `updates: [{interaction_type, content, entities, relati
 - `relations[]`: `{from_entity, to_entity, relation_type, context}`; `relation_type` ∈ `depends_on`, `implements`, `caused_by`, `solves`, `leads_to`, `related_to`, `required_by`, `conflicts_with` (unknown → rejected)
 - `code_reference`: `"path"`, `"path:line"`, `"path:start-end"`, or `{"file": "...", "line": 42, "function": "..."}`; anything else is rejected
 - At least one entity and one relation; both relation ends must appear in `entities`; no self-relations.
+- `author`: who writes it (your agent name, the user, a teammate); defaults to the MCP client's name (e.g. `claude-code`). Applies to all updates in bulk mode.
 
 Response (MCP): a success message — single mode "Context updated successfully", bulk mode a success/error count. No entry ID is returned; look it up later via `semantic_search` (`content_id`). An error message explains what was rejected (missing entities/relations, unknown relation type, bad `code_reference`).
 

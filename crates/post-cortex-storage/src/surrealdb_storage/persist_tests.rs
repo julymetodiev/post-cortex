@@ -76,6 +76,7 @@ fn plain_update(title: &str, offset_ms: i64) -> ContextUpdate {
         creates_relationships: vec![],
         references_entities: vec![],
         typed_entities: vec![],
+        author: None,
     }
 }
 

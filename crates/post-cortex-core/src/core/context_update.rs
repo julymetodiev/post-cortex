@@ -80,6 +80,11 @@ pub struct ContextUpdate {
     /// LLM-provided typed entities; skips NER when non-empty
     #[serde(default)]
     pub typed_entities: Vec<TypedEntity>,
+
+    /// Who wrote the update: an agent (`claude-code`, `hermes:<profile>`),
+    /// the user or a teammate. `None` for updates from before authorship.
+    #[serde(default)]
+    pub author: Option<String>,
 }
 
 /// Structured content payload for a context update

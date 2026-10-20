@@ -277,6 +277,7 @@ fn message_neighbour(message: &Message, hit: &SemanticSearchResult) -> SemanticS
         timestamp: message.timestamp,
         combined_score: hit.combined_score,
         neighbour_of: Some(hit.content_id.clone()),
+        author: message.author.clone(),
     }
 }
 
@@ -367,6 +368,7 @@ mod tests {
                 timestamp: Utc::now(),
                 combined_score: score,
                 neighbour_of: None,
+                author: None,
             };
         let hits = vec![
             result("message:2", ContentType::Message, 0.9),

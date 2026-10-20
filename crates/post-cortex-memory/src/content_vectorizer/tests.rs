@@ -235,6 +235,7 @@ fn update(title: &str, entity: &str) -> ContextUpdate {
         }],
         references_entities: vec![],
         typed_entities: vec![],
+        author: None,
     }
 }
 
@@ -898,4 +899,48 @@ async fn messages_are_searched_only_when_asked_for() {
     // A turn whose vector is missing is embedded again; the other is not.
     assert_eq!(v.vectorize_messages(&messages).await.unwrap(), 1);
     assert_eq!(search(Corpus::Messages).await.unwrap().len(), 2);
+}
+
+/// Records carry their author into the vector index: results show it and a
+/// search can keep one author's records only.
+#[tokio::test]
+async fn records_are_filtered_by_author() {
+    let mut session = ActiveSession::new(Uuid::new_v4(), None, None);
+    for (title, author) in [
+        ("zebracorn rollout plan by alice", Some("alice")),
+        ("zebracorn rollback notes by bob", Some("bob")),
+        ("zebracorn history from before authorship", None),
+    ] {
+        let mut u = update(title, "zebra");
+        u.author = author.map(String::from);
+        session.add_incremental_update(u).await.unwrap();
+    }
+    let (v, _) = vectorizer_with(true).await;
+    v.vectorize_session(&session).await.unwrap();
+
+    let search = |author: Option<&str>| {
+        v.semantic_search(
+            "zebracorn",
+            10,
+            Some(session.id()),
+            SearchOptions {
+                recency_bias: Some(0.0),
+                author: author.map(String::from),
+                ..SearchOptions::default()
+            },
+        )
+    };
+    let all = search(None).await.unwrap();
+    let mut authors: Vec<Option<String>> = all
+        .iter()
+        .filter(|r| r.content_type != ContentType::EntityDescription)
+        .map(|r| r.author.clone())
+        .collect();
+    authors.sort();
+    assert_eq!(authors, [None, Some("alice".into()), Some("bob".into())]);
+
+    let alice = search(Some("alice")).await.unwrap();
+    assert_eq!(alice.len(), 1, "{alice:?}");
+    assert!(alice[0].text_content.contains("by alice"));
+    assert!(search(Some("carol")).await.unwrap().is_empty());
 }

@@ -1371,6 +1371,7 @@ impl ActiveSession {
                 creates_relationships: Vec::new(),
                 references_entities: Vec::new(),
                 typed_entities: Vec::new(),
+                author: None,
             }
         };
 
@@ -1517,6 +1518,7 @@ mod tests {
             }],
             references_entities: vec![],
             typed_entities: vec![],
+            author: None,
         }
     }
 
@@ -1547,7 +1549,23 @@ mod tests {
         if let Some(serde_json::Value::Array(ids)) = obj.get_mut("vectorized_update_ids") {
             ids.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
         }
+        without_null_author(&mut v);
         v
+    }
+
+    /// Updates written before authorship have no `author`; read back, they
+    /// serialise it as null. That field is the only expected difference.
+    fn without_null_author(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(obj) => {
+                if obj.get("author") == Some(&serde_json::Value::Null) {
+                    obj.remove("author");
+                }
+                obj.values_mut().for_each(without_null_author);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(without_null_author),
+            _ => {}
+        }
     }
 
     #[test]

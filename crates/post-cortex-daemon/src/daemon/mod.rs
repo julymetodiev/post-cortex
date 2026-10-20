@@ -38,6 +38,11 @@ pub mod sse;
 pub mod stdio_proxy;
 pub mod validate;
 
+/// Serialises tests that swap the MCP tools' global memory system
+/// (`post_cortex_mcp::inject_memory_system`).
+#[cfg(test)]
+pub(crate) static MCP_GLOBAL_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub use config::DaemonConfig;
 pub use grpc_service::start_grpc_server;
 pub use mcp_service::PostCortexService;

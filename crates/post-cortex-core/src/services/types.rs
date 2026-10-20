@@ -64,6 +64,10 @@ pub struct UpdateContextRequest {
     /// + git metadata). Transports translate their wire format to this
     /// shape so no transport loses fidelity.
     pub code_reference: Option<CodeReference>,
+    /// Who writes it (agent name, user or teammate); transports fill in the
+    /// client's name when the caller gives none.
+    #[serde(default)]
+    pub author: Option<String>,
 }
 
 /// Outcome of a single write.

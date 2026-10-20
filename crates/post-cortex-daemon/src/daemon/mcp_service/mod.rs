@@ -22,7 +22,7 @@ use crate::daemon::coerce::CoercionError;
 use post_cortex_mcp::MCPToolResult;
 use post_cortex_memory::ConversationMemorySystem;
 use rmcp::{
-    RoleServer, ServerHandler,
+    Peer, RoleServer, ServerHandler,
     handler::server::router::tool::ToolRouter,
     handler::server::wrapper::Parameters,
     model::{
@@ -193,8 +193,10 @@ impl PostCortexService {
     async fn update_conversation_context(
         &self,
         params: Parameters<serde_json::Value>,
+        peer: Peer<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        update_context::handle(&self.memory_system, params).await
+        let client_name = peer.peer_info().map(|info| info.client_info.name.clone());
+        update_context::handle(&self.memory_system, params, client_name).await
     }
 
     #[tool(

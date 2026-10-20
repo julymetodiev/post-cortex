@@ -522,6 +522,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_daemon_server_creation() {
+        let _global = crate::daemon::MCP_GLOBAL_TEST_LOCK.lock().await;
         let server = DaemonServer::new(test_config()).await;
         assert!(server.is_ok());
 
@@ -532,6 +533,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_statistics() {
+        let _global = crate::daemon::MCP_GLOBAL_TEST_LOCK.lock().await;
         let server = DaemonServer::new(test_config()).await.unwrap();
 
         let stats = server.get_statistics();

@@ -24,9 +24,7 @@ use post_cortex_core::graph::retrieval_graph;
 use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_embeddings::{MESSAGE_CONTENT_TYPE, VectorMetadata};
 
-use super::types::{
-    CHUNK_PARENT_KEY, ContentType, MESSAGE_AUTHOR_KEY, MESSAGE_ROLE_KEY, MESSAGE_SEQ_KEY,
-};
+use super::types::{AUTHOR_KEY, CHUNK_PARENT_KEY, ContentType, MESSAGE_ROLE_KEY, MESSAGE_SEQ_KEY};
 use super::vectorizer::{ContentVectorizer, source_content_ids};
 
 /// Threshold for switching to parallel processing.
@@ -524,6 +522,9 @@ fn update_vectors(
                 content_type.clone(),
             )
             .with_timestamp(update.timestamp);
+            if let Some(author) = &update.author {
+                metadata = metadata.with_metadata(AUTHOR_KEY.to_string(), author.clone());
+            }
             if n == 0 {
                 metadata = metadata
                     .with_metadata(
@@ -569,7 +570,7 @@ fn message_vectors(message: &Message, chunk_size: usize) -> Vec<(String, VectorM
             )
             .with_metadata(MESSAGE_SEQ_KEY.to_string(), message.seq.to_string());
             if let Some(author) = &message.author {
-                metadata = metadata.with_metadata(MESSAGE_AUTHOR_KEY.to_string(), author.clone());
+                metadata = metadata.with_metadata(AUTHOR_KEY.to_string(), author.clone());
             }
             if n > 0 {
                 metadata = metadata.with_metadata(CHUNK_PARENT_KEY.to_string(), parent.clone());

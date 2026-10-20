@@ -83,6 +83,9 @@ pub struct SemanticSearchResult {
     /// this content id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub neighbour_of: Option<String>,
+    /// Who wrote the record or message, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
 }
 
 impl SemanticSearchResult {
@@ -138,8 +141,8 @@ pub const CHUNK_PARENT_KEY: &str = "parent";
 /// Metadata key of a message vector: `user` or `assistant`.
 pub const MESSAGE_ROLE_KEY: &str = "role";
 
-/// Metadata key of a message vector: the turn's author, when known.
-pub const MESSAGE_AUTHOR_KEY: &str = "author";
+/// Metadata key of a record or message vector: who wrote it, when known.
+pub const AUTHOR_KEY: &str = "author";
 
 /// Metadata key of a message vector: the turn's position in its stream.
 pub const MESSAGE_SEQ_KEY: &str = "seq";
@@ -216,6 +219,9 @@ pub struct SearchOptions {
 
     /// Structured records, raw messages or both (default: records).
     pub corpus: post_cortex_embeddings::Corpus,
+
+    /// Only records and messages by this author (default: anyone).
+    pub author: Option<String>,
 }
 
 /// How much work a search puts into ranking. LoCoMo all@50 with ±1

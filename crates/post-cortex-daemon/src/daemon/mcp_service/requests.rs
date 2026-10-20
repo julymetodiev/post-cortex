@@ -416,6 +416,12 @@ Example: {"dry_run": true, "session_id": "...", "interaction_type": "decision_ma
 Note: No changes are made to the session when dry_run is true."#
     )]
     pub dry_run: Option<bool>,
+    /// Who writes the update(s).
+    #[schemars(
+        description = r#"Who writes the update(s): your agent name, the user, a teammate (optional).
+Defaults to the MCP client's name (e.g. "claude-code"). Shown with search results and usable as a search filter."#
+    )]
+    pub author: Option<String>,
 }
 
 // =============================================================================
@@ -573,6 +579,12 @@ Use fast for quick lookups; accurate when the answer must not be missed."#)]
 
 Use messages to find what was said in a conversation that was never logged as a record."#)]
     pub sources: Option<String>,
+    /// Only results by this author.
+    #[schemars(
+        description = r#"Only records and messages by this author (optional), e.g. "claude-code",
+"hermes:eq-lead" or a person's name. Results show their author when known."#
+    )]
+    pub author: Option<String>,
     /// Form A: single JSONPath expression. The matched value is returned
     /// directly instead of the full response payload.
     #[schemars(

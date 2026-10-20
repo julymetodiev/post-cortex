@@ -228,6 +228,7 @@ fn build_request(
     entities: &[EntityItem],
     relations: &[RelationItem],
     code_reference: Option<CodeReference>,
+    author: Option<String>,
 ) -> Result<ServiceUpdateRequest> {
     let (update_type, update_content) = build_content(interaction_type, content)?;
     Ok(ServiceUpdateRequest {
@@ -237,6 +238,7 @@ fn build_request(
         entities: entities_to_domain(entities),
         relations: relations_to_domain(relations)?,
         code_reference,
+        author,
     })
 }
 
@@ -256,6 +258,7 @@ pub async fn update_conversation_context(
     relations: Vec<RelationItem>,
     code_reference: Option<CodeReference>,
     session_id: Uuid,
+    author: Option<String>,
 ) -> Result<MCPToolResult> {
     info!("MCP-TOOLS: update_conversation_context() called");
     let service = get_service().await?;
@@ -267,6 +270,7 @@ pub async fn update_conversation_context(
         &entities,
         &relations,
         code_reference,
+        author,
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -317,6 +321,7 @@ pub async fn update_conversation_context(
 pub async fn bulk_update_conversation_context(
     updates: Vec<ContextUpdateItem>,
     session_id: Uuid,
+    author: Option<String>,
 ) -> Result<MCPToolResult> {
     info!(
         "MCP-TOOLS: bulk_update_conversation_context() called with {} updates for session {}",
@@ -337,6 +342,7 @@ pub async fn bulk_update_conversation_context(
             &item.entities,
             &item.relations,
             item.code_reference.clone(),
+            author.clone(),
         ) {
             Ok(req) => requests.push(req),
             Err(e) => {

@@ -925,6 +925,7 @@ mod tests {
                 creates_relationships: vec![],
                 references_entities: vec![],
                 typed_entities: vec![],
+                author: None,
             })
             .collect();
         let mut session = ActiveSession::new(Uuid::new_v4(), Some("s".into()), None);

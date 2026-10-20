@@ -89,6 +89,7 @@ mod tests {
             timestamp: chrono::Utc::now(),
             combined_score: 0.86,
             neighbour_of: None,
+            author: None,
         };
         let v = &format_search_results(&[r])[0];
         for key in [

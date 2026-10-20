@@ -114,6 +114,7 @@ pub(super) async fn handle(
                 validated_recency_bias,
                 req.mode.clone(),
                 req.sources.clone(),
+                req.author.clone(),
             )
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -201,6 +202,7 @@ pub(super) async fn handle(
                         recency_bias: validated_recency_bias,
                         mode,
                         corpus,
+                        author: req.author.clone().filter(|a| !a.trim().is_empty()),
                         ..Default::default()
                     },
                 )
@@ -229,6 +231,7 @@ pub(super) async fn handle(
                 validated_recency_bias,
                 req.mode.clone(),
                 req.sources.clone(),
+                req.author.clone(),
             )
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;

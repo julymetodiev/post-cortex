@@ -89,6 +89,12 @@ fn search_hit_to_json(
                 serde_json::Value::String(hit.clone()),
             );
         }
+        if let Some(author) = &r.author {
+            map.insert(
+                "author".to_string(),
+                serde_json::Value::String(author.clone()),
+            );
+        }
     }
     obj
 }
@@ -147,8 +153,13 @@ fn format_results_message(
         }
         for r in records {
             let mark = if r.neighbour_of.is_none() { "*" } else { " " };
+            let by = r
+                .author
+                .as_deref()
+                .map(|a| format!(" · {a}"))
+                .unwrap_or_default();
             message.push_str(&format!(
-                "{mark} {} [{:?}] {}\n",
+                "{mark} {} [{:?}{by}] {}\n",
                 r.timestamp.format("%Y-%m-%d %H:%M"),
                 r.content_type,
                 r.text_content.trim()
@@ -257,6 +268,7 @@ pub async fn semantic_search_global(
     recency_bias: Option<f32>,
     mode: Option<String>,
     sources: Option<String>,
+    author: Option<String>,
 ) -> Result<MCPToolResult> {
     info!(
         "MCP-TOOLS: semantic_search_global() called with query: '{}' and recency_bias: {:?}",
@@ -298,6 +310,7 @@ pub async fn semantic_search_global(
                 recency_bias,
                 mode,
                 corpus,
+                author: author.filter(|a| !a.trim().is_empty()),
                 ..Default::default()
             },
         )
@@ -344,6 +357,7 @@ pub async fn semantic_search_session(
     recency_bias: Option<f32>,
     mode: Option<String>,
     sources: Option<String>,
+    author: Option<String>,
 ) -> Result<MCPToolResult> {
     info!(
         "MCP-TOOLS: semantic_search_session() called for session {} with query: '{}'",
@@ -383,6 +397,7 @@ pub async fn semantic_search_session(
                 recency_bias,
                 mode,
                 corpus,
+                author: author.filter(|a| !a.trim().is_empty()),
                 ..Default::default()
             },
         )
@@ -650,6 +665,7 @@ mod tests {
             timestamp: Utc::now() + Duration::minutes(minutes),
             combined_score: 0.5,
             neighbour_of: neighbour_of.map(Into::into),
+            author: None,
         }
     }
 

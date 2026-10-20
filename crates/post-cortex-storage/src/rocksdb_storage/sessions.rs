@@ -43,6 +43,7 @@ use post_cortex_core::workspace::SessionRole;
 
 use super::RealRocksDBStorage;
 use super::core::{SessionLocks, blocking, keys_with_prefix, prefix_read_opts, scan_prefix};
+use super::legacy::{CHECKPOINT_V2, decode_checkpoint, decode_update};
 use super::messages::message_next_key;
 use super::types::{SessionCheckpoint, StoredWorkspace, StoredWorkspaceSession};
 
@@ -79,12 +80,6 @@ fn decode_ids(bytes: &[u8]) -> Vec<Uuid> {
 fn encode_update(update: &ContextUpdate) -> Result<Vec<u8>> {
     bincode::serde::encode_to_vec(update, bincode::config::standard())
         .map_err(|e| anyhow::anyhow!("Failed to serialize update: {}", e))
-}
-
-fn decode_update(bytes: &[u8]) -> Option<ContextUpdate> {
-    bincode::serde::decode_from_slice::<ContextUpdate, _>(bytes, bincode::config::standard())
-        .ok()
-        .map(|(u, _)| u)
 }
 
 /// Session blob as written by this version: everything but the updates.
@@ -462,9 +457,11 @@ impl RealRocksDBStorage {
         let checkpoint = checkpoint.clone();
 
         tokio::task::spawn_blocking(move || -> Result<()> {
-            let checkpoint_data =
+            let mut checkpoint_data = CHECKPOINT_V2.to_vec();
+            checkpoint_data.extend(
                 bincode::serde::encode_to_vec(&checkpoint, bincode::config::standard())
-                    .map_err(|e| anyhow::anyhow!("Failed to serialize checkpoint: {}", e))?;
+                    .map_err(|e| anyhow::anyhow!("Failed to serialize checkpoint: {}", e))?,
+            );
 
             let key = format!("checkpoint:{}", checkpoint.id);
             db.put(key.as_bytes(), &checkpoint_data)?;
@@ -489,11 +486,8 @@ impl RealRocksDBStorage {
         tokio::task::spawn_blocking(move || -> Result<SessionCheckpoint> {
             match db.get(key.as_bytes())? {
                 Some(data) => {
-                    let (checkpoint, _): (SessionCheckpoint, usize) =
-                        bincode::serde::decode_from_slice(&data, bincode::config::standard())
-                            .map_err(|e| {
-                                anyhow::anyhow!("Failed to deserialize checkpoint: {}", e)
-                            })?;
+                    let checkpoint = decode_checkpoint(&data)
+                        .ok_or_else(|| anyhow::anyhow!("Failed to deserialize checkpoint"))?;
 
                     info!(
                         "RealRocksDBStorage: Checkpoint loaded with ID: {}",
@@ -516,17 +510,15 @@ impl RealRocksDBStorage {
             let mut checkpoints = Vec::new();
             for item in scan_prefix(&db, b"checkpoint:") {
                 let (_, value) = item?;
-                if let Ok((checkpoint, _)) =
-                    bincode::serde::decode_from_slice::<SessionCheckpoint, _>(
-                        &value,
-                        bincode::config::standard(),
-                    )
-                {
+                if let Some(checkpoint) = decode_checkpoint(&value) {
                     checkpoints.push(checkpoint);
                 }
             }
 
-            info!("RealRocksDBStorage: Listed {} checkpoints", checkpoints.len());
+            info!(
+                "RealRocksDBStorage: Listed {} checkpoints",
+                checkpoints.len()
+            );
             Ok(checkpoints)
         })
         .await

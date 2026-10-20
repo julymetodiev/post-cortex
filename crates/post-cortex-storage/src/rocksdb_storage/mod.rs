@@ -24,6 +24,7 @@ mod cards;
 mod core;
 mod freshness;
 mod graph;
+mod legacy;
 mod messages;
 mod sessions;
 mod types;

@@ -544,6 +544,7 @@ mod tests {
             timestamp: Utc::now(),
             combined_score: 0.84,
             neighbour_of: None,
+            author: None,
         }
     }
 

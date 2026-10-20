@@ -20,6 +20,7 @@ use super::check_session_exists_for_dry_run;
 pub(super) async fn handle(
     memory_system: &Arc<ConversationMemorySystem>,
     params: Parameters<serde_json::Value>,
+    client_name: Option<String>,
 ) -> Result<CallToolResult, McpError> {
     let req: UpdateConversationContextRequest = coerce_and_validate(params.0)
         .map_err(|e| {
@@ -48,6 +49,13 @@ pub(super) async fn handle(
         })?;
 
     let uuid = validate_session_id(&req.session_id).map_err(|e| e.to_mcp_error())?;
+    // The caller's own name for itself, else the MCP client's.
+    let author = req
+        .author
+        .clone()
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty())
+        .or(client_name);
 
     // Handle dry_run mode for bulk updates
     if let Some(ref updates) = req.updates {
@@ -113,7 +121,7 @@ pub(super) async fn handle(
             })
             .collect();
 
-        match post_cortex_mcp::bulk_update_conversation_context(items, uuid).await {
+        match post_cortex_mcp::bulk_update_conversation_context(items, uuid, author).await {
             Ok(result) => Ok(super::mcp_result_to_call_result(result)),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
@@ -174,11 +182,75 @@ pub(super) async fn handle(
             req.relations.clone(),
             code_ref,
             uuid,
+            author,
         )
         .await
         {
             Ok(result) => Ok(super::mcp_result_to_call_result(result)),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    async fn memory() -> (Arc<ConversationMemorySystem>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let memory = ConversationMemorySystem::new(post_cortex_memory::SystemConfig {
+            data_directory: dir.path().to_str().unwrap().to_string(),
+            enable_embeddings: false,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let memory = Arc::new(memory);
+        post_cortex_mcp::inject_memory_system(memory.clone());
+        (memory, dir)
+    }
+
+    fn params(session: Uuid, author: Option<&str>) -> Parameters<serde_json::Value> {
+        let mut body = serde_json::json!({
+            "session_id": session.to_string(),
+            "interaction_type": "decision_made",
+            "content": {"decision": "Use cards", "rationale": "always in front"},
+            "entities": [{"name": "cards", "entity_type": "concept"},
+                         {"name": "sessions", "entity_type": "concept"}],
+            "relations": [{"from_entity": "cards", "to_entity": "sessions",
+                           "relation_type": "related_to", "context": "injected"}],
+        });
+        if let Some(author) = author {
+            body["author"] = serde_json::Value::String(author.to_string());
+        }
+        Parameters(body)
+    }
+
+    /// The author is the caller's own name, else the MCP client's.
+    #[tokio::test]
+    async fn author_defaults_to_the_client_name() {
+        let _global = crate::daemon::MCP_GLOBAL_TEST_LOCK.lock().await;
+        let (memory, _dir) = memory().await;
+        let sid = memory.create_session(None, None).await.unwrap();
+        handle(&memory, params(sid, None), Some("claude-code".to_string()))
+            .await
+            .unwrap();
+        handle(
+            &memory,
+            params(sid, Some("julius")),
+            Some("claude-code".to_string()),
+        )
+        .await
+        .unwrap();
+        handle(&memory, params(sid, None), None).await.unwrap();
+
+        let session = memory.get_session(sid).await.unwrap().load_full();
+        let authors: Vec<Option<&str>> = session
+            .incremental_updates
+            .iter()
+            .map(|u| u.author.as_deref())
+            .collect();
+        assert_eq!(authors, [Some("claude-code"), Some("julius"), None]);
     }
 }
