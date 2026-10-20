@@ -53,4 +53,10 @@ ignore = [
     "RUSTSEC-2026-0367", # zip SUID/SGID bits on extract
     "RUSTSEC-2026-0368", # zip symlink targets outside destination
     "RUSTSEC-2026-0369", # zip permissions applied through symlinks
+
+    # webpki-roots 0.26.11 is a shim that re-exports webpki-roots 1.x, locked
+    # at 1.0.10, which removes the distrusted emSign root. The advisory's
+    # patched range (>=1.0.10) cannot match the 0.26 shim version. Pulled by
+    # ureq 2 <- hf-hub <- model2vec-rs.
+    "RUSTSEC-2026-0381", # webpki-roots emSign root (0.26 shim of patched 1.0.10)
 ]
