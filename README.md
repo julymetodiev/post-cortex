@@ -97,11 +97,15 @@ post-cortex = "0.5"
 
 ```bash
 # HTTP transport (recommended, requires daemon running)
-claude mcp add --scope user --transport http post-cortex http://127.0.0.1:3737/mcp
+claude mcp add --scope user --transport http post-cortex http://127.0.0.1:3737/mcp \
+  --header "X-PCX-Author: claude-code"
 
 # Or stdio transport (no daemon needed)
-claude mcp add --scope user --transport stdio post-cortex -- pcx
+claude mcp add --scope user --transport stdio --env PC_AUTHOR=claude-code post-cortex -- pcx
 ```
+
+`X-PCX-Author` / `PC_AUTHOR` names who the records come from when a write
+does not say; MCP clients often report only their SDK's name.
 
 This registers Post-Cortex for all projects on your machine.
 

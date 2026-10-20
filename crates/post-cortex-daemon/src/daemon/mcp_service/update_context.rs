@@ -20,7 +20,7 @@ use super::check_session_exists_for_dry_run;
 pub(super) async fn handle(
     memory_system: &Arc<ConversationMemorySystem>,
     params: Parameters<serde_json::Value>,
-    client_name: Option<String>,
+    default_author: Option<String>,
 ) -> Result<CallToolResult, McpError> {
     let req: UpdateConversationContextRequest = coerce_and_validate(params.0)
         .map_err(|e| {
@@ -49,13 +49,13 @@ pub(super) async fn handle(
         })?;
 
     let uuid = validate_session_id(&req.session_id).map_err(|e| e.to_mcp_error())?;
-    // The caller's own name for itself, else the MCP client's.
+    // The caller's own name for itself, else the header's or the client's.
     let author = req
         .author
         .clone()
         .map(|a| a.trim().to_string())
         .filter(|a| !a.is_empty())
-        .or(client_name);
+        .or(default_author);
 
     // Handle dry_run mode for bulk updates
     if let Some(ref updates) = req.updates {

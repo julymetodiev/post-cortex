@@ -51,8 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first, and `pcx setup` installs a `SessionStart` hook that prints them.
 - **Authorship**: records and messages carry `author` (an agent such as
   `claude-code` or `hermes:<profile>`, the user, a teammate). MCP
-  `update_conversation_context` takes `author` and otherwise uses the MCP
-  client's name; gRPC fields 7 / 3. Search results show it; `author` on
+  `update_conversation_context` takes `author`, else the connection's
+  `X-PCX-Author` header (`PC_AUTHOR` for the stdio proxy), else the MCP
+  client's name unless that only names an SDK (`rmcp`, `mcp`); gRPC fields
+  7 / 3. Search results show it; `author` on
   `semantic_search` keeps one author's results, `prefer_author` ranks them
   a little higher (+0.05) and keeps everyone else's.
 - **`derived_from`**: a record can name the captured messages it was drawn

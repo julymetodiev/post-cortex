@@ -433,7 +433,8 @@ Note: No changes are made to the session when dry_run is true."#
     /// Who writes the update(s).
     #[schemars(
         description = r#"Who writes the update(s): your agent name, the user, a teammate (optional).
-Defaults to the MCP client's name (e.g. "claude-code"). Shown with search results and usable as a search filter."#
+Defaults to the X-PCX-Author header of the connection, else the MCP client's name unless that only
+names an SDK ("rmcp", "mcp"). Shown with search results and usable as a search filter."#
     )]
     pub author: Option<String>,
 }

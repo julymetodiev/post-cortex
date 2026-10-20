@@ -54,6 +54,31 @@ pub use requests::{
     SemanticSearchRequest, SessionRequest, UpdateConversationContextRequest,
 };
 
+/// HTTP header naming the caller as the author of its writes, for clients
+/// whose MCP `clientInfo` does not say who they are.
+pub const AUTHOR_HEADER: &str = "x-pcx-author";
+
+/// `clientInfo.name` values that name an MCP SDK rather than the
+/// application using it.
+const SDK_CLIENT_NAMES: &[&str] = &["rmcp", "mcp"];
+
+/// Author of a write that names none: the [`AUTHOR_HEADER`] of the HTTP
+/// request, else the MCP client's name unless that only names its SDK.
+fn default_author(
+    parts: Option<&axum::http::request::Parts>,
+    client_name: Option<&str>,
+) -> Option<String> {
+    let header = parts
+        .and_then(|p| p.headers.get(AUTHOR_HEADER))
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    let client = client_name
+        .map(str::trim)
+        .filter(|n| !n.is_empty() && !SDK_CLIENT_NAMES.contains(&n.to_ascii_lowercase().as_str()));
+    header.or(client).map(String::from)
+}
+
 /// Post-Cortex MCP Service
 #[derive(Clone)]
 pub struct PostCortexService {
@@ -194,9 +219,14 @@ impl PostCortexService {
         &self,
         params: Parameters<serde_json::Value>,
         peer: Peer<RoleServer>,
+        extensions: Extensions,
     ) -> Result<CallToolResult, McpError> {
-        let client_name = peer.peer_info().map(|info| info.client_info.name.clone());
-        update_context::handle(&self.memory_system, params, client_name).await
+        let info = peer.peer_info();
+        let author = default_author(
+            extensions.get::<axum::http::request::Parts>(),
+            info.as_ref().map(|info| info.client_info.name.as_str()),
+        );
+        update_context::handle(&self.memory_system, params, author).await
     }
 
     #[tool(
@@ -363,5 +393,40 @@ mod schema_tests {
             "no type arrays with null: {text}"
         );
         assert_eq!(schema["type"], "object");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_author;
+
+    fn parts(author: Option<&str>) -> axum::http::request::Parts {
+        let mut request = axum::http::Request::builder().uri("/mcp");
+        if let Some(author) = author {
+            request = request.header("X-PCX-Author", author);
+        }
+        request.body(()).unwrap().into_parts().0
+    }
+
+    /// The header wins; a client name that only names its SDK is no author.
+    #[test]
+    fn default_author_prefers_the_header_and_skips_sdk_names() {
+        let with = parts(Some("claude-code"));
+        let without = parts(None);
+        assert_eq!(
+            default_author(Some(&with), Some("rmcp")).as_deref(),
+            Some("claude-code")
+        );
+        assert_eq!(
+            default_author(Some(&with), Some("Zed")).as_deref(),
+            Some("claude-code")
+        );
+        assert_eq!(
+            default_author(Some(&without), Some("Zed")).as_deref(),
+            Some("Zed")
+        );
+        assert_eq!(default_author(Some(&without), Some("rmcp")), None);
+        assert_eq!(default_author(None, Some("MCP")), None);
+        assert_eq!(default_author(Some(&parts(Some("  "))), None), None);
     }
 }

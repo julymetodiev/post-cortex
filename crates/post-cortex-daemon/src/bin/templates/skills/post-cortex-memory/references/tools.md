@@ -77,7 +77,7 @@ Bulk mode: `session_id`, `updates: [{interaction_type, content, entities, relati
 - `relations[]`: `{from_entity, to_entity, relation_type, context}`; `relation_type` ∈ `depends_on`, `implements`, `caused_by`, `solves`, `leads_to`, `related_to`, `required_by`, `conflicts_with` (unknown → rejected)
 - `code_reference`: `"path"`, `"path:line"`, `"path:start-end"`, or `{"file": "...", "line": 42, "function": "..."}`; anything else is rejected
 - At least one entity and one relation; both relation ends must appear in `entities`; no self-relations.
-- `author`: who writes it (your agent name, the user, a teammate); defaults to the MCP client's name (e.g. `claude-code`). Applies to all updates in bulk mode.
+- `author`: who writes it (your agent name, the user, a teammate); defaults to the connection's `X-PCX-Author` header, else the MCP client's name unless that only names an SDK (`rmcp`, `mcp`); pass it when you know who you are. Applies to all updates in bulk mode.
 - `derived_from`: the captured messages the record was drawn from, as `message:<n>` content ids from a `corpus: "messages"` search; each must exist in the session, else the write is rejected. Search hits on the record show them as `derived_from`.
 
 Response (MCP): a success message — single mode "Context updated successfully", bulk mode a success/error count. No entry ID is returned; look it up later via `semantic_search` (`content_id`). An error message explains what was rejected (missing entities/relations, unknown relation type, bad `code_reference`).
