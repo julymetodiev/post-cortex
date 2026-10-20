@@ -70,6 +70,12 @@ pub enum Commands {
         /// chosen at the prompt
         #[arg(long)]
         capture: bool,
+
+        /// Daemon URL the capture hook posts to (implies --capture); default
+        /// the local daemon from daemon.toml. Use it when Claude Code talks to
+        /// a remote daemon, e.g. http://ml.example.ts.net:3737
+        #[arg(long, value_name = "URL")]
+        capture_url: Option<String>,
     },
 
     /// Vectorize all sessions

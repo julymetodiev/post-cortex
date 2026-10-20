@@ -22,7 +22,11 @@ pub async fn handle_setup(
     name: Option<String>,
     non_interactive: bool,
     capture: bool,
+    capture_url: Option<String>,
 ) -> Result<(), String> {
+    let capture_url = capture_url
+        .map(|url| validate_capture_url(&url))
+        .transpose()?;
     let config = DaemonConfig::load();
     let use_daemon = is_daemon_running(&config.host, config.port).await;
 
@@ -224,6 +228,7 @@ pub async fn handle_setup(
 
     // Conversation capture is opt-in: it stores prompts and replies.
     let capture = capture
+        || capture_url.is_some()
         || (!non_interactive
             && Confirm::new()
                 .with_prompt(format!(
@@ -234,7 +239,7 @@ pub async fn handle_setup(
                 .default(false)
                 .interact()
                 .map_err(|e| format!("Input error: {}", e))?);
-    let capture_url = capture.then(|| daemon_url(&config));
+    let capture_url = capture.then(|| capture_url.unwrap_or_else(|| daemon_url(&config)));
 
     // 5. Generate files
     let cwd = env::current_dir().map_err(|e| format!("Cannot get cwd: {}", e))?;
@@ -434,11 +439,9 @@ pub async fn handle_setup(
     println!("  Workspace ID: {}", workspace_id);
     if let Some(url) = &capture_url {
         println!("  Capture:      on (posts turns to {})", url);
-        if config.auth_token.is_some() {
-            println!(
-                "                the daemon needs a token: export PC_AUTH_TOKEN for Claude Code"
-            );
-        }
+        println!(
+            "                if the daemon has an auth_token, export PC_AUTH_TOKEN for Claude Code"
+        );
     }
     println!();
     println!("Start coding with: claude");
@@ -603,6 +606,24 @@ fn merge_hooks(
     Ok(added)
 }
 
+/// A `--capture-url`: an http(s) base URL, without a trailing slash. It
+/// goes into a shell command, so anything but URL characters is refused.
+fn validate_capture_url(url: &str) -> Result<String, String> {
+    let url = url.trim().trim_end_matches('/');
+    let ok = (url.starts_with("http://") || url.starts_with("https://"))
+        && url.len() > "https://".len()
+        && url
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-._~:/[]%".contains(c));
+    if ok {
+        Ok(url.to_string())
+    } else {
+        Err(format!(
+            "--capture-url must be an http(s) URL such as http://host:3737, got '{url}'"
+        ))
+    }
+}
+
 /// Base URL hooks use to reach the daemon (a wildcard bind is reached on
 /// loopback).
 fn daemon_url(config: &DaemonConfig) -> String {
@@ -625,7 +646,19 @@ fn generate_compact_reinject_script(session_id: &str, workspace_id: &str) -> Str
 
 #[cfg(test)]
 mod tests {
-    use super::{SKILL_FILES, generate_settings_json, merge_hooks};
+    use super::{SKILL_FILES, generate_settings_json, merge_hooks, validate_capture_url};
+
+    #[test]
+    fn capture_url_must_be_a_plain_http_url() {
+        assert_eq!(
+            validate_capture_url("http://ml.example.ts.net:3737/").unwrap(),
+            "http://ml.example.ts.net:3737"
+        );
+        assert!(validate_capture_url("https://[::1]:3737").is_ok());
+        assert!(validate_capture_url("ml:3737").is_err());
+        assert!(validate_capture_url("http://x; rm -rf ~").is_err());
+        assert!(validate_capture_url("http://x$(id)").is_err());
+    }
     use std::path::Path;
 
     /// The bundled skill must not drift from `skills/post-cortex-memory/`.

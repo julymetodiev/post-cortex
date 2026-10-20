@@ -140,9 +140,10 @@ async fn main() -> Result<(), String> {
             name,
             non_interactive,
             capture,
+            capture_url,
         }) => {
             init_logging(false, false);
-            setup::handle_setup(name, non_interactive, capture).await
+            setup::handle_setup(name, non_interactive, capture, capture_url).await
         }
 
         Some(Commands::VectorizeAll) => {
