@@ -39,3 +39,4 @@ Call directly — do NOT use subagents for simple search/log operations.
 | `UserPromptSubmit` | Injects session ID + rules |
 | `Stop` | `pcx-stop-check.py`: blocks only if this turn changed project files and logged nothing afterwards |
 | `SessionStart` (compact) | Re-injects PCX context after compaction |
+| `Stop` (capture, if on) | `pcx-capture.py`: posts the conversation turns to the session's message stream |

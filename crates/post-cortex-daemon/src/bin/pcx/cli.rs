@@ -64,6 +64,12 @@ pub enum Commands {
         /// Skip interactive prompts, use defaults
         #[arg(long)]
         non_interactive: bool,
+
+        /// Capture every conversation turn into the session (a Stop hook
+        /// posting prompts and replies to the daemon); off unless given or
+        /// chosen at the prompt
+        #[arg(long)]
+        capture: bool,
     },
 
     /// Vectorize all sessions

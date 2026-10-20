@@ -5,11 +5,12 @@
 //!
 //! Creates (or reuses) a session + workspace, writes CLAUDE.md / .claude/settings.json
 //! / hook scripts into the current directory, and installs the post-cortex-agents
-//! sub-agent bundle under `~/.claude/agents/`.
+//! sub-agent bundle under `~/.claude/agents/`. With capture on, a Stop hook also
+//! posts every conversation turn to the daemon's message stream.
 
 use std::env;
 
-use dialoguer::{Input, Select};
+use dialoguer::{Confirm, Input, Select};
 use post_cortex_core::workspace::SessionRole;
 use post_cortex_daemon::daemon::{DaemonConfig, is_daemon_running};
 use uuid::Uuid;
@@ -17,7 +18,11 @@ use uuid::Uuid;
 use super::admin::init_admin_system;
 use super::daemon_client::{DaemonClient, SessionInfo, WorkspaceInfo};
 
-pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result<(), String> {
+pub async fn handle_setup(
+    name: Option<String>,
+    non_interactive: bool,
+    capture: bool,
+) -> Result<(), String> {
     let config = DaemonConfig::load();
     let use_daemon = is_daemon_running(&config.host, config.port).await;
 
@@ -217,6 +222,20 @@ pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result
     println!("  Session attached to workspace (role: primary)");
     println!();
 
+    // Conversation capture is opt-in: it stores prompts and replies.
+    let capture = capture
+        || (!non_interactive
+            && Confirm::new()
+                .with_prompt(format!(
+                    "Capture every conversation turn into the session? (prompts and \
+                     replies, kept {} days; tool output is never sent)",
+                    config.message_retention_days
+                ))
+                .default(false)
+                .interact()
+                .map_err(|e| format!("Input error: {}", e))?);
+    let capture_url = capture.then(|| daemon_url(&config));
+
     // 5. Generate files
     let cwd = env::current_dir().map_err(|e| format!("Cannot get cwd: {}", e))?;
 
@@ -250,34 +269,26 @@ pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result
         println!("  Created: CLAUDE.md");
     }
 
-    // .claude/settings.json — merge hooks if file exists, create if not
+    // .claude/settings.json — add the PCX hooks it lacks, create it if missing
     let claude_dir = cwd.join(".claude");
     std::fs::create_dir_all(&claude_dir)
         .map_err(|e| format!("Failed to create .claude/: {}", e))?;
     let settings_path = claude_dir.join("settings.json");
+    let pcx_settings = generate_settings_json(&session_id, capture_url.as_deref());
     if settings_path.exists() {
         let existing =
             std::fs::read_to_string(&settings_path).map_err(|e| format!("Read error: {}", e))?;
         match serde_json::from_str::<serde_json::Value>(&existing) {
             Ok(mut existing_json) => {
-                if existing_json.get("hooks").is_some() {
-                    println!("  .claude/settings.json already has hooks, skipping");
+                let added = merge_hooks(&mut existing_json, &pcx_settings["hooks"])?;
+                if added == 0 {
+                    println!("  .claude/settings.json already has the PCX hooks, skipping");
                 } else {
-                    // Parse PCX hooks and merge into existing
-                    let pcx_settings = generate_settings_json(&session_id);
-                    if let Ok(pcx_json) = serde_json::from_str::<serde_json::Value>(&pcx_settings)
-                        && let Some(hooks) = pcx_json.get("hooks")
-                    {
-                        existing_json
-                            .as_object_mut()
-                            .unwrap()
-                            .insert("hooks".to_string(), hooks.clone());
-                        let merged = serde_json::to_string_pretty(&existing_json)
-                            .map_err(|e| format!("JSON error: {}", e))?;
-                        std::fs::write(&settings_path, format!("{}\n", merged))
-                            .map_err(|e| format!("Write error: {}", e))?;
-                        println!("  Updated: .claude/settings.json (added hooks)");
-                    }
+                    let merged = serde_json::to_string_pretty(&existing_json)
+                        .map_err(|e| format!("JSON error: {}", e))?;
+                    std::fs::write(&settings_path, format!("{}\n", merged))
+                        .map_err(|e| format!("Write error: {}", e))?;
+                    println!("  Updated: .claude/settings.json (added {} hooks)", added);
                 }
             }
             Err(_) => {
@@ -285,8 +296,9 @@ pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result
             }
         }
     } else {
-        let settings_json = generate_settings_json(&session_id);
-        std::fs::write(&settings_path, &settings_json)
+        let settings_json = serde_json::to_string_pretty(&pcx_settings)
+            .map_err(|e| format!("JSON error: {}", e))?;
+        std::fs::write(&settings_path, format!("{}\n", settings_json))
             .map_err(|e| format!("Failed to write settings.json: {}", e))?;
         println!("  Created: .claude/settings.json");
     }
@@ -328,6 +340,24 @@ pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result
                 .map_err(|e| format!("Failed to set permissions: {}", e))?;
         }
         println!("  Created: .claude/hooks/pcx-stop-check.py");
+    }
+
+    // .claude/hooks/pcx-capture.py (Stop hook posting turns to the daemon)
+    if capture {
+        let capture_path = hooks_dir.join("pcx-capture.py");
+        if capture_path.exists() {
+            println!("  .claude/hooks/pcx-capture.py already exists, skipping");
+        } else {
+            std::fs::write(&capture_path, include_str!("../templates/pcx-capture.py"))
+                .map_err(|e| format!("Failed to write hook script: {}", e))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&capture_path, std::fs::Permissions::from_mode(0o755))
+                    .map_err(|e| format!("Failed to set permissions: {}", e))?;
+            }
+            println!("  Created: .claude/hooks/pcx-capture.py");
+        }
     }
 
     // 6. Install agents to ~/.claude/agents/post-cortex-agents/
@@ -402,6 +432,14 @@ pub async fn handle_setup(name: Option<String>, non_interactive: bool) -> Result
     println!();
     println!("  Session ID:   {}", session_id);
     println!("  Workspace ID: {}", workspace_id);
+    if let Some(url) = &capture_url {
+        println!("  Capture:      on (posts turns to {})", url);
+        if config.auth_token.is_some() {
+            println!(
+                "                the daemon needs a token: export PC_AUTH_TOKEN for Claude Code"
+            );
+        }
+    }
     println!();
     println!("Start coding with: claude");
 
@@ -483,8 +521,100 @@ fn generate_claude_md(session_id: &str, workspace_id: &str) -> String {
         .replace("<WORKSPACE_ID>", workspace_id)
 }
 
-fn generate_settings_json(session_id: &str) -> String {
-    include_str!("../templates/settings.json").replace("<SESSION_ID>", session_id)
+/// The PCX hooks for `.claude/settings.json`; with `capture_url`, also the
+/// Stop hook that posts conversation turns to the daemon there.
+fn generate_settings_json(session_id: &str, capture_url: Option<&str>) -> serde_json::Value {
+    let mut settings: serde_json::Value = serde_json::from_str(
+        &include_str!("../templates/settings.json").replace("<SESSION_ID>", session_id),
+    )
+    .expect("templates/settings.json is valid JSON");
+    if let Some(url) = capture_url
+        && let Some(stop) = settings["hooks"]["Stop"].as_array_mut()
+    {
+        stop.push(serde_json::json!({
+            "hooks": [{
+                "type": "command",
+                "command": format!(
+                    "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pcx-capture.py {session_id} {url}"
+                ),
+            }]
+        }));
+    }
+    settings
+}
+
+/// What identifies a PCX hook command across setups: its script name
+/// (`pcx-stop-check.py`, ...), or the `[PCX]` banner of the prompt hook.
+/// The session id or daemon URL in it may differ.
+fn hook_key(command: &str) -> String {
+    if let Some(start) = command.find("pcx-") {
+        let script: String = command[start..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_'))
+            .collect();
+        if script.ends_with(".py") || script.ends_with(".sh") {
+            return script;
+        }
+    }
+    if command.contains("[PCX]") {
+        return "[PCX]".to_string();
+    }
+    command.to_string()
+}
+
+/// Add to `settings.hooks` every hook group of `pcx_hooks` whose commands
+/// it has none of (by [`hook_key`]), leaving everything else as it is.
+/// Returns how many groups were added.
+fn merge_hooks(
+    settings: &mut serde_json::Value,
+    pcx_hooks: &serde_json::Value,
+) -> Result<usize, String> {
+    let Some(settings) = settings.as_object_mut() else {
+        return Err(".claude/settings.json is not a JSON object".to_string());
+    };
+    let hooks = settings
+        .entry("hooks")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| "\"hooks\" in .claude/settings.json is not an object".to_string())?;
+    let commands = |group: &serde_json::Value| -> Vec<String> {
+        group["hooks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|h| h["command"].as_str().map(hook_key))
+            .collect()
+    };
+    let mut added = 0;
+    for (event, groups) in pcx_hooks.as_object().into_iter().flatten() {
+        let existing = hooks
+            .entry(event.clone())
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .ok_or_else(|| format!("hooks.{event} in .claude/settings.json is not an array"))?;
+        for group in groups.as_array().into_iter().flatten() {
+            let present: Vec<String> = existing.iter().flat_map(&commands).collect();
+            if commands(group).iter().all(|key| !present.contains(key)) {
+                existing.push(group.clone());
+                added += 1;
+            }
+        }
+    }
+    Ok(added)
+}
+
+/// Base URL hooks use to reach the daemon (a wildcard bind is reached on
+/// loopback).
+fn daemon_url(config: &DaemonConfig) -> String {
+    let host = match config.host.as_str() {
+        "0.0.0.0" | "::" | "" => "127.0.0.1",
+        host => host,
+    };
+    if host.contains(':') {
+        format!("http://[{}]:{}", host, config.port)
+    } else {
+        format!("http://{}:{}", host, config.port)
+    }
 }
 
 fn generate_compact_reinject_script(session_id: &str, workspace_id: &str) -> String {
@@ -495,7 +625,7 @@ fn generate_compact_reinject_script(session_id: &str, workspace_id: &str) -> Str
 
 #[cfg(test)]
 mod tests {
-    use super::SKILL_FILES;
+    use super::{SKILL_FILES, generate_settings_json, merge_hooks};
     use std::path::Path;
 
     /// The bundled skill must not drift from `skills/post-cortex-memory/`.
@@ -516,5 +646,57 @@ mod tests {
                 "templates/skills/post-cortex-memory/{rel_path} differs from skills/post-cortex-memory/{rel_path}; copy it over"
             );
         }
+    }
+
+    fn commands(settings: &serde_json::Value, event: &str) -> Vec<String> {
+        settings["hooks"][event]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|g| g["hooks"].as_array().cloned().unwrap_or_default())
+            .filter_map(|h| h["command"].as_str().map(String::from))
+            .collect()
+    }
+
+    #[test]
+    fn capture_adds_a_stop_hook_with_session_and_url() {
+        let plain = generate_settings_json("S1", None);
+        assert_eq!(commands(&plain, "Stop").len(), 1);
+        let with = generate_settings_json("S1", Some("http://127.0.0.1:3737"));
+        let stop = commands(&with, "Stop");
+        assert_eq!(stop.len(), 2);
+        assert!(
+            stop[1].ends_with("pcx-capture.py S1 http://127.0.0.1:3737"),
+            "{}",
+            stop[1]
+        );
+    }
+
+    /// Re-running setup adds only the hooks a project lacks: here capture,
+    /// on a project set up before it existed (another session id), with a
+    /// hook of its own that must stay.
+    #[test]
+    fn merge_adds_missing_hooks_only() {
+        let mut settings = generate_settings_json("OLD", None);
+        settings["hooks"]["Stop"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"hooks": [{"type": "command", "command": "my-own-hook"}]}));
+        settings["permissions"] = serde_json::json!({"allow": ["Bash(ls)"]});
+
+        let pcx = generate_settings_json("NEW", Some("http://127.0.0.1:3737"));
+        assert_eq!(merge_hooks(&mut settings, &pcx["hooks"]).unwrap(), 1);
+        let stop = commands(&settings, "Stop");
+        assert_eq!(stop.len(), 3, "{stop:?}");
+        assert!(stop[0].contains("pcx-stop-check.py OLD"));
+        assert_eq!(stop[1], "my-own-hook");
+        assert!(stop[2].contains("pcx-capture.py NEW"));
+        assert_eq!(commands(&settings, "UserPromptSubmit").len(), 1);
+        assert_eq!(settings["permissions"]["allow"][0], "Bash(ls)");
+
+        assert_eq!(merge_hooks(&mut settings, &pcx["hooks"]).unwrap(), 0);
+
+        let mut empty = serde_json::json!({});
+        assert_eq!(merge_hooks(&mut empty, &pcx["hooks"]).unwrap(), 4);
     }
 }

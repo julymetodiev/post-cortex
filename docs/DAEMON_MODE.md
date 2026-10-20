@@ -293,6 +293,43 @@ neighbour_radius = 1                                    # records on each side o
 - With `voyage_api_key` set, the top-300 candidate texts (each cut to about
   256 tokens) are sent to Voyage AI on every reranked search.
 
+## Conversation capture
+
+Records only exist when the agent writes them. Capture keeps the
+conversation itself as well: every user prompt and the assistant's final
+reply, in a per-session stream kept apart from the records (it never enters
+the structured summary, the entity graph or importance scores).
+
+Turn it on per project with `pcx setup --capture` (or answer yes at the
+prompt; it is off by default). That installs a Claude Code `Stop` hook,
+`.claude/hooks/pcx-capture.py`, which posts the last few turns to the daemon
+after every reply. It sends the prompt, the final text, the names of the
+tools used and the paths of the files they touched; tool output is never
+sent. The request runs in the background and failures are silent. With
+`auth_token` set, export `PC_AUTH_TOKEN` for Claude Code.
+
+Clients post turns to the REST API (idempotent on `turn_id`, so retries are
+safe; redaction applies):
+
+```bash
+curl -X POST http://127.0.0.1:3737/api/messages \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": "<uuid>", "messages": [
+        {"turn_id": "t-1", "role": "user", "text": "why is the build slow?"},
+        {"turn_id": "t-2", "role": "assistant", "text": "...", "author": "claude-code",
+         "tools": ["Bash"], "files": ["Cargo.toml"]}]}'
+# {"appended":[0,1],"skipped":0,"vectorized":2}
+```
+
+Captured turns are searched only when asked for: `semantic_search` with
+`sources: "messages"` (or `"all"`; the default is `"records"`). Each turn
+found comes back whole, with the turns around it (`neighbour_radius`).
+
+```toml
+# ~/.post-cortex/daemon.toml
+message_retention_days = 90   # older turns are deleted daily with their vectors; 0 = keep forever
+```
+
 ## Troubleshooting
 
 **Port already in use:**
