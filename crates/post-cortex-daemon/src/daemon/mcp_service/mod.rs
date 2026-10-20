@@ -231,7 +231,7 @@ impl PostCortexService {
     }
 
     #[tool(
-        description = "Manage workspaces. Actions: create, list, get, delete, add_session, remove_session",
+        description = "Manage workspaces and their cards. Actions: create, list, get, delete, add_session, remove_session; get_card / update_card for the project card (workspace_id) or the user card (card: \"user\"): short markdown notes put in front of every session",
         input_schema = tool_input_schema::<ManageWorkspaceRequest>()
     )]
     async fn manage_workspace(
