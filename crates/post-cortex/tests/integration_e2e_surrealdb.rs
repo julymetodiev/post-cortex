@@ -159,6 +159,7 @@ async fn e2e_update_context_against_remote_surrealdb_and_real_embeddings() {
         )],
         code_reference: None,
         author: None,
+        derived_from: Vec::new(),
     };
     let _ = svc
         .update_context(warmup_req)
@@ -200,6 +201,7 @@ async fn e2e_update_context_against_remote_surrealdb_and_real_embeddings() {
         ],
         code_reference: None,
         author: None,
+        derived_from: Vec::new(),
     };
 
     let start = std::time::Instant::now();

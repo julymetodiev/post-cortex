@@ -1073,7 +1073,7 @@ impl ConversationMemorySystem {
                     .await;
                 }
 
-                info!(
+                debug!(
                     "Added incremental update to session {}: {} chars",
                     session_id,
                     description.len()

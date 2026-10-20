@@ -30,7 +30,8 @@ use post_cortex_embeddings::{
 use crate::query_cache::CacheScope;
 
 use super::types::{
-    AUTHOR_KEY, CHUNK_PARENT_KEY, ContentType, SearchMode, SearchOptions, SemanticSearchResult,
+    AUTHOR_KEY, CHUNK_PARENT_KEY, ContentType, PREFER_AUTHOR_BOOST, SearchMode, SearchOptions,
+    SemanticSearchResult,
 };
 use super::vectorizer::ContentVectorizer;
 
@@ -139,6 +140,7 @@ impl ContentVectorizer {
             recency_bias,
             mode,
             filter,
+            options.prefer_author.as_deref(),
         );
 
         // Check the cache before paying for the embedding.
@@ -195,7 +197,11 @@ impl ContentVectorizer {
         };
 
         let ranked = rerank(reranker, query, rank(search_results, [lexical, graph])).await;
-        let mut results = self.process_search_results(ranked, Some(recency_bias))?;
+        let mut results = self.process_search_results(
+            ranked,
+            Some(recency_bias),
+            options.prefer_author.as_deref(),
+        )?;
         results.truncate(limit);
         let results: Arc<[SemanticSearchResult]> = Arc::from(results);
 
@@ -251,7 +257,16 @@ impl ContentVectorizer {
 
         let filter = Filter::of(&options);
         let (mode, reranker) = self.reranker_for(options.mode);
-        let params_hash = params_hash(query, limit, 2, &sessions, recency_bias, mode, filter);
+        let params_hash = params_hash(
+            query,
+            limit,
+            2,
+            &sessions,
+            recency_bias,
+            mode,
+            filter,
+            options.prefer_author.as_deref(),
+        );
 
         if let Some(ref cache) = self.query_cache
             && let Some(cached) = cache.get(params_hash, query)
@@ -290,7 +305,11 @@ impl ContentVectorizer {
         };
 
         let ranked = rerank(reranker, query, rank(search_results, [lexical, None])).await;
-        let mut results = self.process_search_results(ranked, Some(recency_bias))?;
+        let mut results = self.process_search_results(
+            ranked,
+            Some(recency_bias),
+            options.prefer_author.as_deref(),
+        )?;
         results.truncate(limit);
         let results: Arc<[SemanticSearchResult]> = Arc::from(results);
 
@@ -445,10 +464,12 @@ impl ContentVectorizer {
     /// Turn ranked matches into semantic results. Each match comes with its
     /// relevance in [0, 1] (cosine similarity, or the fused score), which is
     /// what the combined score ranks by; `similarity_score` stays the cosine.
+    /// Results by `prefer_author` get [`PREFER_AUTHOR_BOOST`] on top.
     fn process_search_results(
         &self,
         search_results: Vec<(SearchMatch, f32)>,
         recency_bias_override: Option<f32>,
+        prefer_author: Option<&str>,
     ) -> Result<Vec<SemanticSearchResult>> {
         let now = Utc::now();
         // Defense-in-depth: clamp recency_bias to prevent negative or extreme values
@@ -477,12 +498,16 @@ impl ContentVectorizer {
             let importance_weight = content_type.importance_weight();
             let base_score = relevance.mul_add(0.7, importance_weight * 0.3);
 
-            let combined_score = if let Some(ref adjuster) = score_adjuster {
+            let mut combined_score = if let Some(ref adjuster) = score_adjuster {
                 decay_count += 1;
                 adjuster.adjust(base_score, &result.metadata)
             } else {
                 base_score
             };
+            let author = result.metadata.metadata.get(AUTHOR_KEY).cloned();
+            if prefer_author.is_some() && author.as_deref() == prefer_author {
+                combined_score += PREFER_AUTHOR_BOOST;
+            }
 
             // A chunk of a long update answers for the update.
             let content_id = match result.metadata.metadata.get(CHUNK_PARENT_KEY) {
@@ -499,7 +524,8 @@ impl ContentVectorizer {
                 timestamp: result.metadata.timestamp,
                 combined_score,
                 neighbour_of: None,
-                author: result.metadata.metadata.get(AUTHOR_KEY).cloned(),
+                author,
+                derived_from: Vec::new(),
             });
         }
 
@@ -751,6 +777,7 @@ fn params_hash(
     recency_bias: f32,
     mode: SearchMode,
     filter: Filter<'_>,
+    prefer_author: Option<&str>,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     query.hash(&mut hasher);
@@ -768,6 +795,7 @@ fn params_hash(
     mode.hash(&mut hasher);
     filter.corpus.hash(&mut hasher);
     filter.author.hash(&mut hasher);
+    prefer_author.hash(&mut hasher);
     hasher.finish()
 }
 

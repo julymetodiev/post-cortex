@@ -163,6 +163,7 @@ pub(super) fn proto_update_to_request(
         &proto.entities,
         &proto.relations,
         proto.author,
+        proto.derived_from,
     )
 }
 
@@ -180,6 +181,7 @@ pub(super) fn proto_bulk_item_to_request(
         &item.entities,
         &item.relations,
         author,
+        item.derived_from,
     )
 }
 
@@ -190,6 +192,7 @@ fn translate_payload(
     entities_proto: &[super::pb::EntityInfo],
     relations_proto: &[super::pb::RelationInfo],
     author: Option<String>,
+    derived_from: Vec<String>,
 ) -> Result<ServiceUpdateRequest, Status> {
     let interaction_type = parse_update_type(interaction_type);
     let content_proto = content_proto.unwrap_or_default();
@@ -241,6 +244,7 @@ fn translate_payload(
         author: author
             .map(|a| a.trim().to_string())
             .filter(|a| !a.is_empty()),
+        derived_from,
     })
 }
 

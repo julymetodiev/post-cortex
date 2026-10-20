@@ -54,6 +54,7 @@ async fn test_mcp_format_semantic_search() -> Result<()> {
         references_entities: vec![],
         typed_entities: vec![],
         author: None,
+        derived_from: Vec::new(),
     };
 
     // The real update (question as title) and a control with the same answer

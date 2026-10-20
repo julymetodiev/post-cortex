@@ -33,7 +33,7 @@ use rmcp::{
     tool, tool_router,
 };
 use std::sync::Arc;
-use tracing::info;
+use tracing::debug;
 
 mod admin;
 mod assembly;
@@ -168,7 +168,7 @@ pub(crate) fn parse_date_range(
 impl PostCortexService {
     /// Create a new MCP service backed by the given memory system.
     pub fn new(memory_system: Arc<ConversationMemorySystem>) -> Self {
-        info!("Initializing Post-Cortex MCP Service (9 consolidated tools)");
+        debug!("Initializing Post-Cortex MCP Service (9 consolidated tools)");
         Self {
             memory_system,
             tool_router: Self::tool_router(),
@@ -300,7 +300,7 @@ impl ServerHandler for PostCortexService {
     ) -> Result<InitializeResult, McpError> {
         context.peer.set_peer_info(request);
         if let Some(parts) = context.extensions.get::<axum::http::request::Parts>() {
-            info!("Client initialized from {}", parts.uri);
+            debug!("Client initialized from {}", parts.uri);
         }
         Ok(self.get_info())
     }

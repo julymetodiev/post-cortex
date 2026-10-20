@@ -21,7 +21,7 @@ use post_cortex_core::services::{
     UpdateContextRequest as ServiceUpdateRequest,
 };
 use std::collections::HashMap;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, instrument, warn};
 use uuid::Uuid;
 
 use crate::{ContextUpdateItem, EntityItem, MCPToolResult, RelationItem, get_service};
@@ -229,6 +229,7 @@ fn build_request(
     relations: &[RelationItem],
     code_reference: Option<CodeReference>,
     author: Option<String>,
+    derived_from: Vec<String>,
 ) -> Result<ServiceUpdateRequest> {
     let (update_type, update_content) = build_content(interaction_type, content)?;
     Ok(ServiceUpdateRequest {
@@ -239,6 +240,7 @@ fn build_request(
         relations: relations_to_domain(relations)?,
         code_reference,
         author,
+        derived_from,
     })
 }
 
@@ -259,8 +261,9 @@ pub async fn update_conversation_context(
     code_reference: Option<CodeReference>,
     session_id: Uuid,
     author: Option<String>,
+    derived_from: Vec<String>,
 ) -> Result<MCPToolResult> {
-    info!("MCP-TOOLS: update_conversation_context() called");
+    debug!("MCP-TOOLS: update_conversation_context() called");
     let service = get_service().await?;
 
     let req = match build_request(
@@ -271,6 +274,7 @@ pub async fn update_conversation_context(
         &relations,
         code_reference,
         author,
+        derived_from,
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -323,7 +327,7 @@ pub async fn bulk_update_conversation_context(
     session_id: Uuid,
     author: Option<String>,
 ) -> Result<MCPToolResult> {
-    info!(
+    debug!(
         "MCP-TOOLS: bulk_update_conversation_context() called with {} updates for session {}",
         updates.len(),
         session_id
@@ -343,6 +347,7 @@ pub async fn bulk_update_conversation_context(
             &item.relations,
             item.code_reference.clone(),
             author.clone(),
+            item.derived_from.clone(),
         ) {
             Ok(req) => requests.push(req),
             Err(e) => {

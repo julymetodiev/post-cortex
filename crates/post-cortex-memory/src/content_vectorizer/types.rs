@@ -86,6 +86,10 @@ pub struct SemanticSearchResult {
     /// Who wrote the record or message, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
+    /// For a record: the captured messages it was drawn from
+    /// (`message:<seq>`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub derived_from: Vec<String>,
 }
 
 impl SemanticSearchResult {
@@ -222,7 +226,16 @@ pub struct SearchOptions {
 
     /// Only records and messages by this author (default: anyone).
     pub author: Option<String>,
+
+    /// Rank records and messages by this author a little higher
+    /// ([`PREFER_AUTHOR_BOOST`]); others still compete.
+    pub prefer_author: Option<String>,
 }
+
+/// What [`SearchOptions::prefer_author`] adds to a matching result's
+/// combined score: enough to break near-ties, not to lift a weak match
+/// over a strong one.
+pub const PREFER_AUTHOR_BOOST: f32 = 0.05;
 
 /// How much work a search puts into ranking. LoCoMo all@50 with ±1
 /// neighbours: `fast` 0.789, `local` 0.870 (MiniLM-L4), `accurate` 0.938

@@ -538,6 +538,7 @@ impl PostCortex for PcxGrpcService {
                 mode,
                 corpus,
                 author: req.author.clone().filter(|a| !a.trim().is_empty()),
+                prefer_author: req.prefer_author.clone().filter(|a| !a.trim().is_empty()),
                 ..Default::default()
             };
             // workspace_id takes precedence over session_id
@@ -602,6 +603,10 @@ impl PostCortex for PcxGrpcService {
                         .map(|hit| ("neighbour_of".to_string(), hit))
                         .into_iter()
                         .chain(r.author.map(|a| ("author".to_string(), a)))
+                        .chain(
+                            (!r.derived_from.is_empty())
+                                .then(|| ("derived_from".to_string(), r.derived_from.join(","))),
+                        )
                         .collect(),
                 })
                 .collect();
@@ -715,6 +720,10 @@ impl PostCortex for PcxGrpcService {
                         .map(|hit| ("neighbour_of".to_string(), hit))
                         .into_iter()
                         .chain(r.author.map(|a| ("author".to_string(), a)))
+                        .chain(
+                            (!r.derived_from.is_empty())
+                                .then(|| ("derived_from".to_string(), r.derived_from.join(","))),
+                        )
                         .collect(),
                 })
                 .collect();

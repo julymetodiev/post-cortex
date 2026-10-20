@@ -18,7 +18,7 @@ use post_cortex_core::graph::entity_graph::SimpleEntityGraph;
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
-use tracing::{debug, info};
+use tracing::debug;
 
 /// A single piece of assembled context with its relevance score.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -477,7 +477,7 @@ pub fn assemble_context<U: Borrow<ContextUpdate>>(
     updates: &[U],
     token_budget: usize,
 ) -> AssembledContext {
-    info!(
+    debug!(
         "Assembling context for query: '{}' (budget: {} tokens)",
         query, token_budget
     );
@@ -593,7 +593,7 @@ pub fn assemble_context<U: Borrow<ContextUpdate>>(
     }
 
     let total_tokens = used_tokens + entity_summary_tokens;
-    info!(
+    debug!(
         "Assembled {} items ({} tokens), {} entity contexts, {} impact entries",
         selected.len(),
         total_tokens,
@@ -812,6 +812,7 @@ mod tests {
                 references_entities: vec![],
                 typed_entities: vec![],
                 author: None,
+                derived_from: Vec::new(),
             },
             ContextUpdate {
                 id: uuid::Uuid::new_v4(),
@@ -832,6 +833,7 @@ mod tests {
                 references_entities: vec![],
                 typed_entities: vec![],
                 author: None,
+                derived_from: Vec::new(),
             },
         ];
 
@@ -923,6 +925,7 @@ mod tests {
             references_entities: vec![],
             typed_entities: vec![],
             author: None,
+            derived_from: Vec::new(),
         });
         let shared = vec![std::sync::Arc::clone(&update)];
         let from_shared = assemble_context("rocksdb", &graph, &shared, 1000);
@@ -988,6 +991,7 @@ mod tests {
             references_entities: vec![],
             typed_entities: vec![],
             author: None,
+            derived_from: Vec::new(),
         }];
 
         let result = assemble_context("changing RocksDB", &graph, &updates, 2000);

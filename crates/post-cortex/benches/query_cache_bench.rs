@@ -21,6 +21,7 @@ fn create_test_results() -> Arc<[SemanticSearchResult]> {
             combined_score: 0.78,
             neighbour_of: None,
             author: None,
+            derived_from: Vec::new(),
         },
         SemanticSearchResult {
             content_id: Uuid::new_v4().to_string(),
@@ -33,6 +34,7 @@ fn create_test_results() -> Arc<[SemanticSearchResult]> {
             combined_score: 0.71,
             neighbour_of: None,
             author: None,
+            derived_from: Vec::new(),
         },
     ])
 }

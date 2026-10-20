@@ -84,6 +84,7 @@ pub(crate) fn complete_results(
 /// summary for long updates) is shorter. Longer text, e.g. graph-enriched,
 /// is kept.
 fn with_full_text(mut hit: SemanticSearchResult, update: &ContextUpdate) -> SemanticSearchResult {
+    hit.derived_from = update.derived_from.clone();
     let full = extract_text_from_update(update);
     if full.len() > hit.text_content.len() {
         hit.text_content = full;
@@ -104,6 +105,7 @@ fn neighbour(update: &ContextUpdate, hit: &SemanticSearchResult) -> SemanticSear
         combined_score: hit.combined_score,
         neighbour_of: Some(hit.content_id.clone()),
         author: update.author.clone(),
+        derived_from: update.derived_from.clone(),
     }
 }
 
@@ -133,6 +135,7 @@ mod tests {
             references_entities: Vec::new(),
             typed_entities: Vec::new(),
             author: None,
+            derived_from: Vec::new(),
         }
     }
 
@@ -159,6 +162,7 @@ mod tests {
             combined_score: score,
             neighbour_of: None,
             author: None,
+            derived_from: Vec::new(),
         }
     }
 

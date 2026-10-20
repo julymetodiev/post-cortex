@@ -3,7 +3,7 @@
 use crate::{MCPToolResult, get_memory_system};
 use anyhow::Result;
 use post_cortex_memory::ConversationMemorySystem;
-use tracing::{error, info, instrument};
+use tracing::{debug, error, info, instrument};
 use uuid::Uuid;
 
 /// Reload the current session list for `workspace_id` and re-persist the
@@ -33,7 +33,7 @@ async fn persist_workspace_after_mutation(
 /// Create a new workspace with the given name and description.
 #[instrument(skip_all, fields(workspace_name = %name))]
 pub async fn create_workspace(name: String, description: String) -> Result<MCPToolResult> {
-    info!("MCP-TOOLS: create_workspace() called with name: '{}'", name);
+    debug!("MCP-TOOLS: create_workspace() called with name: '{}'", name);
     let system = get_memory_system().await?;
 
     let workspace_id = system
@@ -68,7 +68,7 @@ pub async fn create_workspace(name: String, description: String) -> Result<MCPTo
 /// Retrieve workspace details including all associated sessions.
 #[instrument(skip_all, fields(workspace_id = %workspace_id))]
 pub async fn get_workspace(workspace_id: Uuid) -> Result<MCPToolResult> {
-    info!("MCP-TOOLS: get_workspace() called for ID: {}", workspace_id);
+    debug!("MCP-TOOLS: get_workspace() called for ID: {}", workspace_id);
     let system = get_memory_system().await?;
 
     match system.workspace_manager.get_workspace(&workspace_id) {
@@ -105,7 +105,7 @@ pub async fn get_workspace(workspace_id: Uuid) -> Result<MCPToolResult> {
 
 /// List all workspaces with session counts.
 pub async fn list_workspaces() -> Result<MCPToolResult> {
-    info!("MCP-TOOLS: list_workspaces() called");
+    debug!("MCP-TOOLS: list_workspaces() called");
     let system = get_memory_system().await?;
 
     let workspaces = system.workspace_manager.list_workspaces();
@@ -133,7 +133,7 @@ pub async fn list_workspaces() -> Result<MCPToolResult> {
 
 /// Delete a workspace (sessions are not removed).
 pub async fn delete_workspace(workspace_id: Uuid) -> Result<MCPToolResult> {
-    info!(
+    debug!(
         "MCP-TOOLS: delete_workspace() called for ID: {}",
         workspace_id
     );
@@ -172,7 +172,7 @@ pub async fn add_session_to_workspace(
     session_id: Uuid,
     role: String,
 ) -> Result<MCPToolResult> {
-    info!(
+    debug!(
         "MCP-TOOLS: add_session_to_workspace() called: session {} -> workspace {} (role: {})",
         session_id, workspace_id, role
     );
@@ -225,7 +225,7 @@ pub async fn remove_session_from_workspace(
     workspace_id: Uuid,
     session_id: Uuid,
 ) -> Result<MCPToolResult> {
-    info!(
+    debug!(
         "MCP-TOOLS: remove_session_from_workspace() called: session {} from workspace {}",
         session_id, workspace_id
     );

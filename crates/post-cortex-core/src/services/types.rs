@@ -68,6 +68,10 @@ pub struct UpdateContextRequest {
     /// client's name when the caller gives none.
     #[serde(default)]
     pub author: Option<String>,
+    /// Captured messages of the same session the update was drawn from
+    /// (`message:<seq>`); each must exist.
+    #[serde(default)]
+    pub derived_from: Vec<String>,
 }
 
 /// Outcome of a single write.

@@ -250,6 +250,7 @@ async fn test_normalized_context_updates_roundtrip() {
         references_entities: vec![],
         typed_entities: vec![],
         author: None,
+        derived_from: Vec::new(),
     };
 
     let update2 = ContextUpdate {
@@ -271,6 +272,7 @@ async fn test_normalized_context_updates_roundtrip() {
         references_entities: vec!["SurrealDB".to_string()],
         typed_entities: vec![],
         author: None,
+        derived_from: Vec::new(),
     };
 
     // Create session with updates
@@ -439,6 +441,7 @@ fn test_extract_code_references() {
             references_entities: vec![],
             typed_entities: vec![],
             author: None,
+            derived_from: Vec::new(),
         },
         ContextUpdate {
             id: Uuid::new_v4(),
@@ -467,6 +470,7 @@ fn test_extract_code_references() {
             references_entities: vec![],
             typed_entities: vec![],
             author: None,
+            derived_from: Vec::new(),
         },
         ContextUpdate {
             id: Uuid::new_v4(),
@@ -487,6 +491,7 @@ fn test_extract_code_references() {
             references_entities: vec![],
             typed_entities: vec![],
             author: None,
+            derived_from: Vec::new(),
         },
     ];
 
@@ -536,6 +541,7 @@ fn test_extract_change_history() {
             references_entities: vec![],
             typed_entities: vec![],
             author: None,
+            derived_from: Vec::new(),
         },
         ContextUpdate {
             id: Uuid::new_v4(),
@@ -556,6 +562,7 @@ fn test_extract_change_history() {
             references_entities: vec![],
             typed_entities: vec![],
             author: None,
+            derived_from: Vec::new(),
         },
         ContextUpdate {
             id: Uuid::new_v4(),
@@ -576,6 +583,7 @@ fn test_extract_change_history() {
             references_entities: vec![],
             typed_entities: vec![],
             author: None,
+            derived_from: Vec::new(),
         },
     ];
 
@@ -619,6 +627,7 @@ fn test_rebuild_structured_context() {
             references_entities: vec![],
             typed_entities: vec![],
             author: None,
+            derived_from: Vec::new(),
         },
         ContextUpdate {
             id: Uuid::new_v4(),
@@ -639,6 +648,7 @@ fn test_rebuild_structured_context() {
             references_entities: vec!["SurrealDB".to_string()],
             typed_entities: vec![],
             author: None,
+            derived_from: Vec::new(),
         },
     ];
 
@@ -716,6 +726,7 @@ async fn test_full_normalized_roundtrip() {
         references_entities: vec![],
         typed_entities: vec![],
         author: None,
+        derived_from: Vec::new(),
     };
 
     // Create session with update and entity graph

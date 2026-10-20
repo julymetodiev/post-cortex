@@ -96,7 +96,7 @@ impl ConversationMemorySystem {
             .await
         {
             Ok(reranker) => {
-                info!("Reranking search results with {}", model);
+                debug!("Reranking search results with {}", model);
                 Some(Arc::new(reranker))
             }
             Err(e) => {
@@ -131,7 +131,7 @@ impl ConversationMemorySystem {
             VOYAGE_TIMEOUT,
         ) {
             Ok(reranker) => {
-                info!("Reranking search results with Voyage {}", model);
+                debug!("Reranking search results with Voyage {}", model);
                 Some(Arc::new(reranker))
             }
             Err(e) => {
@@ -405,7 +405,7 @@ impl ConversationMemorySystem {
         // Vectorize content
         match vectorizer.vectorize_session(&session).await {
             Ok(count) => {
-                info!("Vectorized {} items for session {}", count, session_id);
+                debug!("Vectorized {} items for session {}", count, session_id);
                 Ok(count)
             }
             Err(e) => {
@@ -452,7 +452,7 @@ impl ConversationMemorySystem {
         for attempt in 1..=MAX_VECTORIZATION_RETRIES {
             match vectorizer.vectorize_latest_update(&session).await {
                 Ok(count) => {
-                    info!(
+                    debug!(
                         "Incrementally vectorized {} update(s) for session {} (attempt {})",
                         count, session_id, attempt
                     );
@@ -663,7 +663,7 @@ impl ConversationMemorySystem {
 
         // Auto-vectorize if the session has content not vectorized yet
         if vectorizer.needs_vectorization(&session_arc.load_full()) {
-            info!(
+            debug!(
                 "Session {} not vectorized, auto-vectorizing before search",
                 session_id
             );
@@ -778,7 +778,7 @@ impl ConversationMemorySystem {
 
         // Auto-vectorize if the session has content not vectorized yet
         if vectorizer.needs_vectorization(&session) {
-            info!(
+            debug!(
                 "Session {} not vectorized, auto-vectorizing before related content search",
                 session_id
             );

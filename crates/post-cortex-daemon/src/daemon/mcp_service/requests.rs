@@ -303,6 +303,13 @@ Examples:
 
 Note: Helps link context to specific code locations."#)]
     pub code_reference: Option<serde_json::Value>,
+    /// Captured messages the update was drawn from.
+    #[schemars(
+        description = r#"Captured messages of this session the update was drawn from, as their content ids
+from search results (e.g. ["message:12", "message:13"]); optional. Each must exist."#
+    )]
+    #[serde(default)]
+    pub derived_from: Option<Vec<String>>,
 }
 
 /// Request payload for the `update_conversation_context` tool.
@@ -373,6 +380,13 @@ Examples:
 - Simple: "src/main.rs:42"
 - Complex: {"file": "src/main.rs", "line": 42, "function": "process_data"}"#)]
     pub code_reference: Option<serde_json::Value>,
+    /// Captured messages the update was drawn from.
+    #[schemars(
+        description = r#"Captured messages of this session the update was drawn from, as their content ids
+from search results (e.g. ["message:12", "message:13"]); optional. Each must exist."#
+    )]
+    #[serde(default)]
+    pub derived_from: Option<Vec<String>>,
     /// Bulk update array; overrides single-update fields when present.
     #[schemars(
         description = r#"Array of updates for bulk operation (overrides single fields if provided).
@@ -585,6 +599,12 @@ Use messages to find what was said in a conversation that was never logged as a 
 "hermes:eq-lead" or a person's name. Results show their author when known."#
     )]
     pub author: Option<String>,
+    /// Rank this author's results a little higher.
+    #[schemars(
+        description = r#"Rank records and messages by this author a little higher (optional), e.g. your
+own agent name to favour your own past work. Unlike author, others' results still appear."#
+    )]
+    pub prefer_author: Option<String>,
     /// Form A: single JSONPath expression. The matched value is returned
     /// directly instead of the full response payload.
     #[schemars(

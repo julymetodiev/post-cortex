@@ -57,18 +57,19 @@ Cards: one markdown note per project (stack, conventions, current goals) and one
 | `date_from`, `date_to` | `YYYY-MM-DD` or RFC 3339 |
 | `mode` | `fast` \| `local` \| `accurate`; default set by the server |
 | `author` | only records and messages by this author, e.g. `claude-code`, `hermes:eq-lead`; results show `author` when known |
+| `prefer_author` | rank this author's records and messages a little higher (+0.05 combined score), e.g. your own agent name; others still appear |
 | `sources` | `records` (default) \| `messages` \| `all`; `messages` searches the raw conversation turns captured by client hooks, each returned with the turns around it |
 | `select` | one JSONPath, e.g. `$.results[0:3].text_content` |
 | `select_map` | `{key: JSONPath}`, e.g. `{"texts":"$.results[*].text_content","ids":"$.results[*].content_id"}` |
 
 JSONPath subset: `$`, `.field`, `[n]`, `[-n]`, `[a:b]`, `[*]`, `.*`, `[0,3,7]`. No `..`, filters or functions.
 
-Result fields (all scopes): `content_id`, `session_id`, `content_type`, `text_content`, `similarity_score`, `importance_score`, `combined_score`, `timestamp`.
+Result fields (all scopes): `content_id`, `session_id`, `content_type`, `text_content`, `similarity_score`, `importance_score`, `combined_score`, `timestamp`; `author` and `derived_from` when set.
 
 ## update_conversation_context
 
-Single mode: `session_id`, `interaction_type`, `content`, `entities`, `relations`, optional `code_reference`, optional `dry_run`, optional `author`.
-Bulk mode: `session_id`, `updates: [{interaction_type, content, entities, relations, code_reference?}]`.
+Single mode: `session_id`, `interaction_type`, `content`, `entities`, `relations`, optional `code_reference`, optional `dry_run`, optional `author`, optional `derived_from`.
+Bulk mode: `session_id`, `updates: [{interaction_type, content, entities, relations, code_reference?, derived_from?}]`.
 
 - `interaction_type`: `qa`, `decision_made`, `problem_solved`, `code_change`, `requirement_added`, `concept_defined`
 - `content`: object of string → string
@@ -77,6 +78,7 @@ Bulk mode: `session_id`, `updates: [{interaction_type, content, entities, relati
 - `code_reference`: `"path"`, `"path:line"`, `"path:start-end"`, or `{"file": "...", "line": 42, "function": "..."}`; anything else is rejected
 - At least one entity and one relation; both relation ends must appear in `entities`; no self-relations.
 - `author`: who writes it (your agent name, the user, a teammate); defaults to the MCP client's name (e.g. `claude-code`). Applies to all updates in bulk mode.
+- `derived_from`: the captured messages the record was drawn from, as `message:<n>` content ids from a `corpus: "messages"` search; each must exist in the session, else the write is rejected. Search hits on the record show them as `derived_from`.
 
 Response (MCP): a success message — single mode "Context updated successfully", bulk mode a success/error count. No entry ID is returned; look it up later via `semantic_search` (`content_id`). An error message explains what was rejected (missing entities/relations, unknown relation type, bad `code_reference`).
 

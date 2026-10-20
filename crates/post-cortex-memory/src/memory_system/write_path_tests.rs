@@ -69,6 +69,7 @@ fn update_metadata(title: &str) -> serde_json::Value {
             },
         ],
         author: None,
+        derived_from: Vec::new(),
     };
     serde_json::to_value(update).unwrap()
 }

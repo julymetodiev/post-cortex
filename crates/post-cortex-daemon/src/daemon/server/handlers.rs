@@ -177,6 +177,7 @@ pub(super) async fn handle_update_context(
         code_reference,
         session_id,
         None,
+        Vec::new(),
     )
     .await
     .map_err(|e| format!("Failed to update context: {}", e))?;
@@ -274,6 +275,7 @@ pub(super) async fn handle_semantic_search(
         None,
         None,
         None,
+        None,
     )
     .await
     .map_err(|e| format!("Failed to search: {}", e))?;
@@ -302,6 +304,7 @@ pub(super) async fn handle_semantic_search_global(
         date_to,
         interaction_type,
         recency_bias,
+        None,
         None,
         None,
         None,

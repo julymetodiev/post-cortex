@@ -34,7 +34,9 @@ use post_cortex_embeddings::{
 };
 use post_cortex_storage::traits::VectorStorage;
 
-use super::{ContentType, ContentVectorizer, ContentVectorizerConfig, SearchOptions};
+use super::{
+    ContentType, ContentVectorizer, ContentVectorizerConfig, PREFER_AUTHOR_BOOST, SearchOptions,
+};
 
 /// In-memory persisted embeddings, keyed like RocksDB: (session, content id).
 #[derive(Default)]
@@ -236,6 +238,7 @@ fn update(title: &str, entity: &str) -> ContextUpdate {
         references_entities: vec![],
         typed_entities: vec![],
         author: None,
+        derived_from: Vec::new(),
     }
 }
 
@@ -943,4 +946,53 @@ async fn records_are_filtered_by_author() {
     assert_eq!(alice.len(), 1, "{alice:?}");
     assert!(alice[0].text_content.contains("by alice"));
     assert!(search(Some("carol")).await.unwrap().is_empty());
+}
+
+/// `prefer_author` lifts that author's results by `PREFER_AUTHOR_BOOST`
+/// and keeps everyone else's.
+#[tokio::test]
+async fn preferred_author_ranks_higher() {
+    let mut session = ActiveSession::new(Uuid::new_v4(), None, None);
+    for (title, author) in [
+        ("quokka migration plan by alice", Some("alice")),
+        ("quokka migration plan by bob", Some("bob")),
+    ] {
+        let mut u = update(title, "quokka");
+        u.author = author.map(String::from);
+        session.add_incremental_update(u).await.unwrap();
+    }
+    let (v, _) = vectorizer_with(true).await;
+    v.vectorize_session(&session).await.unwrap();
+
+    let search = |prefer: &str| {
+        v.semantic_search(
+            "quokka migration plan",
+            10,
+            Some(session.id()),
+            SearchOptions {
+                recency_bias: Some(0.0),
+                prefer_author: Some(prefer.to_string()),
+                ..SearchOptions::default()
+            },
+        )
+    };
+    for (prefer, other) in [("alice", "bob"), ("bob", "alice")] {
+        let hits = search(prefer).await.unwrap();
+        let score = |who: &str| {
+            hits.iter()
+                .find(|r| r.author.as_deref() == Some(who))
+                .map(|r| r.combined_score)
+                .unwrap_or_else(|| panic!("no hit by {who}: {hits:?}"))
+        };
+        let lead = score(prefer) - score(other);
+        assert!(
+            lead > PREFER_AUTHOR_BOOST / 2.0,
+            "{prefer} leads {other} by only {lead}"
+        );
+        let first = hits
+            .iter()
+            .find(|r| r.content_type != ContentType::EntityDescription)
+            .unwrap();
+        assert_eq!(first.author.as_deref(), Some(prefer));
+    }
 }

@@ -180,6 +180,8 @@ message UpdateContextRequest {
   repeated RelationInfo relations = 6;
   // Who writes it (agent name, user or teammate). Unset = unknown.
   optional string author = 7;
+  // Captured messages of the session it was drawn from ("message:<seq>").
+  repeated string derived_from = 8;
 }
 
 message ContextContent {
@@ -214,6 +216,8 @@ message ContextUpdateItem {
   ContextContent content = 2;
   repeated EntityInfo entities = 3;
   repeated RelationInfo relations = 4;
+  // Captured messages of the session it was drawn from ("message:<seq>").
+  repeated string derived_from = 5;
 }
 
 message BulkUpdateContextRequest {
@@ -288,6 +292,8 @@ message SemanticSearchRequest {
   optional string sources = 9;
   // Only results by this author. Results carry "author" in metadata when known.
   optional string author = 10;
+  // Rank results by this author a little higher; others still appear.
+  optional string prefer_author = 11;
 }
 
 message SearchResult {

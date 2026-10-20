@@ -90,6 +90,7 @@ mod tests {
             combined_score: 0.86,
             neighbour_of: None,
             author: None,
+            derived_from: Vec::new(),
         };
         let v = &format_search_results(&[r])[0];
         for key in [

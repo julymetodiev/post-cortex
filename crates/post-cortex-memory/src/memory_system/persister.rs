@@ -634,6 +634,7 @@ mod tests {
             references_entities: vec![],
             typed_entities: vec![],
             author: None,
+            derived_from: Vec::new(),
         }
     }
 

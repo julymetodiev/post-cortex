@@ -43,7 +43,7 @@ use post_cortex_core::workspace::SessionRole;
 
 use super::RealRocksDBStorage;
 use super::core::{SessionLocks, blocking, keys_with_prefix, prefix_read_opts, scan_prefix};
-use super::legacy::{CHECKPOINT_V2, decode_checkpoint, decode_update};
+use super::legacy::{CHECKPOINT_V3, decode_checkpoint, decode_update};
 use super::messages::message_next_key;
 use super::types::{SessionCheckpoint, StoredWorkspace, StoredWorkspaceSession};
 
@@ -457,7 +457,7 @@ impl RealRocksDBStorage {
         let checkpoint = checkpoint.clone();
 
         tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut checkpoint_data = CHECKPOINT_V2.to_vec();
+            let mut checkpoint_data = CHECKPOINT_V3.to_vec();
             checkpoint_data.extend(
                 bincode::serde::encode_to_vec(&checkpoint, bincode::config::standard())
                     .map_err(|e| anyhow::anyhow!("Failed to serialize checkpoint: {}", e))?,

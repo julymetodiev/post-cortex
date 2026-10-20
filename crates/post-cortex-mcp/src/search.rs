@@ -5,7 +5,7 @@ use anyhow::Result;
 use post_cortex_core::core::timeout_utils::with_storage_timeout;
 #[cfg(feature = "embeddings")]
 use post_cortex_memory::content_vectorizer::SearchOptions;
-use tracing::{error, info};
+use tracing::{debug, error};
 use uuid::Uuid;
 
 #[cfg(feature = "embeddings")]
@@ -93,6 +93,12 @@ fn search_hit_to_json(
             map.insert(
                 "author".to_string(),
                 serde_json::Value::String(author.clone()),
+            );
+        }
+        if !r.derived_from.is_empty() {
+            map.insert(
+                "derived_from".to_string(),
+                serde_json::json!(r.derived_from),
             );
         }
     }
@@ -269,8 +275,9 @@ pub async fn semantic_search_global(
     mode: Option<String>,
     sources: Option<String>,
     author: Option<String>,
+    prefer_author: Option<String>,
 ) -> Result<MCPToolResult> {
-    info!(
+    debug!(
         "MCP-TOOLS: semantic_search_global() called with query: '{}' and recency_bias: {:?}",
         query, recency_bias
     );
@@ -311,6 +318,7 @@ pub async fn semantic_search_global(
                 mode,
                 corpus,
                 author: author.filter(|a| !a.trim().is_empty()),
+                prefer_author: prefer_author.filter(|a| !a.trim().is_empty()),
                 ..Default::default()
             },
         )
@@ -358,8 +366,9 @@ pub async fn semantic_search_session(
     mode: Option<String>,
     sources: Option<String>,
     author: Option<String>,
+    prefer_author: Option<String>,
 ) -> Result<MCPToolResult> {
-    info!(
+    debug!(
         "MCP-TOOLS: semantic_search_session() called for session {} with query: '{}'",
         session_id, query
     );
@@ -398,6 +407,7 @@ pub async fn semantic_search_session(
                 mode,
                 corpus,
                 author: author.filter(|a| !a.trim().is_empty()),
+                prefer_author: prefer_author.filter(|a| !a.trim().is_empty()),
                 ..Default::default()
             },
         )
@@ -440,12 +450,12 @@ pub async fn find_related_content(
     topic: String,
     limit: Option<usize>,
 ) -> Result<MCPToolResult> {
-    info!(
+    debug!(
         "MCP-TOOLS: find_related_content() called for session {} with topic: '{}'",
         session_id, topic
     );
     let system = get_memory_system().await?;
-    info!("MCP-TOOLS: Got memory system for find_related_content");
+    debug!("MCP-TOOLS: Got memory system for find_related_content");
 
     if !system.config.enable_embeddings {
         return Ok(MCPToolResult::error(
@@ -517,12 +527,12 @@ pub async fn find_related_content(
 /// Manually trigger embedding vectorization for a session (embeddings feature required).
 #[cfg(feature = "embeddings")]
 pub async fn vectorize_session(session_id: Uuid) -> Result<MCPToolResult> {
-    info!(
+    debug!(
         "MCP-TOOLS: vectorize_session() called for session {}",
         session_id
     );
     let system = get_memory_system().await?;
-    info!("MCP-TOOLS: Got memory system for vectorize_session");
+    debug!("MCP-TOOLS: Got memory system for vectorize_session");
 
     if !system.config.enable_embeddings {
         return Ok(MCPToolResult::error(
@@ -545,9 +555,9 @@ pub async fn vectorize_session(session_id: Uuid) -> Result<MCPToolResult> {
 /// Retrieve vectorization statistics for the embedding index (embeddings feature required).
 #[cfg(feature = "embeddings")]
 pub async fn get_vectorization_stats() -> Result<MCPToolResult> {
-    info!("MCP-TOOLS: get_vectorization_stats() called");
+    debug!("MCP-TOOLS: get_vectorization_stats() called");
     let system = get_memory_system().await?;
-    info!("MCP-TOOLS: Got memory system for get_vectorization_stats");
+    debug!("MCP-TOOLS: Got memory system for get_vectorization_stats");
 
     if !system.config.enable_embeddings {
         return Ok(MCPToolResult::error(
@@ -666,6 +676,7 @@ mod tests {
             combined_score: 0.5,
             neighbour_of: neighbour_of.map(Into::into),
             author: None,
+            derived_from: Vec::new(),
         }
     }
 

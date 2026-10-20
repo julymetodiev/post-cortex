@@ -118,6 +118,7 @@ pub(super) async fn handle(
                 entities: u.entities.clone(),
                 relations: u.relations.clone(),
                 code_reference,
+                derived_from: u.derived_from.clone().unwrap_or_default(),
             })
             .collect();
 
@@ -183,6 +184,7 @@ pub(super) async fn handle(
             code_ref,
             uuid,
             author,
+            req.derived_from.clone().unwrap_or_default(),
         )
         .await
         {

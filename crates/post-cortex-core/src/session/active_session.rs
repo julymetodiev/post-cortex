@@ -36,7 +36,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, instrument, warn};
 use uuid::Uuid;
 
 /// ActiveSession with lock-free granular components
@@ -615,13 +615,13 @@ impl ActiveSession {
     /// Add an incremental update, processing entity graph, code refs, and state.
     #[instrument(skip(self, update), fields(session_id = %self.id()))]
     pub async fn add_incremental_update(&mut self, update: ContextUpdate) -> anyhow::Result<()> {
-        info!(
+        debug!(
             "ActiveSession: Starting add_incremental_update for update ID: {}",
             update.id
         );
-        info!("Update type: {:?}", update.update_type);
-        info!("Content title: '{}'", update.content.title);
-        info!("Content description: '{}'", update.content.description);
+        debug!("Update type: {:?}", update.update_type);
+        debug!("Content title: '{}'", update.content.title);
+        debug!("Content description: '{}'", update.content.description);
 
         // Limit content size to prevent processing issues
         let mut limited_update = update;
@@ -711,7 +711,7 @@ impl ActiveSession {
         self.hot_context_mut().push(Arc::clone(&shared));
         Arc::make_mut(&mut self.incremental_updates).push(shared);
 
-        info!("ActiveSession: add_incremental_update completed successfully");
+        debug!("ActiveSession: add_incremental_update completed successfully");
 
         Ok(())
     }
@@ -997,7 +997,7 @@ impl ActiveSession {
             // Also clean up the code_references index
             let code_refs = Arc::make_mut(&mut self.code_references);
             code_refs.remove(file_path);
-            info!(
+            debug!(
                 "Removed {} updates referencing file: {}",
                 removed, file_path
             );
@@ -1016,14 +1016,14 @@ impl ActiveSession {
         // Cheap: clones the outer Arc, not the updates.
         let updates = Arc::clone(&self.incremental_updates);
         let total = updates.len();
-        info!(
+        debug!(
             "Rebuilding entity graph: {} updates to process, {} entities cleared",
             total, entities_before
         );
 
         for (i, update) in updates.iter().enumerate() {
             if (i + 1) % 10 == 0 || i + 1 == total {
-                info!(
+                debug!(
                     "Rebuilding entity graph: {}/{} updates processed",
                     i + 1,
                     total
@@ -1033,7 +1033,7 @@ impl ActiveSession {
         }
 
         let entities_after = self.entity_graph.entity_count();
-        info!(
+        debug!(
             "Entity graph rebuild complete: {} -> {} entities",
             entities_before, entities_after
         );
@@ -1163,7 +1163,7 @@ impl ActiveSession {
     }
 
     async fn update_entity_graph(&mut self, update: &ContextUpdate) -> anyhow::Result<()> {
-        info!(
+        debug!(
             "update_entity_graph: Starting entity graph update for update {}",
             update.id
         );
@@ -1185,7 +1185,7 @@ impl ActiveSession {
                 entity_graph.add_relationship(rel.clone());
             }
 
-            info!(
+            debug!(
                 "update_entity_graph: Used {} caller-provided entities, {} relationships (NER skipped)",
                 update.typed_entities.len(),
                 update.creates_relationships.len(),
@@ -1372,6 +1372,7 @@ impl ActiveSession {
                 references_entities: Vec::new(),
                 typed_entities: Vec::new(),
                 author: None,
+                derived_from: Vec::new(),
             }
         };
 
@@ -1519,6 +1520,7 @@ mod tests {
             references_entities: vec![],
             typed_entities: vec![],
             author: None,
+            derived_from: Vec::new(),
         }
     }
 
@@ -1549,21 +1551,25 @@ mod tests {
         if let Some(serde_json::Value::Array(ids)) = obj.get_mut("vectorized_update_ids") {
             ids.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
         }
-        without_null_author(&mut v);
+        without_new_update_fields(&mut v);
         v
     }
 
-    /// Updates written before authorship have no `author`; read back, they
-    /// serialise it as null. That field is the only expected difference.
-    fn without_null_author(v: &mut serde_json::Value) {
+    /// Updates written before authorship and `derived_from` have neither;
+    /// read back, they serialise them as null and []. Those fields are the
+    /// only expected difference.
+    fn without_new_update_fields(v: &mut serde_json::Value) {
         match v {
             serde_json::Value::Object(obj) => {
                 if obj.get("author") == Some(&serde_json::Value::Null) {
                     obj.remove("author");
                 }
-                obj.values_mut().for_each(without_null_author);
+                if obj.get("derived_from") == Some(&serde_json::json!([])) {
+                    obj.remove("derived_from");
+                }
+                obj.values_mut().for_each(without_new_update_fields);
             }
-            serde_json::Value::Array(items) => items.iter_mut().for_each(without_null_author),
+            serde_json::Value::Array(items) => items.iter_mut().for_each(without_new_update_fields),
             _ => {}
         }
     }

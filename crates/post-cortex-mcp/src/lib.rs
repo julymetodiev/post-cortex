@@ -40,7 +40,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
-use tracing::info;
+use tracing::debug;
 
 use post_cortex_memory::services::MemoryServiceImpl;
 use post_cortex_memory::{ConversationMemorySystem, SystemConfig};
@@ -279,14 +279,14 @@ static SERVICE: LazyLock<ArcSwap<Option<Arc<MemoryServiceImpl>>>> =
 /// Inject a pre-built memory system for daemon mode. Returns the canonical
 /// service built around it, for transports outside the MCP tools to share.
 pub fn inject_memory_system(system: Arc<ConversationMemorySystem>) -> Arc<MemoryServiceImpl> {
-    info!("MCP-TOOLS: Injecting external memory system for daemon mode");
+    debug!("MCP-TOOLS: Injecting external memory system for daemon mode");
     // Wrap the injected system in a canonical service and store it
     // alongside the raw handle so write-path callers can pick it up
     // without reconstructing the Pipeline on every request.
     let service = Arc::new(MemoryServiceImpl::new(system.clone()));
     MEMORY_SYSTEM.store(Arc::new(Some(system)));
     SERVICE.store(Arc::new(Some(service.clone())));
-    info!("MCP-TOOLS: Memory system injection complete");
+    debug!("MCP-TOOLS: Memory system injection complete");
     service
 }
 
@@ -326,14 +326,14 @@ pub async fn get_memory_system_with_config(
 
 /// Return the global memory system, lazily initialising it if needed.
 pub async fn get_memory_system() -> Result<Arc<ConversationMemorySystem>> {
-    info!("MCP-TOOLS: get_memory_system() called");
+    debug!("MCP-TOOLS: get_memory_system() called");
 
     if let Some(system) = MEMORY_SYSTEM.load().as_ref() {
-        info!("MCP-TOOLS: Using existing system");
+        debug!("MCP-TOOLS: Using existing system");
         return Ok(system.clone());
     }
 
-    info!("MCP-TOOLS: System not initialized, proceeding with initialization");
+    debug!("MCP-TOOLS: System not initialized, proceeding with initialization");
 
     let data_directory = dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -354,34 +354,34 @@ pub async fn get_memory_system() -> Result<Arc<ConversationMemorySystem>> {
         config.enable_embeddings = true;
         config.auto_vectorize_on_update = true;
         config.cross_session_search_enabled = true;
-        info!("MCP-TOOLS: Embeddings enabled in config");
+        debug!("MCP-TOOLS: Embeddings enabled in config");
     }
 
     #[cfg(not(feature = "embeddings"))]
     {
-        info!("MCP-TOOLS: Embeddings not compiled in");
+        debug!("MCP-TOOLS: Embeddings not compiled in");
     }
 
-    info!("MCP-TOOLS: About to call ConversationMemorySystem::new()");
+    debug!("MCP-TOOLS: About to call ConversationMemorySystem::new()");
     let system = ConversationMemorySystem::new(config)
         .await
         .map_err(anyhow::Error::msg)?;
-    info!("MCP-TOOLS: ConversationMemorySystem created successfully");
+    debug!("MCP-TOOLS: ConversationMemorySystem created successfully");
 
     let arc_system = Arc::new(system);
 
     let new_option = Arc::new(Some(arc_system.clone()));
     MEMORY_SYSTEM.rcu(|current| {
         if current.is_none() {
-            info!("MCP-TOOLS: Storing newly created system");
+            debug!("MCP-TOOLS: Storing newly created system");
             new_option.clone()
         } else {
-            info!("MCP-TOOLS: Another thread already initialized the system, using existing");
+            debug!("MCP-TOOLS: Another thread already initialized the system, using existing");
             current.clone()
         }
     });
 
-    info!("MCP-TOOLS: System initialization completed");
+    debug!("MCP-TOOLS: System initialization completed");
 
     Ok(MEMORY_SYSTEM.load().as_ref().as_ref().unwrap().clone())
 }
@@ -495,6 +495,9 @@ pub struct ContextUpdateItem {
     pub relations: Vec<RelationItem>,
     /// Optional code reference attached to the update.
     pub code_reference: Option<CodeReference>,
+    /// Captured messages the update was drawn from (`message:<seq>`).
+    #[serde(default)]
+    pub derived_from: Vec<String>,
 }
 
 /// Wire shape for an entity carried by an MCP `update_conversation_context`

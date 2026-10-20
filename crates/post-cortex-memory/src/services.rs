@@ -26,6 +26,7 @@ use chrono::Utc;
 use post_cortex_core::core::card::{CardScope, MAX_CARD_BYTES};
 use post_cortex_core::core::context_update::{ContextUpdate, EntityRelationship, TypedEntity};
 use post_cortex_core::core::error::SystemError;
+use post_cortex_core::core::message;
 use post_cortex_core::redact::{RedactionCounts, Redactor};
 use post_cortex_core::services::{
     AdminRequest, AdminResponse, AppendMessagesRequest, AppendMessagesResponse,
@@ -102,6 +103,45 @@ impl MemoryServiceImpl {
         &self.system
     }
 
+    /// Every `derived_from` entry names a captured message of the session
+    /// (`message:<seq>`, no chunk suffix).
+    async fn check_derived_from(&self, req: &UpdateContextRequest) -> Result<(), SystemError> {
+        if req.derived_from.is_empty() {
+            return Ok(());
+        }
+        let mut seqs = Vec::with_capacity(req.derived_from.len());
+        for id in &req.derived_from {
+            match message::seq_of_content_id(id) {
+                Some(seq) if !id.contains('#') => seqs.push(seq),
+                _ => {
+                    return Err(SystemError::InvalidArgument(format!(
+                        "derived_from: '{id}' is not a message content id (message:<n>)"
+                    )));
+                }
+            }
+        }
+        let (first, last) = (
+            seqs.iter().min().copied().unwrap_or(0),
+            seqs.iter().max().copied().unwrap_or(0),
+        );
+        let stored: HashSet<u64> = self
+            .system
+            .storage_actor
+            .load_messages(req.session_id, first..last + 1)
+            .await
+            .map_err(SystemError::Internal)?
+            .into_iter()
+            .map(|m| m.seq)
+            .collect();
+        match seqs.iter().find(|seq| !stored.contains(seq)) {
+            Some(missing) => Err(SystemError::InvalidArgument(format!(
+                "derived_from: message:{missing} is not in session {}",
+                req.session_id
+            ))),
+            None => Ok(()),
+        }
+    }
+
     /// A workspace card needs an existing workspace.
     fn require_card_scope(&self, scope: CardScope) -> Result<(), SystemError> {
         match scope {
@@ -158,6 +198,7 @@ impl PostCortexService for MemoryServiceImpl {
     ) -> Result<UpdateContextResponse, SystemError> {
         log_redactions(req.session_id, &self.redactor.redact_request(&mut req));
         validate_update_request(&req)?;
+        self.check_derived_from(&req).await?;
 
         let description = build_description(&req);
         let context_update = build_context_update(&req);
@@ -321,12 +362,14 @@ impl PostCortexService for MemoryServiceImpl {
                     item.session_id, req.session_id
                 )));
             }
-            validate_update_request(item).map_err(|e| match e {
+            let prefixed = |e| match e {
                 SystemError::InvalidArgument(msg) => {
                     SystemError::InvalidArgument(format!("updates[{i}]: {msg}"))
                 }
                 other => other,
-            })?;
+            };
+            validate_update_request(item).map_err(prefixed)?;
+            self.check_derived_from(item).await.map_err(prefixed)?;
         }
 
         let mut entry_ids = Vec::with_capacity(req.updates.len());
@@ -547,6 +590,7 @@ fn build_context_update(req: &UpdateContextRequest) -> ContextUpdate {
         references_entities: Vec::new(),
         typed_entities,
         author: req.author.clone(),
+        derived_from: req.derived_from.clone(),
     }
 }
 
@@ -712,6 +756,7 @@ mod tests {
             relations: vec![relation("Foo", "Bar")],
             code_reference: None,
             author: None,
+            derived_from: Vec::new(),
         }
     }
 
@@ -1117,6 +1162,65 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
         assert!(found, "entity:Foo has no vector");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// `derived_from` must name messages stored in the session; the links
+    /// come back on the record's search hits.
+    #[tokio::test]
+    async fn derived_from_names_stored_messages() {
+        use post_cortex_core::core::message::{MessageRole, NewMessage};
+
+        let (svc, dir) = make_service("derived-from").await;
+        let sid = svc.inner().create_session(None, None).await.unwrap();
+        let (stored, _) = svc
+            .inner()
+            .append_messages(
+                sid,
+                vec![NewMessage {
+                    turn_id: "t1".to_string(),
+                    role: MessageRole::User,
+                    author: None,
+                    source_session: None,
+                    timestamp: Utc::now(),
+                    text: "Let us keep the cards in front of every session".to_string(),
+                    tools: Vec::new(),
+                    files: Vec::new(),
+                }],
+            )
+            .await
+            .unwrap();
+        let id = message::content_id(stored[0].seq);
+
+        let with = |derived_from: Vec<String>| {
+            let mut req = good_request();
+            req.session_id = sid;
+            req.derived_from = derived_from;
+            req
+        };
+        for bad in [vec!["entity:Foo".to_string()], vec![format!("{id}#1")]] {
+            assert!(matches!(
+                svc.update_context(with(bad)).await,
+                Err(SystemError::InvalidArgument(_))
+            ));
+        }
+        let missing = message::content_id(stored[0].seq + 7);
+        assert!(matches!(
+            svc.update_context(with(vec![missing])).await,
+            Err(SystemError::InvalidArgument(_))
+        ));
+        svc.update_context(with(vec![id.clone()])).await.unwrap();
+
+        let hits = svc
+            .inner()
+            .semantic_search_session(sid, "Some concept short definition", Default::default())
+            .await
+            .unwrap();
+        let record = hits
+            .iter()
+            .find(|h| h.content_type == crate::content_vectorizer::ContentType::UpdateContent)
+            .expect("the record is found");
+        assert_eq!(record.derived_from, [id]);
         let _ = std::fs::remove_dir_all(dir);
     }
 

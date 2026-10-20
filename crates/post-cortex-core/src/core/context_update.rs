@@ -85,6 +85,12 @@ pub struct ContextUpdate {
     /// the user or a teammate. `None` for updates from before authorship.
     #[serde(default)]
     pub author: Option<String>,
+
+    /// The captured messages of the same session this record was drawn from,
+    /// as message content ids (`message:<seq>`, see
+    /// [`crate::core::message::content_id`]).
+    #[serde(default)]
+    pub derived_from: Vec<String>,
 }
 
 /// Structured content payload for a context update

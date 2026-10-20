@@ -59,8 +59,9 @@ fn init_logging(to_file: bool, also_stderr: bool) {
 
     if to_file {
         let file_appender = RollingFileAppender::new(Rotation::DAILY, log_dir, "daemon.log");
-        // Use RUST_LOG if set, otherwise default to "info"
-        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            EnvFilter::new(post_cortex_daemon::daemon::observability::DEFAULT_LOG_FILTER)
+        });
 
         if also_stderr {
             // Log to both file and stderr (foreground daemon mode)

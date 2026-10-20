@@ -15,7 +15,7 @@
 use anyhow::Result;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use tracing::{debug, info};
+use tracing::debug;
 use uuid::Uuid;
 
 use post_cortex_core::core::context_update::ContextUpdate;
@@ -37,7 +37,7 @@ impl ContentVectorizer {
     /// # Errors
     /// Returns an error if vectorization fails or the vector database errors out.
     pub async fn vectorize_session(&self, session: &ActiveSession) -> Result<usize> {
-        info!("Vectorizing session: {}", session.id());
+        debug!("Vectorizing session: {}", session.id());
         let mut vectorized_count = 0;
 
         let (update_count, updates_complete) = self.vectorize_context_updates(session).await?;
@@ -60,7 +60,7 @@ impl ContentVectorizer {
             self.mark_vectorized(session);
         }
 
-        info!(
+        debug!(
             "Vectorized {} items for session {} (updates={}, entities={})",
             vectorized_count,
             session.id(),
@@ -76,7 +76,7 @@ impl ContentVectorizer {
         match session.hot_context.back_arc() {
             Some(update) => self.vectorize_update(session, update.id).await,
             None => {
-                info!(
+                debug!(
                     "vectorize_latest_update: no updates in hot_context for session {}",
                     session.id()
                 );
@@ -108,7 +108,7 @@ impl ContentVectorizer {
                 .find(|u| u.id == update_id)
                 .cloned()
         }) else {
-            info!(
+            debug!(
                 "vectorize_update: update {} not found in session {}",
                 update_id,
                 session.id()
@@ -118,7 +118,7 @@ impl ContentVectorizer {
 
         let raw_text = extract_text_from_update(&update);
         if !self.should_vectorize_text(&raw_text) {
-            info!(
+            debug!(
                 "vectorize_update: text too short ({} chars) for session {}",
                 raw_text.len(),
                 session.id()
@@ -216,7 +216,7 @@ impl ContentVectorizer {
             .collect();
 
         if !stale_ids.is_empty() {
-            info!(
+            debug!(
                 "Removing {} stale vectorized_update_ids for session {} (not in vector_db)",
                 stale_ids.len(),
                 session.id()
@@ -234,7 +234,7 @@ impl ContentVectorizer {
             .filter(|u| !session.vectorized_update_ids.contains(&u.id))
             .count();
 
-        info!(
+        debug!(
             "vectorize_context_updates: session={}, total_updates={}, vectorized_ids={}, non_vectorized={}",
             session.id(),
             total_updates,
@@ -258,7 +258,7 @@ impl ContentVectorizer {
             };
 
         if texts_to_embed.is_empty() {
-            info!(
+            debug!(
                 "vectorize_context_updates: NO texts to embed for session {} (non_vectorized={}, collected=0 — texts too short or filtered)",
                 session.id(),
                 non_vectorized_count

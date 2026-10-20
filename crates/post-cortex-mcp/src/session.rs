@@ -7,7 +7,7 @@ use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_memory::ConversationMemorySystem;
 use post_cortex_storage::rocksdb_storage::SessionCheckpoint;
 use std::sync::Arc;
-use tracing::{error, info, instrument};
+use tracing::{debug, error, instrument};
 use uuid::Uuid;
 
 /// Create a session checkpoint using an explicit memory system reference.
@@ -241,11 +241,11 @@ fn summary_json(
 
 /// List all sessions via the global memory system.
 pub async fn list_sessions() -> Result<MCPToolResult> {
-    info!("MCP-TOOLS: list_sessions() called");
+    debug!("MCP-TOOLS: list_sessions() called");
     let result = with_storage_timeout(async {
-        info!("MCP-TOOLS: Getting memory system for list_sessions");
+        debug!("MCP-TOOLS: Getting memory system for list_sessions");
         let system = get_memory_system().await?;
-        info!("MCP-TOOLS: Got memory system, listing sessions");
+        debug!("MCP-TOOLS: Got memory system, listing sessions");
         // Metadata records only: listing neither loads sessions nor fills
         // the session cache. Entity counts are only known for sessions
         // that are already in memory.

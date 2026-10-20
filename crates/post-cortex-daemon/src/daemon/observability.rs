@@ -12,7 +12,7 @@
 //!
 //!   | Var | Default | Effect |
 //!   |-----|---------|--------|
-//!   | `RUST_LOG` | `info` | `EnvFilter` directives |
+//!   | `RUST_LOG` | `info,rmcp=warn` | `EnvFilter` directives |
 //!   | `OTEL_LOG_FORMAT` | `compact` | `compact` / `pretty` / `json` |
 //!   | `OTEL_SERVICE_NAME` | `post-cortex` | OTel service.name attr |
 //!   | `OTEL_SERVICE_VERSION` | crate version | OTel service.version |
@@ -27,7 +27,10 @@
 
 use std::env;
 use std::fmt;
-use tracing::Level;
+
+/// Log filter when `RUST_LOG` is unset: info, except rmcp's per-connection
+/// lifecycle lines.
+pub const DEFAULT_LOG_FILTER: &str = "info,rmcp=warn";
 use tracing::field::{Field, Visit};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::{Context, Filter, Layer, SubscriberExt};
@@ -98,8 +101,8 @@ impl<S: tracing::Subscriber> Filter<S> for RmcpResumeNoiseFilter {
 ///
 /// Idempotent: subsequent calls are no-ops (logs a warning).
 pub fn init() -> Result<(), TracingInitError> {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(format!("{}", Level::INFO)));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
 
     let format = env::var("OTEL_LOG_FORMAT").unwrap_or_else(|_| "compact".to_string());
 
