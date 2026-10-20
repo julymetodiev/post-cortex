@@ -94,9 +94,14 @@ pub(crate) async fn assemble(
         Corpus::Records => Vec::new(),
         _ => conversation_excerpts(memory, sessions, query).await,
     };
+    // Excerpts get half of what the entity context leaves, so large
+    // entity contexts cannot squeeze the records out.
     let (updates, excerpt_budget) = match corpus {
         Corpus::Messages => (&[][..], token_budget),
-        _ => (updates, token_budget / 2),
+        _ => (
+            updates,
+            token_budget.saturating_sub(context_assembly::entity_summary_tokens(query, graph)) / 2,
+        ),
     };
     // The excerpts that fit their share, in conversation order.
     let mut excerpt_tokens = 0;
@@ -398,5 +403,81 @@ mod tests {
         );
         assert!(formatted.contains("zebracorn rollout plan"));
         assert!(ctx.total_tokens >= context_assembly::card_tokens(&ctx.cards));
+    }
+
+    /// A query naming many entities reserves much of the budget for the
+    /// entity context; the excerpts get half of what is left, so records
+    /// still fit (live on ml: 37 entities took 1850 of 3000 tokens and the
+    /// records got nothing).
+    #[cfg(feature = "embeddings")]
+    #[tokio::test]
+    async fn large_entity_context_leaves_records_room() {
+        use post_cortex_core::core::context_update::EntityType;
+        use post_cortex_core::core::message::{MessageRole, NewMessage};
+        use post_cortex_memory::context_assembly::ContextSource;
+
+        let dir = tempfile::tempdir().unwrap();
+        let memory = ConversationMemorySystem::new(post_cortex_memory::SystemConfig {
+            data_directory: dir.path().to_str().unwrap().to_string(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let sid = memory.create_session(None, None).await.unwrap();
+        for i in 0..4 {
+            memory
+                .add_incremental_update(sid, format!("zebracorn rollout record {i}"), None)
+                .await
+                .unwrap();
+        }
+        let long = "zebracorn rollout discussion ".repeat(45);
+        memory
+            .append_messages(
+                sid,
+                (0..4)
+                    .map(|i| NewMessage {
+                        turn_id: format!("t{i}"),
+                        role: MessageRole::User,
+                        author: None,
+                        source_session: None,
+                        timestamp: chrono::Utc::now(),
+                        text: format!("{long} {i}"),
+                        tools: Vec::new(),
+                        files: Vec::new(),
+                    })
+                    .collect(),
+            )
+            .await
+            .unwrap();
+
+        let mut graph = SimpleEntityGraph::new();
+        let names: Vec<String> = (0..30).map(|i| format!("component{i}")).collect();
+        for name in &names {
+            graph.add_or_update_entity(name.clone(), EntityType::Concept, chrono::Utc::now(), "t");
+        }
+        let query = format!("zebracorn rollout {}", names.join(" "));
+        assert!(context_assembly::entity_summary_tokens(&query, &graph) >= 1500);
+
+        let session = memory.get_session(sid).await.unwrap().load_full();
+        let mut updates = Vec::new();
+        session_updates(&session, &mut updates);
+        let ctx = assemble(
+            &memory,
+            &query,
+            &graph,
+            &updates,
+            &[sid],
+            &[],
+            2000,
+            Corpus::All,
+        )
+        .await;
+        let records = ctx
+            .items
+            .iter()
+            .filter(|i| i.source != ContextSource::Conversation)
+            .count();
+        assert!(records >= 1, "{ctx:?}");
+        assert!(ctx.total_tokens <= 2000, "{}", ctx.total_tokens);
     }
 }

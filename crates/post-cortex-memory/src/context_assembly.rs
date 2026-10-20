@@ -111,6 +111,15 @@ pub struct ImpactEntry {
     pub context: String,
 }
 
+/// Tokens kept free per entity of the entity context for its summary.
+const ENTITY_SUMMARY_TOKENS: usize = 50;
+
+/// Tokens [`assemble_context`] keeps free for the entity context of
+/// `query` (one hop around the entities it names).
+pub fn entity_summary_tokens(query: &str, graph: &SimpleEntityGraph) -> usize {
+    build_entity_context(&find_query_entities(query, graph), graph, 1).len() * ENTITY_SUMMARY_TOKENS
+}
+
 /// Rough token estimate: ~4 chars per token for English
 fn estimate_tokens(text: &str) -> usize {
     text.len().div_ceil(4)
@@ -520,7 +529,7 @@ pub fn assemble_context<U: Borrow<ContextUpdate>>(
     let mut used_tokens = 0;
 
     // Reserve tokens for entity context summary (~50 tokens per entity)
-    let entity_summary_tokens = entity_context.len() * 50;
+    let entity_summary_tokens = entity_context.len() * ENTITY_SUMMARY_TOKENS;
     let content_budget = token_budget.saturating_sub(entity_summary_tokens);
 
     for item in scored_items {
