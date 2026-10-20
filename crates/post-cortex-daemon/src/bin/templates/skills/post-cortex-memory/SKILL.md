@@ -32,6 +32,7 @@ semantic_search(query, scope="session",   scope_id=<session_id>)
 Write queries as natural-language questions or the key terms of what you need ("why did we switch the embedding model", "SurrealDB schema migration"), not single words. Useful knobs:
 
 - `mode`: `fast` (~40 ms) for quick lookups, `accurate` when missing the answer is costly; the server's default otherwise.
+- `sources`: `records` (default) searches the logged records; `messages` searches the raw conversation turns that client hooks capture (when capture is on), for things said but never logged; `all` both.
 - `recency_bias`: `0` for timeless architecture, `0.3–0.7` for "what is the current state", `1.0` for "what just broke".
 - `interaction_type`: e.g. `["decision_made"]` or `["problem_solved"]` to filter.
 - `date_from` / `date_to` (ISO 8601) for time windows.

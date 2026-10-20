@@ -557,6 +557,15 @@ Note: Only affects ranking order, doesn't filter out old results."#
 
 Use fast for quick lookups; accurate when the answer must not be missed."#)]
     pub mode: Option<String>,
+    /// What to search: `records`, `messages` or `all`.
+    #[schemars(description = r#"What to search (optional; default: records).
+
+- records: the structured context (decisions, problems, code changes, ...)
+- messages: raw conversation turns captured by client hooks, each returned with the turns around it
+- all: both
+
+Use messages to find what was said in a conversation that was never logged as a record."#)]
+    pub sources: Option<String>,
     /// Form A: single JSONPath expression. The matched value is returned
     /// directly instead of the full response payload.
     #[schemars(

@@ -28,7 +28,7 @@ use surrealdb::types::SurrealValue;
 use tracing::debug;
 
 use post_cortex_embeddings::text::tokens;
-use post_cortex_embeddings::{SearchMatch, VectorMetadata};
+use post_cortex_embeddings::{Corpus, MESSAGE_CONTENT_TYPE, SearchMatch, VectorMetadata};
 
 use super::SurrealDBStorage;
 
@@ -52,23 +52,29 @@ struct TextHit {
 }
 
 impl SurrealDBStorage {
-    /// BM25 top-`k` for `query`, optionally restricted to `sources`.
+    /// BM25 top-`k` for `query` over the texts in `corpus`, optionally
+    /// restricted to `sources`.
     pub(super) async fn text_search(
         &self,
         query: &str,
         query_vector: &[f32],
         k: usize,
         sources: &[String],
+        corpus: Corpus,
     ) -> Result<Vec<SearchMatch>> {
         let terms = tokens(query).join(" ");
         if terms.is_empty() || k == 0 {
             return Ok(Vec::new());
         }
-        let scope = if sources.is_empty() {
-            ""
-        } else {
-            "AND session_id IN $sources "
-        };
+        let mut scope = String::new();
+        if !sources.is_empty() {
+            scope.push_str("AND session_id IN $sources ");
+        }
+        match corpus {
+            Corpus::All => {}
+            Corpus::Records => scope.push_str("AND content_type != $message "),
+            Corpus::Messages => scope.push_str("AND content_type = $message "),
+        }
         // Rows written under an older embedding model can have another
         // dimension; cosine over mismatched lengths is an error.
         let sql = format!(
@@ -85,6 +91,7 @@ impl SurrealDBStorage {
             .bind(("terms", terms))
             .bind(("qv", query_vector.to_vec()))
             .bind(("sources", sources.to_vec()))
+            .bind(("message", MESSAGE_CONTENT_TYPE))
             .bind(("k", k as i64))
             .await?
             .check()?;

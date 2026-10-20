@@ -19,6 +19,7 @@ pub mod config;
 mod embeddings;
 /// Metric containers for incremental context processing and graph management
 pub mod managers;
+mod messages;
 /// System-level and session-level metrics snapshots
 pub mod metrics;
 #[cfg(feature = "embeddings")]

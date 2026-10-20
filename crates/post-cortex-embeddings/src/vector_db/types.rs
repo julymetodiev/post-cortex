@@ -49,6 +49,44 @@ impl StoredVector {
     }
 }
 
+/// Content type of raw conversation messages (the message stream), as
+/// opposed to structured records (context updates, entity descriptions).
+pub const MESSAGE_CONTENT_TYPE: &str = "Message";
+
+/// Which stored texts a search covers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Corpus {
+    /// Structured records only (the default).
+    #[default]
+    Records,
+    /// Raw messages only.
+    Messages,
+    /// Both.
+    All,
+}
+
+impl Corpus {
+    /// Whether a vector of `content_type` belongs to this corpus.
+    pub fn admits(self, content_type: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Records => content_type != MESSAGE_CONTENT_TYPE,
+            Self::Messages => content_type == MESSAGE_CONTENT_TYPE,
+        }
+    }
+
+    /// Parse the lowercase name.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "records" => Some(Self::Records),
+            "messages" => Some(Self::Messages),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
 /// Metadata for a vector
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorMetadata {

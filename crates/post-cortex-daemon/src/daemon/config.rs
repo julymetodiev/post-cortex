@@ -119,10 +119,20 @@ pub struct DaemonConfig {
     /// session (default: 1; 0 = hits only).
     #[serde(default = "default_neighbour_radius")]
     pub neighbour_radius: usize,
+
+    /// Days captured conversation messages are kept (`POST /api/messages`);
+    /// older ones are deleted with their vectors once a day. Structured
+    /// records are never expired. Default 90; 0 keeps messages forever.
+    #[serde(default = "default_message_retention_days")]
+    pub message_retention_days: u32,
 }
 
 fn default_neighbour_radius() -> usize {
     1
+}
+
+fn default_message_retention_days() -> u32 {
+    90
 }
 
 fn default_voyage_model() -> String {
@@ -171,6 +181,7 @@ impl Default for DaemonConfig {
             voyage_model: default_voyage_model(),
             search_mode: None,
             neighbour_radius: default_neighbour_radius(),
+            message_retention_days: default_message_retention_days(),
         }
     }
 }

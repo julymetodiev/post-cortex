@@ -134,7 +134,7 @@ impl DaemonServer {
 
         // Inject memory system into MCP tools global singleton
         // This enables all MCP tool functions to use daemon's shared memory system
-        post_cortex_mcp::inject_memory_system(memory_system.clone());
+        let _ = post_cortex_mcp::inject_memory_system(memory_system.clone());
 
         info!("Memory system initialized and injected successfully");
 

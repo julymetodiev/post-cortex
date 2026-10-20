@@ -84,6 +84,13 @@ pub trait PostCortexService: Send + Sync + 'static {
         req: BulkUpdateContextRequest,
     ) -> Result<BulkUpdateContextResponse, SystemError>;
 
+    /// Append captured conversation turns to a session's message stream.
+    /// Idempotent on each turn's `turn_id`.
+    async fn append_messages(
+        &self,
+        req: AppendMessagesRequest,
+    ) -> Result<AppendMessagesResponse, SystemError>;
+
     // ------------------------------------------------------------------
     // Read path
     // ------------------------------------------------------------------

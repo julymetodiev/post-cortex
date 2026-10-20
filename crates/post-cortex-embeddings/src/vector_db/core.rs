@@ -28,7 +28,7 @@ use dashmap::DashMap;
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use tracing::{debug, info, warn};
 
 use super::common::{SearchResult, TopK};
@@ -38,21 +38,27 @@ use super::product_quantization::ProductQuantizationCodebook;
 use super::similarity::{cosine_with_norms, l2_norm};
 use super::text_index::TextIndex;
 use super::types::{
-    SearchMatch, StoredVector, VectorDbStats, VectorDbStatsSnapshot, VectorMetadata,
+    Corpus, MESSAGE_CONTENT_TYPE, SearchMatch, StoredVector, VectorDbStats, VectorDbStatsSnapshot,
+    VectorMetadata,
 };
 
 // Type aliases to reduce complexity
 type QuantizationParams = Arc<arc_swap::ArcSwap<Option<(Vec<f32>, Vec<f32>)>>>;
 
-/// Content type of entity-description vectors; everything else counts as an
-/// update embedding for the per-source update queries.
+/// Content type of entity-description vectors. Neither these nor message
+/// vectors count as update embeddings for the per-source update queries.
 const ENTITY_DESCRIPTION: &str = "EntityDescription";
+
+/// Whether a vector of `content_type` embeds a context update.
+fn is_update(content_type: &str) -> bool {
+    content_type != ENTITY_DESCRIPTION && content_type != MESSAGE_CONTENT_TYPE
+}
 
 /// Ids belonging to one `VectorMetadata::source`.
 #[derive(Debug, Default)]
 struct SourceIds {
     ids: HashSet<u32>,
-    /// How many of `ids` are not `EntityDescription` vectors.
+    /// How many of `ids` embed context updates (see [`is_update`]).
     update_count: usize,
 }
 
@@ -66,6 +72,9 @@ pub struct VectorDB {
     by_source: DashMap<String, SourceIds>,
     /// Secondary index: `metadata.id` (content id) -> vector ids, oldest first
     by_content_id: DashMap<String, Vec<u32>>,
+    /// How many vectors embed raw messages ([`MESSAGE_CONTENT_TYPE`]); while
+    /// there are none, a records-only search needs no filter.
+    message_vectors: AtomicUsize,
     /// Configuration
     config: VectorDbConfig,
     /// Next available vector ID - atomic
@@ -135,6 +144,7 @@ impl VectorDB {
             metadata: Arc::new(DashMap::new()),
             by_source: DashMap::new(),
             by_content_id: DashMap::new(),
+            message_vectors: AtomicUsize::new(0),
             text_index: TextIndex::new(config.full_text_index),
             config,
             next_id: Arc::new(AtomicU32::new(0)),
@@ -255,8 +265,12 @@ impl VectorDB {
     fn index_metadata(&self, id: u32, metadata: &VectorMetadata) {
         {
             let mut entry = self.by_source.entry(metadata.source.clone()).or_default();
-            if entry.ids.insert(id) && metadata.content_type != ENTITY_DESCRIPTION {
-                entry.update_count += 1;
+            if entry.ids.insert(id) {
+                if is_update(&metadata.content_type) {
+                    entry.update_count += 1;
+                } else if metadata.content_type == MESSAGE_CONTENT_TYPE {
+                    self.message_vectors.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
         self.by_content_id
@@ -268,8 +282,12 @@ impl VectorDB {
 
     fn unindex_metadata(&self, id: u32, metadata: &VectorMetadata) {
         self.by_source.remove_if_mut(&metadata.source, |_, entry| {
-            if entry.ids.remove(&id) && metadata.content_type != ENTITY_DESCRIPTION {
-                entry.update_count = entry.update_count.saturating_sub(1);
+            if entry.ids.remove(&id) {
+                if is_update(&metadata.content_type) {
+                    entry.update_count = entry.update_count.saturating_sub(1);
+                } else if metadata.content_type == MESSAGE_CONTENT_TYPE {
+                    self.message_vectors.fetch_sub(1, Ordering::Relaxed);
+                }
             }
             entry.ids.is_empty()
         });
@@ -859,25 +877,25 @@ impl VectorDB {
     }
 
     /// BM25 top-`k` for `terms` (from [`Self::query_terms`]) over the
-    /// vectors' text, restricted to `sources` (empty = all), best first;
-    /// `similarity` is the cosine to `query_vector`. `None` when BM25
-    /// postings are off (`VectorDbConfig::full_text_index`).
+    /// vectors' text, restricted to `sources` (empty = all) and `corpus`,
+    /// best first; `similarity` is the cosine to `query_vector`. `None` when
+    /// BM25 postings are off (`VectorDbConfig::full_text_index`).
     pub fn search_text(
         &self,
         terms: &[String],
         query_vector: &[f32],
         k: usize,
         sources: &[String],
+        corpus: Corpus,
     ) -> Option<Vec<SearchMatch>> {
         if !self.text_index.has_postings() {
             return None;
         }
         let keep = |id: u32| {
-            sources.is_empty()
-                || self
-                    .metadata
-                    .get(&id)
-                    .is_some_and(|m| sources.iter().any(|s| *s == m.source))
+            self.metadata.get(&id).is_some_and(|m| {
+                corpus.admits(&m.content_type)
+                    && (sources.is_empty() || sources.iter().any(|s| *s == m.source))
+            })
         };
         let query_norm = l2_norm(query_vector);
         Some(
@@ -896,6 +914,16 @@ impl VectorDB {
                 })
                 .collect(),
         )
+    }
+
+    /// Whether a search in `corpus` has to filter by content type: false
+    /// when every stored vector belongs to it anyway.
+    pub fn needs_corpus_filter(&self, corpus: Corpus) -> bool {
+        match corpus {
+            Corpus::All => false,
+            Corpus::Records => self.message_vectors.load(Ordering::Relaxed) > 0,
+            Corpus::Messages => true,
+        }
     }
 
     /// If several vectors share the content id, returns the oldest; use
@@ -931,7 +959,7 @@ impl VectorDB {
             .filter_map(|id| {
                 self.metadata
                     .get(&id)
-                    .and_then(|m| (m.content_type != ENTITY_DESCRIPTION).then(|| m.id.clone()))
+                    .and_then(|m| is_update(&m.content_type).then(|| m.id.clone()))
             })
             .collect()
     }
@@ -955,6 +983,7 @@ impl VectorDB {
         self.metadata.clear();
         self.by_source.clear();
         self.by_content_id.clear();
+        self.message_vectors.store(0, Ordering::Relaxed);
         self.text_index.clear();
         self.hnsw_index.clear();
         self.hnsw_active.store(false, Ordering::Release);

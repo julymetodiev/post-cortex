@@ -7,6 +7,7 @@ use tokio::time::timeout;
 use tracing::{error, info, trace};
 use uuid::Uuid;
 
+use post_cortex_core::core::message::{Message, NewMessage};
 use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_proto::pb::{CascadeInvalidateReport, FreshnessEntry, SourceReference, SymbolId};
 use post_cortex_storage::traits::SessionSummary;
@@ -167,6 +168,31 @@ pub enum StorageMessage {
         updates: Vec<post_cortex_core::core::context_update::ContextUpdate>,
         /// One-shot channel for returning the result.
         response_tx: oneshot::Sender<Result<(), String>>,
+    },
+    /// Append turns to a session's message stream.
+    AppendMessages {
+        /// Session whose stream receives the turns.
+        session_id: Uuid,
+        /// Turns in conversation order.
+        messages: Vec<NewMessage>,
+        /// One-shot channel for returning the stored turns.
+        response_tx: oneshot::Sender<Result<Vec<Message>, String>>,
+    },
+    /// Load a range of a session's message stream.
+    LoadMessages {
+        /// Session whose stream is read.
+        session_id: Uuid,
+        /// Positions to load.
+        seqs: std::ops::Range<u64>,
+        /// One-shot channel for returning the messages.
+        response_tx: oneshot::Sender<Result<Vec<Message>, String>>,
+    },
+    /// Delete every message older than a cutoff (retention).
+    DeleteMessagesBefore {
+        /// Messages timestamped before this are deleted.
+        cutoff: chrono::DateTime<chrono::Utc>,
+        /// One-shot channel for returning `(session, seq)` of each deleted message.
+        response_tx: oneshot::Sender<Result<Vec<(Uuid, u64)>, String>>,
     },
     /// Register a source reference for freshness tracking.
     RegisterSource {
@@ -607,6 +633,61 @@ impl StorageActorHandle {
         .await
     }
 
+    /// Append turns to a session's message stream; returns those stored
+    /// (turns already captured are skipped). Ordered with the session's
+    /// other writes.
+    pub async fn append_messages(
+        &self,
+        session_id: Uuid,
+        messages: Vec<NewMessage>,
+    ) -> Result<Vec<Message>, String> {
+        self.send_request(
+            OperationType::Medium,
+            || format!("AppendMessages {session_id}"),
+            |response_tx| StorageMessage::AppendMessages {
+                session_id,
+                messages,
+                response_tx,
+            },
+        )
+        .await
+    }
+
+    /// Load the messages of `session_id` at positions `seqs`, in order.
+    pub async fn load_messages(
+        &self,
+        session_id: Uuid,
+        seqs: std::ops::Range<u64>,
+    ) -> Result<Vec<Message>, String> {
+        self.send_request(
+            OperationType::Fast,
+            || format!("LoadMessages {session_id}"),
+            |response_tx| StorageMessage::LoadMessages {
+                session_id,
+                seqs,
+                response_tx,
+            },
+        )
+        .await
+    }
+
+    /// Delete every message timestamped before `cutoff`, in all sessions;
+    /// returns `(session, seq)` of each.
+    pub async fn delete_messages_before(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<(Uuid, u64)>, String> {
+        self.send_request(
+            OperationType::Slow,
+            || format!("DeleteMessagesBefore {cutoff}"),
+            |response_tx| StorageMessage::DeleteMessagesBefore {
+                cutoff,
+                response_tx,
+            },
+        )
+        .await
+    }
+
     /// Register a source reference for freshness tracking.
     pub async fn register_source(
         &self,
@@ -989,6 +1070,46 @@ impl ActorContext {
                         session_id,
                         self.storage.batch_save_updates(session_id, updates),
                     )
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = response_tx.send(result);
+            }
+            StorageMessage::AppendMessages {
+                session_id,
+                messages,
+                response_tx,
+            } => {
+                // Exclusive per session: an append reads the next position
+                // before writing.
+                let result = self
+                    .persister
+                    .exclusive(
+                        session_id,
+                        self.storage.append_messages(session_id, messages),
+                    )
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = response_tx.send(result);
+            }
+            StorageMessage::LoadMessages {
+                session_id,
+                seqs,
+                response_tx,
+            } => {
+                let result = self
+                    .storage
+                    .load_messages(session_id, seqs)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = response_tx.send(result);
+            }
+            StorageMessage::DeleteMessagesBefore {
+                cutoff,
+                response_tx,
+            } => {
+                let result = self
+                    .storage
+                    .delete_messages_before(cutoff)
                     .await
                     .map_err(|e| e.to_string());
                 let _ = response_tx.send(result);

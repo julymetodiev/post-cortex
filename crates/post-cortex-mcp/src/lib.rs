@@ -276,16 +276,18 @@ static MEMORY_SYSTEM: LazyLock<ArcSwap<Option<Arc<ConversationMemorySystem>>>> =
 static SERVICE: LazyLock<ArcSwap<Option<Arc<MemoryServiceImpl>>>> =
     LazyLock::new(|| ArcSwap::new(Arc::new(None)));
 
-/// Inject a pre-built memory system for daemon mode.
-pub fn inject_memory_system(system: Arc<ConversationMemorySystem>) {
+/// Inject a pre-built memory system for daemon mode. Returns the canonical
+/// service built around it, for transports outside the MCP tools to share.
+pub fn inject_memory_system(system: Arc<ConversationMemorySystem>) -> Arc<MemoryServiceImpl> {
     info!("MCP-TOOLS: Injecting external memory system for daemon mode");
     // Wrap the injected system in a canonical service and store it
     // alongside the raw handle so write-path callers can pick it up
     // without reconstructing the Pipeline on every request.
     let service = Arc::new(MemoryServiceImpl::new(system.clone()));
     MEMORY_SYSTEM.store(Arc::new(Some(system)));
-    SERVICE.store(Arc::new(Some(service)));
+    SERVICE.store(Arc::new(Some(service.clone())));
     info!("MCP-TOOLS: Memory system injection complete");
+    service
 }
 
 /// Return the cached canonical service, building it from the current

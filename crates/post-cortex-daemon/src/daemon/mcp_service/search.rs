@@ -113,6 +113,7 @@ pub(super) async fn handle(
                 req.interaction_type.clone(),
                 validated_recency_bias,
                 req.mode.clone(),
+                req.sources.clone(),
             )
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -186,6 +187,10 @@ pub(super) async fn handle(
             let mode = post_cortex_mcp::search::parse_mode(req.mode.clone()).map_err(|e| {
                 McpError::invalid_params(e, Some(serde_json::json!({"parameter": "mode"})))
             })?;
+            let corpus =
+                post_cortex_mcp::search::parse_sources(req.sources.clone()).map_err(|e| {
+                    McpError::invalid_params(e, Some(serde_json::json!({"parameter": "sources"})))
+                })?;
             let results = system
                 .semantic_search_multisession(
                     &session_ids,
@@ -195,6 +200,7 @@ pub(super) async fn handle(
                         date_range,
                         recency_bias: validated_recency_bias,
                         mode,
+                        corpus,
                         ..Default::default()
                     },
                 )
@@ -222,6 +228,7 @@ pub(super) async fn handle(
                 req.interaction_type.clone(),
                 validated_recency_bias,
                 req.mode.clone(),
+                req.sources.clone(),
             )
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;

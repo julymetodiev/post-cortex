@@ -19,11 +19,14 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use post_cortex_core::core::context_update::ContextUpdate;
+use post_cortex_core::core::message::{self, Message};
 use post_cortex_core::graph::retrieval_graph;
 use post_cortex_core::session::active_session::ActiveSession;
-use post_cortex_embeddings::VectorMetadata;
+use post_cortex_embeddings::{MESSAGE_CONTENT_TYPE, VectorMetadata};
 
-use super::types::{CHUNK_PARENT_KEY, ContentType};
+use super::types::{
+    CHUNK_PARENT_KEY, ContentType, MESSAGE_AUTHOR_KEY, MESSAGE_ROLE_KEY, MESSAGE_SEQ_KEY,
+};
 use super::vectorizer::{ContentVectorizer, source_content_ids};
 
 /// Threshold for switching to parallel processing.
@@ -149,6 +152,42 @@ impl ContentVectorizer {
             );
             session.vectorized_update_ids.insert(update.id);
             self.invalidate_cached(session.id());
+        }
+        Ok(added.len())
+    }
+
+    /// Vectorize turns of a session's message stream (see
+    /// [`message_vectors`]); turns too short to embed are skipped. Returns
+    /// how many vectors were added.
+    ///
+    /// # Errors
+    /// Returns an error if the texts cannot be embedded.
+    pub async fn vectorize_messages(&self, messages: &[Message]) -> Result<usize> {
+        let vectors: Vec<(String, VectorMetadata)> = messages
+            .iter()
+            .filter(|m| self.should_vectorize_text(&m.text))
+            .flat_map(|m| message_vectors(m, self.config.max_text_length))
+            .collect();
+        if vectors.is_empty() {
+            return Ok(0);
+        }
+        let attempted = vectors.len();
+        let (texts, metadata): (Vec<String>, Vec<VectorMetadata>) = vectors.into_iter().unzip();
+        let embeddings = self.embedding_engine.encode_batch(texts).await?;
+        if embeddings.len() != attempted {
+            anyhow::bail!(
+                "{} embeddings generated for {} message texts",
+                embeddings.len(),
+                attempted
+            );
+        }
+        let added = self
+            .add_and_persist_many(embeddings.into_iter().zip(metadata).collect())
+            .await;
+        let mut sessions: Vec<Uuid> = messages.iter().map(|m| m.session_id).collect();
+        sessions.dedup();
+        for session_id in sessions {
+            self.invalidate_cached(session_id);
         }
         Ok(added.len())
     }
@@ -490,6 +529,42 @@ fn update_vectors(
             } else {
                 metadata =
                     metadata.with_metadata(CHUNK_PARENT_KEY.to_string(), update.id.to_string());
+            }
+            (chunk.to_string(), metadata)
+        })
+        .collect()
+}
+
+/// The vectors of one message: its text chunked like an update's (see
+/// [`update_vectors`]), content ids `message:<seq>` and `message:<seq>#<n>`,
+/// with the role, author and position in the metadata.
+fn message_vectors(message: &Message, chunk_size: usize) -> Vec<(String, VectorMetadata)> {
+    let parent = message::content_id(message.seq);
+    chunk_text(&message.text, chunk_size, CHUNK_OVERLAP)
+        .into_iter()
+        .enumerate()
+        .map(|(n, chunk)| {
+            let id = match n {
+                0 => parent.clone(),
+                n => format!("{}#{}", parent, n + 1),
+            };
+            let mut metadata = VectorMetadata::new(
+                id,
+                chunk.to_string(),
+                message.session_id.to_string(),
+                MESSAGE_CONTENT_TYPE.to_string(),
+            )
+            .with_timestamp(message.timestamp)
+            .with_metadata(
+                MESSAGE_ROLE_KEY.to_string(),
+                message.role.as_str().to_string(),
+            )
+            .with_metadata(MESSAGE_SEQ_KEY.to_string(), message.seq.to_string());
+            if let Some(author) = &message.author {
+                metadata = metadata.with_metadata(MESSAGE_AUTHOR_KEY.to_string(), author.clone());
+            }
+            if n > 0 {
+                metadata = metadata.with_metadata(CHUNK_PARENT_KEY.to_string(), parent.clone());
             }
             (chunk.to_string(), metadata)
         })

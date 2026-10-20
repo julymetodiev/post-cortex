@@ -51,6 +51,8 @@ Nine tools. IDs are UUID strings. Optional fields can be omitted.
 | `recency_bias` | `0` (off, default) … `1.0+`; score × e^(−λ·days/365) |
 | `interaction_type` | array filter, e.g. `["decision_made","problem_solved"]` |
 | `date_from`, `date_to` | `YYYY-MM-DD` or RFC 3339 |
+| `mode` | `fast` \| `local` \| `accurate`; default set by the server |
+| `sources` | `records` (default) \| `messages` \| `all`; `messages` searches the raw conversation turns captured by client hooks, each returned with the turns around it |
 | `select` | one JSONPath, e.g. `$.results[0:3].text_content` |
 | `select_map` | `{key: JSONPath}`, e.g. `{"texts":"$.results[*].text_content","ids":"$.results[*].content_id"}` |
 

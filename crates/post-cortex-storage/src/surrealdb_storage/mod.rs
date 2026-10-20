@@ -31,6 +31,7 @@ mod core;
 mod freshness;
 mod graph;
 mod import_export;
+mod messages;
 mod records;
 mod sessions;
 mod text_search;

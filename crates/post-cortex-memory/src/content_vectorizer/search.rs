@@ -23,7 +23,9 @@ use uuid::Uuid;
 
 use post_cortex_core::graph::retrieval_graph::{self, GraphRecord};
 use post_cortex_core::session::active_session::ActiveSession;
-use post_cortex_embeddings::{Reranker, SearchMatch, cosine_similarity};
+use post_cortex_embeddings::{
+    Corpus, MESSAGE_CONTENT_TYPE, Reranker, SearchMatch, VectorMetadata, cosine_similarity,
+};
 
 use crate::query_cache::CacheScope;
 
@@ -47,6 +49,13 @@ pub(crate) const RERANK_POOL: usize = 300;
 const RRF_K: f32 = 60.0;
 
 type DateRange = Option<(DateTime<Utc>, DateTime<Utc>)>;
+
+/// Whether `metadata` is in `corpus` and dated within `date_range`.
+fn admits(corpus: Corpus, date_range: DateRange, metadata: &VectorMetadata) -> bool {
+    corpus.admits(&metadata.content_type)
+        && date_range
+            .is_none_or(|(start, end)| metadata.timestamp >= start && metadata.timestamp <= end)
+}
 
 impl ContentVectorizer {
     /// Perform semantic search across all vectorized content.
@@ -91,6 +100,7 @@ impl ContentVectorizer {
             Some(session_id) => (1u8, CacheScope::Session(session_id)),
             None => (0u8, CacheScope::Global),
         };
+        let corpus = options.corpus;
         let (mode, reranker) = self.reranker_for(options.mode);
         let params_hash = params_hash(
             query,
@@ -100,6 +110,7 @@ impl ContentVectorizer {
             date_range,
             recency_bias,
             mode,
+            corpus,
         );
 
         // Check the cache before paying for the embedding.
@@ -119,39 +130,38 @@ impl ContentVectorizer {
                 &query_embedding,
                 limit,
                 &sources,
+                corpus,
                 date_range,
                 reranker.is_some(),
             )
             .await;
         let depth = search_depth(limit, lexical.as_ref(), reranker.is_some());
 
-        let search_results = match (session_filter, date_range) {
-            (Some(session_id), Some((start, end))) => {
-                self.vector_db.search_in_sources_with_filter(
-                    &query_embedding,
-                    depth,
-                    &[session_id.to_string()],
-                    |metadata| metadata.timestamp >= start && metadata.timestamp <= end,
-                )?
-            }
-            (Some(session_id), None) => {
+        let filtered = date_range.is_some() || self.vector_db.needs_corpus_filter(corpus);
+        let keep = |metadata: &VectorMetadata| admits(corpus, date_range, metadata);
+        let search_results = match (session_filter, filtered) {
+            (Some(session_id), true) => self.vector_db.search_in_sources_with_filter(
+                &query_embedding,
+                depth,
+                &[session_id.to_string()],
+                keep,
+            )?,
+            (Some(session_id), false) => {
                 self.vector_db
                     .search_in_source(&query_embedding, depth, &session_id.to_string())?
             }
-            (None, Some((start, end))) => {
-                self.vector_db
-                    .search_with_filter(&query_embedding, depth, |metadata| {
-                        metadata.timestamp >= start && metadata.timestamp <= end
-                    })?
-            }
-            (None, None) => self.vector_db.search(&query_embedding, depth)?,
+            (None, true) => self
+                .vector_db
+                .search_with_filter(&query_embedding, depth, keep)?,
+            (None, false) => self.vector_db.search(&query_embedding, depth)?,
         };
+        // The retrieval graph links records only.
         let graph = match (
             reranker,
             session_filter,
             options.graph_candidates.as_deref(),
         ) {
-            (Some(_), Some(session_id), Some(ids)) => {
+            (Some(_), Some(session_id), Some(ids)) if corpus != Corpus::Messages => {
                 Some(self.graph_matches(ids, &query_embedding, &session_id.to_string(), date_range))
             }
             _ => None,
@@ -213,8 +223,18 @@ impl ContentVectorizer {
         sessions.sort_unstable();
         sessions.dedup();
 
+        let corpus = options.corpus;
         let (mode, reranker) = self.reranker_for(options.mode);
-        let params_hash = params_hash(query, limit, 2, &sessions, date_range, recency_bias, mode);
+        let params_hash = params_hash(
+            query,
+            limit,
+            2,
+            &sessions,
+            date_range,
+            recency_bias,
+            mode,
+            corpus,
+        );
 
         if let Some(ref cache) = self.query_cache
             && let Some(cached) = cache.get(params_hash, query)
@@ -235,17 +255,18 @@ impl ContentVectorizer {
                 &query_embedding,
                 limit,
                 &sources,
+                corpus,
                 date_range,
                 reranker.is_some(),
             )
             .await;
         let depth = search_depth(limit, lexical.as_ref(), reranker.is_some());
-        let search_results = if let Some((start, end)) = date_range {
+        let search_results = if date_range.is_some() || self.vector_db.needs_corpus_filter(corpus) {
             self.vector_db.search_in_sources_with_filter(
                 &query_embedding,
                 depth,
                 &sources,
-                |metadata| metadata.timestamp >= start && metadata.timestamp <= end,
+                |metadata| admits(corpus, date_range, metadata),
             )?
         } else {
             self.vector_db
@@ -269,8 +290,8 @@ impl ContentVectorizer {
         Ok(results)
     }
 
-    /// BM25 hits over the same sessions (`sources`; empty means all) and date
-    /// range, for the query's words that are not too common
+    /// BM25 hits over the same sessions (`sources`; empty means all), corpus
+    /// and date range, for the query's words that are not too common
     /// ([`VectorDB::query_terms`](post_cortex_embeddings::VectorDB::query_terms)):
     /// from the storage backend's full-text index (SurrealDB), else from the
     /// vector DB's in-memory one (RocksDB). `None` when neither has one, no
@@ -281,6 +302,7 @@ impl ContentVectorizer {
         query_embedding: &[f32],
         limit: usize,
         sources: &[String],
+        corpus: Corpus,
         date_range: DateRange,
         reranking: bool,
     ) -> Option<Vec<SearchMatch>> {
@@ -291,7 +313,7 @@ impl ContentVectorizer {
         let depth = limit.max(pool_depth(reranking));
         let from_storage = match &self.persistent_storage {
             Some(storage) => storage
-                .search_text(&terms.join(" "), query_embedding, depth, sources)
+                .search_text(&terms.join(" "), query_embedding, depth, sources, corpus)
                 .await
                 .unwrap_or_else(|e| {
                     debug!("Full-text search failed, using vectors only: {:#}", e);
@@ -301,7 +323,7 @@ impl ContentVectorizer {
         };
         let mut hits = from_storage.or_else(|| {
             self.vector_db
-                .search_text(&terms, query_embedding, depth, sources)
+                .search_text(&terms, query_embedding, depth, sources, corpus)
         })?;
         if let Some((start, end)) = date_range {
             hits.retain(|m| m.metadata.timestamp >= start && m.metadata.timestamp <= end);
@@ -323,10 +345,12 @@ impl ContentVectorizer {
             .source_vector_ids(&session_id.to_string())
             .into_iter()
             .filter_map(|id| self.vector_db.get_metadata(id))
-            // Records, not chunks: the first chunk carries the whole update's
+            // Updates, not chunks: the first chunk carries the whole update's
             // terms.
             .filter(|m| {
-                m.content_type != "EntityDescription" && !m.metadata.contains_key(CHUNK_PARENT_KEY)
+                m.content_type != "EntityDescription"
+                    && m.content_type != MESSAGE_CONTENT_TYPE
+                    && !m.metadata.contains_key(CHUNK_PARENT_KEY)
             })
             .map(|m| {
                 let terms = match m.metadata.get(retrieval_graph::TERMS_KEY) {
@@ -710,6 +734,7 @@ fn params_hash(
     date_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
     recency_bias: f32,
     mode: SearchMode,
+    corpus: Corpus,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     query.hash(&mut hasher);
@@ -725,6 +750,7 @@ fn params_hash(
         recency_bias.to_bits().hash(&mut hasher);
     }
     mode.hash(&mut hasher);
+    corpus.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -736,6 +762,7 @@ fn parse_content_type(content_type_str: &str) -> ContentType {
         "CodeSnippet" => ContentType::CodeSnippet,
         "ProblemSolution" => ContentType::ProblemSolution,
         "SessionMetadata" => ContentType::SessionMetadata,
+        MESSAGE_CONTENT_TYPE => ContentType::Message,
         _ => ContentType::UpdateContent,
     }
 }

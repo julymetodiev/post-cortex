@@ -26,13 +26,15 @@ use uuid::Uuid;
 use post_cortex_core::core::context_update::{
     ContextUpdate, EntityRelationship, RelationType, UpdateContent, UpdateType,
 };
+use post_cortex_core::core::message::{Message, MessageRole, NewMessage};
 use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_embeddings::{
-    EmbeddingConfig, EmbeddingModelType, Reranker, SearchMatch, VectorDbConfig, VectorMetadata,
+    Corpus, EmbeddingConfig, EmbeddingModelType, Reranker, SearchMatch, VectorDbConfig,
+    VectorMetadata,
 };
 use post_cortex_storage::traits::VectorStorage;
 
-use super::{ContentVectorizer, ContentVectorizerConfig, SearchOptions};
+use super::{ContentType, ContentVectorizer, ContentVectorizerConfig, SearchOptions};
 
 /// In-memory persisted embeddings, keyed like RocksDB: (session, content id).
 #[derive(Default)]
@@ -110,6 +112,7 @@ impl VectorStorage for FakeStorage {
         _query_vector: &[f32],
         k: usize,
         sources: &[String],
+        corpus: Corpus,
     ) -> Result<Option<Vec<SearchMatch>>> {
         let Some(ids) = self.full_text.lock().clone() else {
             return Ok(None);
@@ -119,6 +122,7 @@ impl VectorStorage for FakeStorage {
             ids.iter()
                 .flat_map(|id| rows.values().filter(move |(_, m)| &m.id == id))
                 .filter(|(_, m)| sources.is_empty() || sources.contains(&m.source))
+                .filter(|(_, m)| corpus.admits(&m.content_type))
                 .take(k)
                 .map(|(_, metadata)| SearchMatch {
                     vector_id: 0,
@@ -710,7 +714,7 @@ async fn in_memory_bm25_when_storage_has_none() {
     assert!(
         plain
             .vector_db
-            .search_text(&terms, &query_vector, 5, &sources)
+            .search_text(&terms, &query_vector, 5, &sources, Corpus::Records)
             .is_none()
     );
 
@@ -722,7 +726,7 @@ async fn in_memory_bm25_when_storage_has_none() {
     assert_eq!(terms, ["zebracorn"]);
     let hits = v
         .vector_db
-        .search_text(&terms, &query_vector, 5, &sources)
+        .search_text(&terms, &query_vector, 5, &sources, Corpus::Records)
         .unwrap();
     assert!(
         hits[0].metadata.text.contains("zebracorn migration"),
@@ -805,4 +809,84 @@ async fn long_updates_are_chunked_and_found_whole() {
             .iter()
             .all(|id| v.vector_db.find_vector_id_by_content_id(id).is_none())
     );
+}
+
+fn chat(session_id: Uuid, seq: u64, text: &str) -> Message {
+    NewMessage {
+        turn_id: format!("turn-{seq}"),
+        role: if seq.is_multiple_of(2) {
+            MessageRole::User
+        } else {
+            MessageRole::Assistant
+        },
+        author: None,
+        source_session: None,
+        timestamp: Utc::now(),
+        text: text.to_string(),
+        tools: Vec::new(),
+        files: Vec::new(),
+    }
+    .into_message(session_id, seq)
+}
+
+/// Messages are embedded as `Message` vectors under `message:<seq>`, are
+/// left out of searches unless asked for, and do not count as vectorized
+/// updates of the session.
+#[tokio::test]
+async fn messages_are_searched_only_when_asked_for() {
+    let session = session_with(&[("zebracorn migration plan", "zebra")]).await;
+    let (v, storage) = vectorizer_with(true).await;
+    v.vectorize_session(&session).await.unwrap();
+    let messages = [
+        chat(session.id(), 0, "what happened to the zebracorn yesterday?"),
+        chat(session.id(), 1, "the zebracorn import failed on a timeout"),
+    ];
+    assert_eq!(v.vectorize_messages(&messages).await.unwrap(), 2);
+    assert!(
+        storage
+            .rows
+            .lock()
+            .contains_key(&(session.id().to_string(), "message:1".to_string())),
+        "message vectors are persisted"
+    );
+    assert!(
+        !v.needs_vectorization(&session),
+        "messages are not updates waiting for vectors"
+    );
+
+    let search = |corpus: Corpus| {
+        v.semantic_search(
+            "zebracorn",
+            10,
+            Some(session.id()),
+            SearchOptions {
+                recency_bias: Some(0.0),
+                corpus,
+                ..SearchOptions::default()
+            },
+        )
+    };
+    let records = search(Corpus::Records).await.unwrap();
+    assert!(!records.is_empty());
+    assert!(
+        records
+            .iter()
+            .all(|r| r.content_type != ContentType::Message),
+        "{records:?}"
+    );
+    let mut ids: Vec<String> = search(Corpus::Messages)
+        .await
+        .unwrap()
+        .into_iter()
+        .inspect(|r| assert_eq!(r.content_type, ContentType::Message))
+        .map(|r| r.content_id)
+        .collect();
+    ids.sort();
+    assert_eq!(ids, ["message:0", "message:1"]);
+    assert_eq!(search(Corpus::All).await.unwrap().len(), records.len() + 2);
+
+    v.remove_content(session.id(), "message:0").await.unwrap();
+    let left = search(Corpus::Messages).await.unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].content_id, "message:1");
 }

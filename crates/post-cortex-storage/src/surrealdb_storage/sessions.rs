@@ -588,6 +588,8 @@ impl Storage for SurrealDBStorage {
              DELETE context_update WHERE session_id = $session_id; \
              DELETE entity WHERE session_id = $session_id; \
              DELETE embedding WHERE session_id = $session_id; \
+             DELETE message WHERE session_id = $session_id; \
+             DELETE type::record('message_next', $session_id); \
              DELETE workspace_session WHERE session_id = $session_id; {}",
             per_relation_table("DELETE {table} WHERE session_id = $session_id;")
         );

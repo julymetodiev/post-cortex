@@ -37,6 +37,20 @@ fn parse_date_range(
     }
 }
 
+/// Parse an optional `sources` argument (`records`, `messages`, `all`;
+/// default `records`).
+#[cfg(feature = "embeddings")]
+pub fn parse_sources(
+    sources: Option<String>,
+) -> std::result::Result<post_cortex_embeddings::Corpus, String> {
+    match sources.as_deref().map(str::trim) {
+        None | Some("") => Ok(post_cortex_embeddings::Corpus::default()),
+        Some(s) => post_cortex_embeddings::Corpus::parse(&s.to_lowercase()).ok_or_else(|| {
+            format!("Invalid sources '{s}': expected 'records', 'messages' or 'all'")
+        }),
+    }
+}
+
 /// Parse an optional `mode` argument (`fast`, `local`, `accurate`).
 #[cfg(feature = "embeddings")]
 pub fn parse_mode(
@@ -242,6 +256,7 @@ pub async fn semantic_search_global(
     interaction_type: Option<Vec<String>>,
     recency_bias: Option<f32>,
     mode: Option<String>,
+    sources: Option<String>,
 ) -> Result<MCPToolResult> {
     info!(
         "MCP-TOOLS: semantic_search_global() called with query: '{}' and recency_bias: {:?}",
@@ -269,6 +284,10 @@ pub async fn semantic_search_global(
         Ok(m) => m,
         Err(msg) => return Ok(MCPToolResult::error(msg)),
     };
+    let corpus = match parse_sources(sources) {
+        Ok(c) => c,
+        Err(msg) => return Ok(MCPToolResult::error(msg)),
+    };
     let limit = limit.unwrap_or(10);
     let results = match system
         .semantic_search_global(
@@ -278,6 +297,7 @@ pub async fn semantic_search_global(
                 date_range,
                 recency_bias,
                 mode,
+                corpus,
                 ..Default::default()
             },
         )
@@ -323,6 +343,7 @@ pub async fn semantic_search_session(
     interaction_type: Option<Vec<String>>,
     recency_bias: Option<f32>,
     mode: Option<String>,
+    sources: Option<String>,
 ) -> Result<MCPToolResult> {
     info!(
         "MCP-TOOLS: semantic_search_session() called for session {} with query: '{}'",
@@ -347,6 +368,10 @@ pub async fn semantic_search_session(
         Ok(m) => m,
         Err(msg) => return Ok(MCPToolResult::error(msg)),
     };
+    let corpus = match parse_sources(sources) {
+        Ok(c) => c,
+        Err(msg) => return Ok(MCPToolResult::error(msg)),
+    };
     let limit = limit.unwrap_or(10);
     let results = match system
         .semantic_search_session(
@@ -357,6 +382,7 @@ pub async fn semantic_search_session(
                 date_range,
                 recency_bias,
                 mode,
+                corpus,
                 ..Default::default()
             },
         )
@@ -608,7 +634,7 @@ pub async fn get_vectorization_stats() -> Result<MCPToolResult> {
 
 #[cfg(all(test, feature = "embeddings"))]
 mod tests {
-    use super::format_results_message;
+    use super::{format_results_message, parse_sources};
     use chrono::{Duration, Utc};
     use post_cortex_memory::content_vectorizer::{ContentType, SemanticSearchResult};
     use uuid::Uuid;
@@ -644,5 +670,15 @@ mod tests {
         assert!(lines[2].starts_with('*') && lines[2].ends_with("text a"));
         assert!(message.contains("(2 matches, 1 neighbouring records)"));
         assert_eq!(message.matches("---").count(), 2);
+    }
+
+    #[test]
+    fn sources_default_to_records() {
+        use post_cortex_embeddings::Corpus;
+        assert_eq!(parse_sources(None), Ok(Corpus::Records));
+        assert_eq!(parse_sources(Some(String::new())), Ok(Corpus::Records));
+        assert_eq!(parse_sources(Some("Messages".into())), Ok(Corpus::Messages));
+        assert_eq!(parse_sources(Some("all".into())), Ok(Corpus::All));
+        assert!(parse_sources(Some("chats".into())).is_err());
     }
 }

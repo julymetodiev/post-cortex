@@ -43,6 +43,7 @@ use post_cortex_core::workspace::SessionRole;
 
 use super::RealRocksDBStorage;
 use super::core::{SessionLocks, blocking, keys_with_prefix, prefix_read_opts, scan_prefix};
+use super::messages::message_next_key;
 use super::types::{SessionCheckpoint, StoredWorkspace, StoredWorkspaceSession};
 
 const SESSION_PREFIX: &str = "session:";
@@ -634,8 +635,8 @@ impl RealRocksDBStorage {
     }
 
     /// Delete a session and everything stored under its id: blob, update
-    /// rows and index, meta, embeddings, entities, relationships and
-    /// workspace memberships.
+    /// rows and index, meta, messages, embeddings, entities, relationships
+    /// and workspace memberships.
     pub async fn delete_session(&self, session_id: Uuid) -> Result<()> {
         let db = self.db.clone();
         let locks = self.session_locks.clone();
@@ -647,10 +648,13 @@ impl RealRocksDBStorage {
             batch.delete(session_key(session_id).as_bytes());
             batch.delete(update_index_key(session_id).as_bytes());
             batch.delete(meta_key(session_id).as_bytes());
+            batch.delete(message_next_key(session_id).as_bytes());
 
             let mut deleted = 0usize;
             for prefix in [
                 format!("session:{}:", session_id),
+                format!("message:{}:", session_id),
+                format!("message_turn:{}:", session_id),
                 format!("embedding:{}:", session_id),
                 format!("entity:{}:", session_id),
                 format!("relationship:{}:", session_id),

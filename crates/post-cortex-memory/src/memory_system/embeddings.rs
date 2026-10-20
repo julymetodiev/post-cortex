@@ -675,11 +675,12 @@ impl ConversationMemorySystem {
                 let session = session_arc.load_full();
                 let results = enrich_results_with_graph(&session, query, results);
                 let sessions = std::collections::HashMap::from([(session_id, session)]);
-                Ok(super::neighbours::complete_results(
+                let results = super::neighbours::complete_results(
                     results,
                     &sessions,
                     self.config.neighbour_radius,
-                ))
+                );
+                Ok(self.complete_message_results(results).await)
             }
             Err(e) => Err(format!("Session semantic search failed: {e}")),
         }
@@ -719,8 +720,8 @@ impl ConversationMemorySystem {
             .into()
     }
 
-    /// Complete results from their sessions: full text for long update hits
-    /// and the neighbours of every update hit
+    /// Complete results from their sessions: full text for long update and
+    /// message hits and the neighbours of every update and message hit
     /// (`SystemConfig::neighbour_radius`). Sessions that fail to load keep
     /// their results as they are.
     #[cfg(feature = "embeddings")]
@@ -741,7 +742,9 @@ impl ConversationMemorySystem {
                 Err(e) => warn!("Results of session {} left incomplete: {}", id, e),
             }
         }
-        super::neighbours::complete_results(results, &sessions, self.config.neighbour_radius)
+        let results =
+            super::neighbours::complete_results(results, &sessions, self.config.neighbour_radius);
+        self.complete_message_results(results).await
     }
 
     /// Find related content across sessions

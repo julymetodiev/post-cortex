@@ -37,6 +37,9 @@ pub enum ContentType {
     ProblemSolution,
     /// General session metadata
     SessionMetadata,
+    /// A raw conversation turn from the message stream
+    /// (`post_cortex_core::core::message`)
+    Message,
 }
 
 impl ContentType {
@@ -50,6 +53,7 @@ impl ContentType {
             Self::UpdateContent => 0.7,
             Self::CodeSnippet => 0.6,
             Self::EntityDescription => 0.5,
+            Self::Message => 0.4,
             Self::SessionMetadata => 0.3,
         }
     }
@@ -131,6 +135,15 @@ impl SemanticSearchResult {
 /// chunk but the first (whose content id is the update's id).
 pub const CHUNK_PARENT_KEY: &str = "parent";
 
+/// Metadata key of a message vector: `user` or `assistant`.
+pub const MESSAGE_ROLE_KEY: &str = "role";
+
+/// Metadata key of a message vector: the turn's author, when known.
+pub const MESSAGE_AUTHOR_KEY: &str = "author";
+
+/// Metadata key of a message vector: the turn's position in its stream.
+pub const MESSAGE_SEQ_KEY: &str = "seq";
+
 /// Configuration for content vectorization
 #[derive(Debug, Clone)]
 pub struct ContentVectorizerConfig {
@@ -200,6 +213,9 @@ pub struct SearchOptions {
     /// (`post_cortex_core::graph::retrieval_graph`). In a single-session
     /// search that is reranked they join the vector and BM25 candidates.
     pub graph_candidates: Option<std::sync::Arc<[String]>>,
+
+    /// Structured records, raw messages or both (default: records).
+    pub corpus: post_cortex_embeddings::Corpus,
 }
 
 /// How much work a search puts into ranking. LoCoMo all@50 with ±1

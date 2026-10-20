@@ -502,9 +502,12 @@ impl PostCortex for PcxGrpcService {
                 ),
                 None => None,
             };
+            let corpus = post_cortex_mcp::search::parse_sources(req.sources.clone())
+                .map_err(Status::invalid_argument)?;
             let options = SearchOptions {
                 limit: Some(max_results),
                 mode,
+                corpus,
                 ..Default::default()
             };
             // workspace_id takes precedence over session_id

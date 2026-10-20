@@ -13,7 +13,13 @@ use axum::{
     http::StatusCode,
     routing::{delete, get, post},
 };
+use post_cortex_core::core::error::SystemError;
+use post_cortex_core::core::message::{MessageRole, NewMessage};
+use post_cortex_core::services::{
+    AppendMessagesRequest, AppendMessagesResponse, PostCortexService as _,
+};
 use post_cortex_memory::ConversationMemorySystem;
+use post_cortex_memory::services::MemoryServiceImpl;
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
@@ -128,7 +134,7 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
     }
 
     // Inject memory system into MCP tools so they use shared instance
-    post_cortex_mcp::inject_memory_system(memory_system.clone());
+    let service = post_cortex_mcp::inject_memory_system(memory_system.clone());
     info!("Memory system injected into MCP tools");
 
     // Clear query cache to prevent stale vector IDs from previous runs
@@ -141,8 +147,11 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
     // Create cancellation token for graceful shutdown
     let ct = CancellationToken::new();
 
+    spawn_message_retention(memory_system.clone(), config.message_retention_days, &ct);
+
     let router = build_router(
         memory_system.clone(),
+        service,
         &host_policy,
         config.auth_token.clone(),
         &ct,
@@ -225,6 +234,37 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// How often expired messages are deleted.
+const MESSAGE_RETENTION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+/// Delete captured messages older than `retention_days` at startup and then
+/// daily, until `ct` is cancelled. `0` keeps messages forever.
+fn spawn_message_retention(
+    memory_system: Arc<ConversationMemorySystem>,
+    retention_days: u32,
+    ct: &CancellationToken,
+) {
+    if retention_days == 0 {
+        info!("  Message retention: forever");
+        return;
+    }
+    info!("  Message retention: {} days", retention_days);
+    let ct = ct.child_token();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(MESSAGE_RETENTION_INTERVAL);
+        loop {
+            tokio::select! {
+                _ = ct.cancelled() => break,
+                _ = interval.tick() => {}
+            }
+            let cutoff = chrono::Utc::now() - chrono::Duration::days(i64::from(retention_days));
+            if let Err(e) = memory_system.expire_messages(cutoff).await {
+                error!("Message retention failed: {e}");
+            }
+        }
+    });
+}
+
 /// Builds the HTTP app: rmcp's Streamable HTTP service on `/mcp`, the REST
 /// API on `/api/*` and `/health`.
 ///
@@ -233,6 +273,7 @@ pub async fn start_rmcp_daemon(config: DaemonConfig) -> Result<(), String> {
 /// `auth_token` set every route but `/health` also needs the bearer token.
 pub fn build_router(
     memory_system: Arc<ConversationMemorySystem>,
+    service: Arc<MemoryServiceImpl>,
     host_policy: &HostPolicy,
     auth_token: Option<String>,
     ct: &CancellationToken,
@@ -247,7 +288,10 @@ pub fn build_router(
             .apply(StreamableHttpServerConfig::default().with_cancellation_token(ct.child_token())),
     );
 
-    let api_state = Arc::new(ApiState { memory_system });
+    let api_state = Arc::new(ApiState {
+        memory_system,
+        service,
+    });
     let api_router = Router::new()
         .route("/health", get(api_health))
         .route(
@@ -264,6 +308,7 @@ pub fn build_router(
             "/api/workspaces/{workspace_id}/sessions/{session_id}",
             post(api_attach_session),
         )
+        .route("/api/messages", post(api_append_messages))
         .with_state(api_state)
         .layer(axum::middleware::from_fn_with_state(
             Arc::new(host_policy.clone()),
@@ -331,6 +376,8 @@ async fn terminate_signal() {
 /// Shared state for API handlers
 struct ApiState {
     memory_system: Arc<ConversationMemorySystem>,
+    /// Canonical service (redaction, validation) for the write endpoints.
+    service: Arc<MemoryServiceImpl>,
 }
 
 #[derive(Serialize)]
@@ -365,11 +412,75 @@ struct AttachSessionRequest {
     role: Option<String>,
 }
 
+/// Body of `POST /api/messages`: captured turns from a client hook.
+#[derive(Deserialize)]
+struct AppendMessagesBody {
+    session_id: Uuid,
+    messages: Vec<MessageBody>,
+}
+
+/// One captured turn; see [`NewMessage`] for the fields.
+#[derive(Deserialize)]
+struct MessageBody {
+    turn_id: String,
+    role: MessageRole,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default)]
+    source_session: Option<String>,
+    /// Defaults to the time of the request.
+    #[serde(default)]
+    timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    text: String,
+    #[serde(default)]
+    tools: Vec<String>,
+    #[serde(default)]
+    files: Vec<String>,
+}
+
+impl MessageBody {
+    fn into_new_message(self, now: chrono::DateTime<chrono::Utc>) -> NewMessage {
+        NewMessage {
+            turn_id: self.turn_id,
+            role: self.role,
+            author: self.author,
+            source_session: self.source_session,
+            timestamp: self.timestamp.unwrap_or(now),
+            text: self.text,
+            tools: self.tools,
+            files: self.files,
+        }
+    }
+}
+
 async fn api_health() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "ok",
         "service": "post-cortex"
     }))
+}
+
+/// Append captured turns to a session's message stream (ROADMAP Phase 2
+/// item 1). Idempotent on each turn's `turn_id`, so hooks can retry.
+async fn api_append_messages(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<AppendMessagesBody>,
+) -> Result<Json<AppendMessagesResponse>, (StatusCode, String)> {
+    let now = chrono::Utc::now();
+    let request = AppendMessagesRequest {
+        session_id: body.session_id,
+        messages: body
+            .messages
+            .into_iter()
+            .map(|m| m.into_new_message(now))
+            .collect(),
+    };
+    match state.service.append_messages(request).await {
+        Ok(response) => Ok(Json(response)),
+        Err(e @ SystemError::SessionNotFound(_)) => Err((StatusCode::NOT_FOUND, e.to_string())),
+        Err(e @ SystemError::InvalidArgument(_)) => Err((StatusCode::BAD_REQUEST, e.to_string())),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
 }
 
 async fn api_list_sessions(
@@ -635,7 +746,8 @@ mod tests {
         let memory = memory_system(&dir).await;
         let ct = CancellationToken::new();
         let router = build_router(
-            memory,
+            memory.clone(),
+            Arc::new(MemoryServiceImpl::new(memory)),
             &policy("0.0.0.0", &["pc.tailnet.example", "100.64.0.7:3737"]),
             None,
             &ct,
@@ -678,12 +790,96 @@ mod tests {
         ct.cancel();
     }
 
+    fn post_json(path: &str, body: serde_json::Value) -> Request<Body> {
+        Request::post(path)
+            .header(header::HOST, "localhost:3737")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    /// `POST /api/messages` stores turns through the canonical service:
+    /// unknown sessions are 404, secrets are redacted, retries are skipped.
+    #[tokio::test]
+    async fn api_messages_append_redacted_and_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let memory = Arc::new(
+            ConversationMemorySystem::new(post_cortex_memory::SystemConfig {
+                data_directory: dir.path().to_str().unwrap().to_string(),
+                enable_embeddings: false,
+                ..Default::default()
+            })
+            .await
+            .unwrap(),
+        );
+        let ct = CancellationToken::new();
+        let router = build_router(
+            memory.clone(),
+            Arc::new(MemoryServiceImpl::new(memory.clone())),
+            &policy("127.0.0.1", &[]),
+            None,
+            &ct,
+        );
+        let body = |session: Uuid| {
+            serde_json::json!({
+                "session_id": session,
+                "messages": [
+                    {"turn_id": "u1", "role": "user", "text": "deploy with key AKIAABCDEFGHIJKLMNOP"},
+                    {"turn_id": "a1", "role": "assistant", "text": "done", "author": "claude",
+                     "tools": ["Bash"], "files": ["deploy.sh"]},
+                    {"turn_id": "a2", "role": "assistant", "text": "   "}
+                ]
+            })
+        };
+
+        let (status, _) =
+            status_and_body(&router, post_json("/api/messages", body(Uuid::new_v4()))).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let sid = memory.create_session(None, None).await.unwrap();
+        let (status, text) = status_and_body(&router, post_json("/api/messages", body(sid))).await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        let response: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(response["appended"], serde_json::json!([0, 1]));
+        assert_eq!(response["skipped"], 1, "the empty turn");
+
+        let (status, text) = status_and_body(&router, post_json("/api/messages", body(sid))).await;
+        assert_eq!(status, StatusCode::OK);
+        let response: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(response["appended"], serde_json::json!([]));
+        assert_eq!(response["skipped"], 3);
+
+        let stored = memory
+            .storage_actor
+            .load_messages(sid, 0..10)
+            .await
+            .unwrap();
+        assert_eq!(stored.len(), 2);
+        assert!(!stored[0].text.contains("AKIA"), "{}", stored[0].text);
+        assert!(stored[0].text.contains("[REDACTED:"), "{}", stored[0].text);
+        assert_eq!(stored[1].author.as_deref(), Some("claude"));
+        assert_eq!(stored[1].tools, ["Bash"]);
+
+        let (status, _) = status_and_body(
+            &router,
+            post_json(
+                "/api/messages",
+                serde_json::json!({"session_id": sid, "messages": [{"turn_id": "x", "text": "no role"}]}),
+            ),
+        )
+        .await;
+        assert!(status.is_client_error(), "{status}");
+        ct.cancel();
+    }
+
     #[tokio::test]
     async fn star_disables_host_validation() {
         let dir = tempfile::tempdir().unwrap();
         let ct = CancellationToken::new();
+        let memory = memory_system(&dir).await;
         let router = build_router(
-            memory_system(&dir).await,
+            memory.clone(),
+            Arc::new(MemoryServiceImpl::new(memory)),
             &policy("0.0.0.0", &["*"]),
             None,
             &ct,

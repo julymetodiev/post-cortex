@@ -31,12 +31,14 @@ semantic_search(query, scope="session",   scope_id=<session_id>)
 
 Write queries as natural-language questions or the key terms of what you need ("why did we switch the embedding model", "SurrealDB schema migration"), not single words. Useful knobs:
 
+- `mode`: `fast` (~40 ms) for quick lookups, `accurate` when missing the answer is costly; the server's default otherwise.
+- `sources`: `records` (default) searches the logged records; `messages` searches the raw conversation turns that client hooks capture (when capture is on), for things said but never logged; `all` both.
 - `recency_bias`: `0` for timeless architecture, `0.3–0.7` for "what is the current state", `1.0` for "what just broke".
 - `interaction_type`: e.g. `["decision_made"]` or `["problem_solved"]` to filter.
 - `date_from` / `date_to` (ISO 8601) for time windows.
 - `select` / `select_map` (JSONPath, e.g. `$.results[*].text_content`) to keep the payload small — results are verbose, and trimming them saves your context.
 
-Results carry `similarity_score`, `content_type`, `timestamp` and `session_id` — check timestamps before trusting an old entry, and say when you are relying on memory rather than on the code. If memory and the code disagree, the code wins; consider logging the correction.
+Results carry `similarity_score`, `content_type`, `timestamp` and `session_id`; a record returned for context next to a hit has `neighbour_of` set to that hit's `content_id`. Check timestamps before trusting an old entry, and say when you are relying on memory rather than on the code. If memory and the code disagree, the code wins; consider logging the correction.
 
 Other read tools, by question:
 

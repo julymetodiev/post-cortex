@@ -23,6 +23,7 @@ use std::sync::Arc;
 mod core;
 mod freshness;
 mod graph;
+mod messages;
 mod sessions;
 mod types;
 mod vectors;

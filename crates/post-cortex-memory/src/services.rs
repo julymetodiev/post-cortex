@@ -27,12 +27,13 @@ use post_cortex_core::core::context_update::{ContextUpdate, EntityRelationship, 
 use post_cortex_core::core::error::SystemError;
 use post_cortex_core::redact::{RedactionCounts, Redactor};
 use post_cortex_core::services::{
-    AdminRequest, AdminResponse, AssembleContextRequest, AssembleContextResponse,
-    BulkUpdateContextRequest, BulkUpdateContextResponse, HealthReport, ManageEntityRequest,
-    ManageEntityResponse, ManageSessionRequest, ManageSessionResponse, ManageWorkspaceRequest,
-    ManageWorkspaceResponse, PostCortexService, QueryContextRequest, QueryContextResponse,
-    SemanticSearchRequest, SemanticSearchResponse, StructuredSummaryRequest,
-    StructuredSummaryResponse, UpdateContextRequest, UpdateContextResponse,
+    AdminRequest, AdminResponse, AppendMessagesRequest, AppendMessagesResponse,
+    AssembleContextRequest, AssembleContextResponse, BulkUpdateContextRequest,
+    BulkUpdateContextResponse, HealthReport, ManageEntityRequest, ManageEntityResponse,
+    ManageSessionRequest, ManageSessionResponse, ManageWorkspaceRequest, ManageWorkspaceResponse,
+    PostCortexService, QueryContextRequest, QueryContextResponse, SemanticSearchRequest,
+    SemanticSearchResponse, StructuredSummaryRequest, StructuredSummaryResponse,
+    UpdateContextRequest, UpdateContextResponse,
 };
 use tracing::warn;
 use uuid::Uuid;
@@ -172,6 +173,52 @@ impl PostCortexService for MemoryServiceImpl {
             session_id,
             persisted_at: Utc::now(),
             durable: committed.durable,
+        })
+    }
+
+    #[tracing::instrument(
+        skip(self, req),
+        fields(session_id = %req.session_id, batch_size = req.messages.len()),
+        name = "post_cortex.append_messages",
+    )]
+    async fn append_messages(
+        &self,
+        mut req: AppendMessagesRequest,
+    ) -> Result<AppendMessagesResponse, SystemError> {
+        let submitted = req.messages.len();
+        for (i, message) in req.messages.iter().enumerate() {
+            if message.turn_id.trim().is_empty() {
+                return Err(SystemError::InvalidArgument(format!(
+                    "append_messages: messages[{i}].turn_id is empty"
+                )));
+            }
+        }
+        if self
+            .system
+            .session_manager
+            .get_session(req.session_id)
+            .await
+            .map_err(SystemError::Internal)?
+            .is_none()
+        {
+            return Err(SystemError::SessionNotFound(req.session_id));
+        }
+        req.messages.retain(|m| !m.text.trim().is_empty());
+        let mut counts = RedactionCounts::new();
+        for message in &mut req.messages {
+            self.redactor.redact_message(message, &mut counts);
+        }
+        log_redactions(req.session_id, &counts);
+
+        let (stored, vectorized) = self
+            .system
+            .append_messages(req.session_id, req.messages)
+            .await
+            .map_err(SystemError::Internal)?;
+        Ok(AppendMessagesResponse {
+            skipped: submitted - stored.len(),
+            appended: stored.iter().map(|m| m.seq).collect(),
+            vectorized,
         })
     }
 

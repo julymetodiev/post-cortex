@@ -289,6 +289,24 @@ impl SurrealDBStorage {
             -- We keep the `IF NOT EXISTS` here for the first-run case;
             -- the redefinition handles model swaps.
 
+            -- Raw message stream (ROADMAP Phase 2 item 1). Keyed
+            -- `{session}_{seq}`; `turn_id` makes appends idempotent.
+            DEFINE TABLE IF NOT EXISTS message SCHEMAFULL;
+            DEFINE FIELD IF NOT EXISTS session_id ON message TYPE string;
+            DEFINE FIELD IF NOT EXISTS seq ON message TYPE int;
+            DEFINE FIELD IF NOT EXISTS turn_id ON message TYPE string;
+            DEFINE FIELD IF NOT EXISTS role ON message TYPE string;
+            DEFINE FIELD IF NOT EXISTS author ON message TYPE option<string>;
+            DEFINE FIELD IF NOT EXISTS source_session ON message TYPE option<string>;
+            DEFINE FIELD IF NOT EXISTS timestamp ON message TYPE string;
+            DEFINE FIELD IF NOT EXISTS text ON message TYPE string;
+            DEFINE FIELD IF NOT EXISTS tools ON message TYPE array<string>;
+            DEFINE FIELD IF NOT EXISTS files ON message TYPE array<string>;
+            DEFINE INDEX IF NOT EXISTS idx_message_session_seq ON message FIELDS session_id, seq UNIQUE;
+            DEFINE INDEX IF NOT EXISTS idx_message_session_turn ON message FIELDS session_id, turn_id UNIQUE;
+            -- Next position of each stream, keyed by session id.
+            DEFINE TABLE IF NOT EXISTS message_next SCHEMALESS;
+
             -- Workspaces table
             DEFINE TABLE IF NOT EXISTS workspace SCHEMAFULL;
             DEFINE FIELD IF NOT EXISTS workspace_id ON workspace TYPE string;

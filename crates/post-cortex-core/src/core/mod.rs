@@ -20,6 +20,10 @@ pub mod context_update;
 /// Typed system error hierarchy and `Result<T>` alias.
 pub mod error;
 
+/// Raw conversation turns: the append-only message stream that client
+/// hooks capture next to the structured context updates.
+pub mod message;
+
 /// Structured projection types over a session's update history.
 pub mod structured_context;
 

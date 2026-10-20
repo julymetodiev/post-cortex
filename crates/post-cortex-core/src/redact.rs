@@ -19,6 +19,7 @@ use std::net::Ipv4Addr;
 use std::sync::LazyLock;
 
 use crate::core::context_update::{EntityRelationship, UpdateContent};
+use crate::core::message::NewMessage;
 use crate::services::UpdateContextRequest;
 
 /// Redaction settings carried by the system config.
@@ -252,6 +253,15 @@ impl Redactor {
             code.change_description = self.redact_str(&code.change_description, &mut counts);
         }
         counts
+    }
+
+    /// Redact a captured message's text and file paths in place.
+    pub fn redact_message(&self, message: &mut NewMessage, counts: &mut RedactionCounts) {
+        if !self.enabled {
+            return;
+        }
+        message.text = self.redact_str(&message.text, counts);
+        self.redact_vec(&mut message.files, counts);
     }
 
     /// Redact every string inside a JSON document (used for imports, whose

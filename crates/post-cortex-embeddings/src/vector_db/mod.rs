@@ -31,4 +31,7 @@ pub use config::{SearchMode, SearchQualityPreset, VectorDbConfig};
 pub use core::VectorDB;
 pub use product_quantization::ProductQuantizationCodebook;
 pub use similarity::{cosine_similarity, cosine_with_norms, dot, l2_norm};
-pub use types::{SearchMatch, StoredVector, VectorDbStats, VectorDbStatsSnapshot, VectorMetadata};
+pub use types::{
+    Corpus, MESSAGE_CONTENT_TYPE, SearchMatch, StoredVector, VectorDbStats, VectorDbStatsSnapshot,
+    VectorMetadata,
+};

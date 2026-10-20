@@ -22,7 +22,7 @@ use surrealdb::types::SurrealValue;
 use tracing::debug;
 
 use crate::traits::VectorStorage;
-use post_cortex_embeddings::{SearchMatch, VectorMetadata};
+use post_cortex_embeddings::{Corpus, SearchMatch, VectorMetadata};
 
 use super::MIN_VECTOR_LEN;
 use super::SurrealDBStorage;
@@ -303,8 +303,9 @@ impl VectorStorage for SurrealDBStorage {
         query_vector: &[f32],
         k: usize,
         sources: &[String],
+        corpus: Corpus,
     ) -> Result<Option<Vec<SearchMatch>>> {
-        self.text_search(query, query_vector, k, sources)
+        self.text_search(query, query_vector, k, sources, corpus)
             .await
             .map(Some)
     }

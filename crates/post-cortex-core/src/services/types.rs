@@ -101,6 +101,28 @@ pub struct BulkUpdateContextResponse {
     pub durable: bool,
 }
 
+/// Captured conversation turns for a session's message stream
+/// ([`crate::core::message`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppendMessagesRequest {
+    /// Session whose stream receives the turns.
+    pub session_id: Uuid,
+    /// Turns in conversation order.
+    pub messages: Vec<crate::core::message::NewMessage>,
+}
+
+/// Outcome of an append.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppendMessagesResponse {
+    /// Positions of the turns stored by this call, in order.
+    pub appended: Vec<u64>,
+    /// Turns not stored: already captured, repeated in the batch, or empty.
+    pub skipped: usize,
+    /// Vectors written for the stored turns (long turns take several); 0
+    /// when embeddings are off.
+    pub vectorized: usize,
+}
+
 // ---------------------------------------------------------------------------
 // Read path
 // ---------------------------------------------------------------------------

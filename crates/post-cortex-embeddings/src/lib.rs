@@ -41,7 +41,7 @@ pub use rerank::Reranker;
 
 pub use embeddings::{EmbeddingBackend, EmbeddingConfig, EmbeddingModelType, LocalEmbeddingEngine};
 pub use vector_db::{
-    ProductQuantizationCodebook, SearchMatch, SearchMode, SearchQualityPreset, StoredVector,
-    VectorDB, VectorDbConfig, VectorDbStats, VectorDbStatsSnapshot, VectorMetadata,
-    cosine_similarity, cosine_with_norms, dot, l2_norm,
+    Corpus, MESSAGE_CONTENT_TYPE, ProductQuantizationCodebook, SearchMatch, SearchMode,
+    SearchQualityPreset, StoredVector, VectorDB, VectorDbConfig, VectorDbStats,
+    VectorDbStatsSnapshot, VectorMetadata, cosine_similarity, cosine_with_norms, dot, l2_norm,
 };

@@ -30,10 +30,11 @@ use chrono::{DateTime, Utc};
 use post_cortex_core::core::context_update::{
     ContextUpdate, EntityData, EntityRelationship, RelationType,
 };
+use post_cortex_core::core::message::{Message, NewMessage};
 use post_cortex_core::graph::entity_graph::EntityNetwork;
 use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_core::workspace::SessionRole;
-use post_cortex_embeddings::{SearchMatch, VectorMetadata};
+use post_cortex_embeddings::{Corpus, SearchMatch, VectorMetadata};
 use post_cortex_proto::pb::{CascadeInvalidateReport, FreshnessEntry, SourceReference, SymbolId};
 use uuid::Uuid;
 
@@ -100,7 +101,7 @@ impl SessionSummary {
 ///
 /// Implementations must be Send + Sync for concurrent access.
 #[async_trait]
-pub trait Storage: FreshnessStorage + Send + Sync {
+pub trait Storage: FreshnessStorage + MessageStorage + Send + Sync {
     // ===== Session Operations =====
 
     /// Save a session to storage
@@ -339,6 +340,7 @@ pub trait VectorStorage: Send + Sync {
     /// Lexical (BM25) search over the stored embedding texts, best match first.
     ///
     /// `sources` restricts the search to those sessions; empty means all.
+    /// Only texts in `corpus` (records, messages or both) are searched.
     /// Each hit's `similarity` is its cosine similarity to `query_vector`, so
     /// it reads like a vector hit; the order is the lexical one. Returns
     /// `Ok(None)` when the backend has no full-text index, and callers then
@@ -349,8 +351,9 @@ pub trait VectorStorage: Send + Sync {
         query_vector: &[f32],
         k: usize,
         sources: &[String],
+        corpus: Corpus,
     ) -> Result<Option<Vec<SearchMatch>>> {
-        let _ = (query, query_vector, k, sources);
+        let _ = (query, query_vector, k, sources, corpus);
         Ok(None)
     }
 
@@ -388,6 +391,36 @@ pub trait VectorStorage: Send + Sync {
 
     /// Get all vectors from storage (for loading into memory on startup)
     async fn get_all_vectors(&self) -> Result<Vec<(Vec<f32>, VectorMetadata)>>;
+}
+
+/// Storage for the raw message stream (see
+/// [`post_cortex_core::core::message`]).
+///
+/// Appends to one session must not run concurrently: the next position is
+/// read and then written. The memory layer serialises them per session.
+#[async_trait]
+pub trait MessageStorage: Send + Sync {
+    /// Append `messages` to the stream of `session_id`, in the given order,
+    /// at the positions after the last stored one. Messages whose `turn_id`
+    /// is already stored for the session, or repeats an earlier one in the
+    /// batch, are skipped. Returns the messages appended.
+    async fn append_messages(
+        &self,
+        session_id: Uuid,
+        messages: Vec<NewMessage>,
+    ) -> Result<Vec<Message>>;
+
+    /// The stored messages of `session_id` with `seq` in `seqs`, by `seq`.
+    async fn load_messages(
+        &self,
+        session_id: Uuid,
+        seqs: std::ops::Range<u64>,
+    ) -> Result<Vec<Message>>;
+
+    /// Delete every message, in all sessions, whose timestamp is before
+    /// `cutoff` (retention). Returns `(session_id, seq)` of each deleted
+    /// message so the caller can drop its vectors.
+    async fn delete_messages_before(&self, cutoff: DateTime<Utc>) -> Result<Vec<(Uuid, u64)>>;
 }
 
 /// Storage trait for source freshness tracking.
@@ -1018,6 +1051,44 @@ impl FreshnessStorage for StorageBackend {
             StorageBackend::RocksDB(storage) => storage.check_freshness_batch(entries).await,
             #[cfg(feature = "surrealdb-storage")]
             StorageBackend::SurrealDB(storage) => storage.check_freshness_batch(entries).await,
+        }
+    }
+}
+
+// Implement MessageStorage trait for StorageBackend via delegation
+#[async_trait]
+impl MessageStorage for StorageBackend {
+    async fn append_messages(
+        &self,
+        session_id: Uuid,
+        messages: Vec<NewMessage>,
+    ) -> Result<Vec<Message>> {
+        match self {
+            StorageBackend::RocksDB(storage) => storage.append_messages(session_id, messages).await,
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => {
+                storage.append_messages(session_id, messages).await
+            }
+        }
+    }
+
+    async fn load_messages(
+        &self,
+        session_id: Uuid,
+        seqs: std::ops::Range<u64>,
+    ) -> Result<Vec<Message>> {
+        match self {
+            StorageBackend::RocksDB(storage) => storage.load_messages(session_id, seqs).await,
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => storage.load_messages(session_id, seqs).await,
+        }
+    }
+
+    async fn delete_messages_before(&self, cutoff: DateTime<Utc>) -> Result<Vec<(Uuid, u64)>> {
+        match self {
+            StorageBackend::RocksDB(storage) => storage.delete_messages_before(cutoff).await,
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => storage.delete_messages_before(cutoff).await,
         }
     }
 }

@@ -26,7 +26,7 @@ use post_cortex_core::core::context_update::{
 };
 use post_cortex_core::graph::entity_graph::SimpleEntityGraph;
 use post_cortex_core::session::active_session::ActiveSession;
-use post_cortex_embeddings::VectorMetadata;
+use post_cortex_embeddings::{Corpus, MESSAGE_CONTENT_TYPE, VectorMetadata};
 
 /// Embedded engine, or a throwaway database on the server named by
 /// `PCX_STO_TEST_SURREAL_URL`. The namespace must start with `pcx_sto_test`
@@ -455,12 +455,25 @@ async fn text_search_bm25() {
                 x.clone(),
                 text_meta("e", &s1, "Решихме да ползваме базата SurrealDB"),
             ),
+            (
+                x.clone(),
+                VectorMetadata {
+                    content_type: MESSAGE_CONTENT_TYPE.into(),
+                    ..text_meta("m", &s2, "should we drop rocksdb?")
+                },
+            ),
         ])
         .await
         .unwrap();
 
     let all = storage
-        .search_text("What about RocksDB and SurrealDB?", &x, 10, &[])
+        .search_text(
+            "What about RocksDB and SurrealDB?",
+            &x,
+            10,
+            &[],
+            Corpus::Records,
+        )
         .await
         .unwrap()
         .expect("SurrealDB has a full-text index");
@@ -480,7 +493,13 @@ async fn text_search_bm25() {
     assert!(b.similarity.abs() < 1e-5);
 
     let scoped = storage
-        .search_text("rocksdb", &x, 10, std::slice::from_ref(&s2))
+        .search_text(
+            "rocksdb",
+            &x,
+            10,
+            std::slice::from_ref(&s2),
+            Corpus::Records,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -492,8 +511,27 @@ async fn text_search_bm25() {
         ["d"]
     );
 
+    // Messages are searched only when asked for.
+    let corpus_ids = |hits: Vec<post_cortex_embeddings::SearchMatch>| {
+        let mut ids: Vec<String> = hits.into_iter().map(|m| m.metadata.id).collect();
+        ids.sort();
+        ids
+    };
+    for (corpus, expected) in [
+        (Corpus::Records, vec!["d"]),
+        (Corpus::Messages, vec!["m"]),
+        (Corpus::All, vec!["d", "m"]),
+    ] {
+        let hits = storage
+            .search_text("rocksdb", &x, 10, std::slice::from_ref(&s2), corpus)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(corpus_ids(hits), expected, "{corpus:?}");
+    }
+
     let cyrillic = storage
-        .search_text("базата", &x, 10, &[])
+        .search_text("базата", &x, 10, &[], Corpus::Records)
         .await
         .unwrap()
         .unwrap();
@@ -502,7 +540,7 @@ async fn text_search_bm25() {
 
     assert!(
         storage
-            .search_text("what is it?", &x, 10, &[])
+            .search_text("what is it?", &x, 10, &[], Corpus::Records)
             .await
             .unwrap()
             .unwrap()
