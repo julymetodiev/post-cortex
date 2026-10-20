@@ -602,14 +602,69 @@ fn submit_derived_work(
     }
 }
 
-fn log_pipeline_submit(queue: &str, session_id: Uuid, entry_id: Uuid, err: PipelineError) {
-    warn!(
-        queue,
-        %session_id,
-        %entry_id,
-        error = %err,
-        "pipeline submission failed (non-fatal — running the work on a plain task)"
-    );
+/// A full queue is expected during bulk writes (the work then runs on a
+/// plain task, so nothing is lost): each case is logged at debug level and
+/// summed into one warning per queue at most every [`BACKPRESSURE_WARN_EVERY`].
+/// A stopped worker is a warning every time.
+fn log_pipeline_submit(queue: &'static str, session_id: Uuid, entry_id: Uuid, err: PipelineError) {
+    match err {
+        PipelineError::Backpressure { .. } => {
+            tracing::debug!(queue, %session_id, %entry_id, "pipeline queue full; running the work on a plain task");
+            if let Some((count, since)) = BACKPRESSURE.note(queue) {
+                warn!(
+                    queue,
+                    count,
+                    seconds = since.as_secs(),
+                    "pipeline queue was full: {count} work items ran on plain tasks instead (bulk ingest?)"
+                );
+            }
+        }
+        err @ PipelineError::WorkerShutdown { .. } => warn!(
+            queue,
+            %session_id,
+            %entry_id,
+            error = %err,
+            "pipeline submission failed (non-fatal — running the work on a plain task)"
+        ),
+    }
+}
+
+/// How often a full pipeline queue is reported.
+const BACKPRESSURE_WARN_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+
+static BACKPRESSURE: BackpressureLog = BackpressureLog::new();
+
+/// Per-queue count of full-queue fallbacks since the last warning.
+struct BackpressureLog {
+    queues: parking_lot::Mutex<Vec<(&'static str, std::time::Instant, u64)>>,
+}
+
+impl BackpressureLog {
+    const fn new() -> Self {
+        Self {
+            queues: parking_lot::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Count one fallback for `queue`; returns the count and the time it
+    /// covers when a warning is due (the first case, then at most every
+    /// [`BACKPRESSURE_WARN_EVERY`]).
+    fn note(&self, queue: &'static str) -> Option<(u64, std::time::Duration)> {
+        let now = std::time::Instant::now();
+        let mut queues = self.queues.lock();
+        let Some(entry) = queues.iter_mut().find(|(q, _, _)| *q == queue) else {
+            queues.push((queue, now, 0));
+            return Some((1, std::time::Duration::ZERO));
+        };
+        entry.2 += 1;
+        let since = now.duration_since(entry.1);
+        if since < BACKPRESSURE_WARN_EVERY {
+            return None;
+        }
+        let count = entry.2;
+        *entry = (queue, now, 0);
+        Some((count, since))
+    }
 }
 
 #[cfg(test)]
@@ -1035,5 +1090,52 @@ mod tests {
         assert!(user.card.is_none());
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The entities a write names get their vectors from the write itself,
+    /// once the graph worker has merged them: search finds them without a
+    /// vectorize_session run.
+    #[tokio::test]
+    async fn entities_of_a_write_are_embedded() {
+        let (svc, dir) = make_service("entity-vectors").await;
+        let sid = svc.inner().create_session(None, None).await.unwrap();
+        let mut req = good_request();
+        req.session_id = sid;
+        svc.update_context(req).await.unwrap();
+
+        let vectorizer = svc.inner().ensure_vectorizer_initialized().await.unwrap();
+        let mut found = false;
+        for _ in 0..100 {
+            let hits = vectorizer
+                .semantic_search("Foo", 10, Some(sid), Default::default())
+                .await
+                .unwrap();
+            if hits.iter().any(|h| h.content_id == "entity:Foo") {
+                found = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(found, "entity:Foo has no vector");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A burst of full-queue fallbacks warns once, then once a minute with
+    /// the count.
+    #[test]
+    fn backpressure_is_summarised() {
+        let log = BackpressureLog::new();
+        assert_eq!(log.note("embedding").map(|(n, _)| n), Some(1));
+        for _ in 0..4_999 {
+            assert!(log.note("embedding").is_none());
+        }
+        assert_eq!(
+            log.note("graph").map(|(n, _)| n),
+            Some(1),
+            "queues are separate"
+        );
+        log.queues.lock()[0].1 -= BACKPRESSURE_WARN_EVERY;
+        assert_eq!(log.note("embedding").map(|(n, _)| n), Some(5_000));
+        assert!(log.note("embedding").is_none());
     }
 }

@@ -405,14 +405,16 @@ mod tests {
         assert!(ctx.total_tokens >= context_assembly::card_tokens(&ctx.cards));
     }
 
-    /// A query naming many entities reserves much of the budget for the
-    /// entity context; the excerpts get half of what is left, so records
-    /// still fit (live on ml: 37 entities took 1850 of 3000 tokens and the
+    /// A query whose entity context has many relationships reserves much of
+    /// the budget for them; the excerpts get half of what is left, so records
+    /// still fit (live on ml the reserve took 1850 of 3000 tokens and the
     /// records got nothing).
     #[cfg(feature = "embeddings")]
     #[tokio::test]
     async fn large_entity_context_leaves_records_room() {
-        use post_cortex_core::core::context_update::EntityType;
+        use post_cortex_core::core::context_update::{
+            EntityRelationship, EntityType, RelationType,
+        };
         use post_cortex_core::core::message::{MessageRole, NewMessage};
         use post_cortex_memory::context_assembly::ContextSource;
 
@@ -455,8 +457,20 @@ mod tests {
         for name in &names {
             graph.add_or_update_entity(name.clone(), EntityType::Concept, chrono::Utc::now(), "t");
         }
+        // Four relations each: the relationships section takes ~1,300 tokens.
+        for (i, from) in names.iter().enumerate() {
+            for step in 1..=4 {
+                graph.add_relationship(EntityRelationship {
+                    from_entity: from.clone(),
+                    to_entity: names[(i + step) % names.len()].clone(),
+                    relation_type: RelationType::RelatedTo,
+                    context: String::new(),
+                });
+            }
+        }
         let query = format!("zebracorn rollout {}", names.join(" "));
-        assert!(context_assembly::entity_summary_tokens(&query, &graph) >= 1500);
+        let reserve = context_assembly::entity_summary_tokens(&query, &graph);
+        assert!((1000..2000).contains(&reserve), "{reserve}");
 
         let session = memory.get_session(sid).await.unwrap().load_full();
         let mut updates = Vec::new();

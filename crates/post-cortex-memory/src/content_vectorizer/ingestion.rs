@@ -14,7 +14,7 @@
 
 use anyhow::Result;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -44,7 +44,7 @@ impl ContentVectorizer {
         vectorized_count += update_count;
 
         let (entity_count, entities_complete) = if self.config.enable_entity_vectorization {
-            let (c, complete) = self.vectorize_entities(session).await?;
+            let (c, complete) = self.vectorize_entities(session, None).await?;
             vectorized_count += c;
             (c, complete)
         } else {
@@ -289,10 +289,12 @@ impl ContentVectorizer {
     /// already stored unchanged for this session is skipped; a changed one
     /// replaces its old vector. Returns how many were added and whether
     /// every one that needed (re-)embedding was added.
-    pub(super) async fn vectorize_entities(
+    pub(crate) async fn vectorize_entities(
         &self,
         session: &ActiveSession,
+        only: Option<&HashSet<String>>,
     ) -> Result<(usize, bool)> {
+        let wanted = |name: &String| only.is_none_or(|names| names.contains(name));
         let entity_count = session.entity_graph.entities.len();
 
         let (texts_to_embed, metadata_list) = if entity_count >= PARALLEL_PROCESSING_THRESHOLD {
@@ -304,6 +306,7 @@ impl ContentVectorizer {
                 .entity_graph
                 .entities
                 .par_iter()
+                .filter(|(entity_name, _)| wanted(entity_name))
                 .filter_map(|(entity_name, entity_data)| {
                     let entity_text = build_entity_description(session, entity_name, entity_data);
                     if self.should_vectorize_text(&entity_text) {
@@ -328,7 +331,12 @@ impl ContentVectorizer {
             let mut texts_to_embed = Vec::new();
             let mut metadata_list = Vec::new();
 
-            for (entity_name, entity_data) in &session.entity_graph.entities {
+            for (entity_name, entity_data) in session
+                .entity_graph
+                .entities
+                .iter()
+                .filter(|(entity_name, _)| wanted(entity_name))
+            {
                 let entity_text = build_entity_description(session, entity_name, entity_data);
                 if self.should_vectorize_text(&entity_text) {
                     texts_to_embed.push(entity_text.clone());

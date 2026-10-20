@@ -701,6 +701,9 @@ impl ConversationMemorySystem {
             if Arc::ptr_eq(&prev, &current) {
                 self.storage_actor
                     .persist_session_nowait(&session_arc, vec![]);
+                #[cfg(feature = "embeddings")]
+                self.vectorize_update_entities(session_id, &session_arc, &update)
+                    .await;
                 return Ok(());
             }
             cas_backoff(attempt).await;
@@ -709,6 +712,63 @@ impl ConversationMemorySystem {
         Err(format!(
             "apply_entity_graph_update_now: high contention ({MAX_CAS_ATTEMPTS} CAS attempts exhausted) for session {session_id}"
         ))
+    }
+
+    /// Embed the descriptions of the entities `update` created, referenced
+    /// or related, now that they are in the graph (new or changed ones only),
+    /// so they are found without a later `vectorize_session`. Failures are
+    /// logged: the graph merge itself has succeeded.
+    #[cfg(feature = "embeddings")]
+    async fn vectorize_update_entities(
+        &self,
+        session_id: Uuid,
+        session_arc: &super::persister::SessionHandle,
+        update: &ContextUpdate,
+    ) {
+        if !self.config.enable_embeddings || !self.config.auto_vectorize_on_update {
+            return;
+        }
+        let names: std::collections::HashSet<String> = update
+            .creates_entities
+            .iter()
+            .chain(&update.references_entities)
+            .chain(update.typed_entities.iter().map(|e| &e.name))
+            .chain(
+                update
+                    .creates_relationships
+                    .iter()
+                    .flat_map(|r| [&r.from_entity, &r.to_entity]),
+            )
+            .cloned()
+            .collect();
+        if names.is_empty() {
+            return;
+        }
+        let vectorizer = match self.ensure_vectorizer_initialized().await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("Entities of update {} not embedded: {}", update.id, e);
+                return;
+            }
+        };
+        let session = session_arc.load_full();
+        match vectorizer.vectorize_entities(&session, Some(&names)).await {
+            Ok((added, _))
+                if added > 0 && self.storage_actor.is_deleted(session_id, session_arc) =>
+            {
+                // Deleted while embedding: the vectors must not outlive it.
+                for name in &names {
+                    if let Err(e) = vectorizer
+                        .remove_content(session_id, &format!("entity:{name}"))
+                        .await
+                    {
+                        warn!("Entity vector {name} of deleted session {session_id} kept: {e:#}");
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(e) => warn!("Entities of update {} not embedded: {:#}", update.id, e),
+        }
     }
 
     /// Vectorize one update of a session **now** (no spawn).

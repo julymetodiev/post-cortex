@@ -111,13 +111,64 @@ pub struct ImpactEntry {
     pub context: String,
 }
 
-/// Tokens kept free per entity of the entity context for its summary.
-const ENTITY_SUMMARY_TOKENS: usize = 50;
-
-/// Tokens [`assemble_context`] keeps free for the entity context of
-/// `query` (one hop around the entities it names).
+/// Tokens [`assemble_context`] keeps free for the entity relationships and
+/// impact analysis of `query` (one hop around the entities it names).
 pub fn entity_summary_tokens(query: &str, graph: &SimpleEntityGraph) -> usize {
-    build_entity_context(&find_query_entities(query, graph), graph, 1).len() * ENTITY_SUMMARY_TOKENS
+    let query_entities = find_query_entities(query, graph);
+    graph_section_tokens(
+        &build_entity_context(&query_entities, graph, 1),
+        &analyze_impact(&query_entities, graph),
+    )
+}
+
+/// Tokens the entity-relationship and impact sections take in
+/// [`format_for_llm`]'s text.
+fn graph_section_tokens(entity_context: &[EntityContext], impact: &[ImpactEntry]) -> usize {
+    [entity_section(entity_context), impact_section(impact)]
+        .iter()
+        .flatten()
+        .map(|section| estimate_tokens(section))
+        .sum()
+}
+
+/// The deduplicated relationship lines of the entity context, if any.
+fn entity_section(entity_context: &[EntityContext]) -> Option<String> {
+    let mut graph_lines: Vec<String> = entity_context
+        .iter()
+        .flat_map(|ec| &ec.relationships)
+        .map(|rel| {
+            format!(
+                "  {} --[{:?}]--> {}",
+                rel.from_entity, rel.relation_type, rel.to_entity
+            )
+        })
+        .collect();
+    if graph_lines.is_empty() {
+        return None;
+    }
+    graph_lines.sort();
+    graph_lines.dedup();
+    Some(format!("Entity relationships:\n{}", graph_lines.join("\n")))
+}
+
+/// The impact-analysis lines, if any.
+fn impact_section(impact: &[ImpactEntry]) -> Option<String> {
+    if impact.is_empty() {
+        return None;
+    }
+    let impact_lines: Vec<String> = impact
+        .iter()
+        .map(|i| {
+            format!(
+                "  {} depends on {} ({:?})",
+                i.entity, i.depends_on, i.relation_type
+            )
+        })
+        .collect();
+    Some(format!(
+        "Impact analysis — these entities depend on what you're working with:\n{}",
+        impact_lines.join("\n")
+    ))
 }
 
 /// Rough token estimate: ~4 chars per token for English
@@ -528,8 +579,8 @@ pub fn assemble_context<U: Borrow<ContextUpdate>>(
     let mut selected: Vec<ContextItem> = Vec::new();
     let mut used_tokens = 0;
 
-    // Reserve tokens for entity context summary (~50 tokens per entity)
-    let entity_summary_tokens = entity_context.len() * ENTITY_SUMMARY_TOKENS;
+    // Reserve what the entity relationships and impact sections take.
+    let entity_summary_tokens = graph_section_tokens(&entity_context, &impact);
     let content_budget = token_budget.saturating_sub(entity_summary_tokens);
 
     for item in scored_items {
@@ -618,45 +669,9 @@ pub fn format_for_llm(ctx: &AssembledContext) -> String {
         parts.push(format!("{title}:\n{}", card.text.trim()));
     }
 
-    // Entity graph summary
-    if !ctx.entity_context.is_empty() {
-        let mut graph_lines: Vec<String> = Vec::new();
-        for ec in &ctx.entity_context {
-            if ec.relationships.is_empty() {
-                continue;
-            }
-            for rel in &ec.relationships {
-                graph_lines.push(format!(
-                    "  {} --[{:?}]--> {}",
-                    rel.from_entity, rel.relation_type, rel.to_entity
-                ));
-            }
-        }
-        if !graph_lines.is_empty() {
-            // Deduplicate relationship lines
-            graph_lines.sort();
-            graph_lines.dedup();
-            parts.push(format!("Entity relationships:\n{}", graph_lines.join("\n")));
-        }
-    }
-
-    // Impact warnings
-    if !ctx.impact.is_empty() {
-        let impact_lines: Vec<String> = ctx
-            .impact
-            .iter()
-            .map(|i| {
-                format!(
-                    "  {} depends on {} ({:?})",
-                    i.entity, i.depends_on, i.relation_type
-                )
-            })
-            .collect();
-        parts.push(format!(
-            "Impact analysis — these entities depend on what you're working with:\n{}",
-            impact_lines.join("\n")
-        ));
-    }
+    // Entity graph summary and impact warnings
+    parts.extend(entity_section(&ctx.entity_context));
+    parts.extend(impact_section(&ctx.impact));
 
     // Context items: records, then conversation excerpts
     let (excerpts, records): (Vec<&ContextItem>, Vec<&ContextItem>) = ctx

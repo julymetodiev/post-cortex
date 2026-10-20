@@ -78,12 +78,20 @@ fn init_logging(to_file: bool, also_stderr: bool) {
         }
     } else {
         // Log to stderr only (CLI commands)
-        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-        tracing_subscriber::registry()
-            .with(fmt::layer().with_writer(std::io::stderr))
-            .with(filter)
-            .init();
+        init_cli_logging("info");
     }
+}
+
+/// Log to stderr at `default_level` unless RUST_LOG says otherwise. Commands
+/// whose output is meant to be read (setup, cards, listings) use "warn", so
+/// library info lines do not mix into it.
+fn init_cli_logging(default_level: &str) {
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
+    tracing_subscriber::registry()
+        .with(fmt::layer().with_writer(std::io::stderr))
+        .with(filter)
+        .init();
 }
 
 #[tokio::main]
@@ -145,7 +153,7 @@ async fn main() -> Result<(), String> {
             daemon_url,
             capture_url,
         }) => {
-            init_logging(false, false);
+            init_cli_logging("warn");
             setup::handle_setup(
                 name,
                 non_interactive,
@@ -161,17 +169,17 @@ async fn main() -> Result<(), String> {
         }
 
         Some(Commands::Workspace { action }) => {
-            init_logging(false, false);
+            init_cli_logging("warn");
             workspace::handle_workspace_action(action).await
         }
 
         Some(Commands::Card { action }) => {
-            init_logging(false, false);
+            init_cli_logging("warn");
             card::handle_card_action(action).await
         }
 
         Some(Commands::Session { action }) => {
-            init_logging(false, false);
+            init_cli_logging("warn");
             session::handle_session_action(action).await
         }
 

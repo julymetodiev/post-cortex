@@ -495,3 +495,39 @@ fn bench_load_and_search() {
     }
     println!("source search (200 vectors): {:?}/query", t.elapsed() / 100);
 }
+
+/// On a DB past the exact-search threshold, a filter that keeps few of the
+/// graph's candidates (here records among many nearer messages) still
+/// returns k matches: the exact scan takes over.
+#[test]
+fn sparse_filter_on_hnsw_falls_back_to_the_exact_scan() {
+    let dim = 24;
+    let mut config = VectorDbConfig::default();
+    config.dimension = dim;
+    config.exact_search_threshold = 200;
+    let db = VectorDB::new(config).unwrap();
+
+    let query = vec![1.0; dim];
+    // 1,000 messages right around the query, 20 records further away.
+    let near = pseudo_vectors(1_000, dim, 7)
+        .into_iter()
+        .map(|v| v.iter().map(|x| 1.0 + 0.05 * x).collect::<Vec<f32>>());
+    let far = pseudo_vectors(20, dim, 9);
+    db.add_vectors_bulk(
+        near.enumerate()
+            .map(|(i, v)| (v, meta(&format!("m{i}"), "s", MESSAGE_CONTENT_TYPE)))
+            .chain(
+                far.into_iter()
+                    .enumerate()
+                    .map(|(i, v)| (v, meta(&format!("r{i}"), "s", "DecisionPoint"))),
+            ),
+    )
+    .unwrap();
+    assert!(db.get_stats().is_built);
+
+    let records = db
+        .search_with_filter(&query, 10, |m| m.content_type != MESSAGE_CONTENT_TYPE)
+        .unwrap();
+    assert_eq!(records.len(), 10);
+    assert!(records.iter().all(|m| m.metadata.id.starts_with('r')));
+}

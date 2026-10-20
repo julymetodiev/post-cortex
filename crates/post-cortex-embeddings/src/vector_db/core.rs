@@ -1021,7 +1021,8 @@ impl VectorDB {
         let total_vectors = self.vectors.len();
 
         // Small DB: exact filtered scan, guaranteed to find sparse matches.
-        // Large DB: HNSW with a widened candidate list, filtered afterwards.
+        // Large DB: HNSW with a widened candidate list, filtered afterwards,
+        // and the exact scan when that leaves fewer than k.
         let graph = if total_vectors > self.config.exact_search_threshold {
             let search_k = k.saturating_mul(10).min(total_vectors);
             let ef = self.config.ef_search.max(search_k.saturating_mul(2));
@@ -1034,8 +1035,14 @@ impl VectorDB {
             None
         };
 
-        let matches = match graph {
-            Some(candidates) => self.to_matches(candidates, k, Some(&filter)),
+        // A sparse filter (records among many messages, a narrow date range,
+        // one author) can leave fewer than k of the graph's candidates; the
+        // exact scan then finds them, at O(vectors).
+        let from_graph = graph
+            .map(|candidates| self.to_matches(candidates, k, Some(&filter)))
+            .filter(|matches| matches.len() >= k);
+        let matches = match from_graph {
+            Some(matches) => matches,
             None => {
                 debug!(
                     "search_with_filter: exact filtered scan over {} vectors",
