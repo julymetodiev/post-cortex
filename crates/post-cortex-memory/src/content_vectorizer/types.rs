@@ -90,6 +90,45 @@ pub struct SemanticSearchResult {
     /// (`message:<seq>`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub derived_from: Vec<String>,
+    /// For a record: when it held, if it no longer does (superseded,
+    /// contradicted, restated, duplicate or forgotten; see
+    /// `post_cortex_core::graph::temporal`). Such records rank lower when
+    /// a later record or `forget` ended them explicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validity: Option<post_cortex_core::graph::temporal::Validity>,
+    /// For a record: how sure its writer was. Records below 1 rank lower.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
+    /// Which rankings found the result and how it scored in each, when the
+    /// search asked for a trace ([`SearchOptions::trace`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signals: Option<Signals>,
+}
+
+/// How one result was found (ROADMAP Phase 3 item 10): its place in each
+/// ranking (1 = first; none: not in that ranking's candidates), the fused
+/// score and the reranker's.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Signals {
+    /// Rank in the vector search.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_rank: Option<usize>,
+    /// Cosine similarity in the vector search.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_similarity: Option<f32>,
+    /// Rank in the BM25 search.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bm25_rank: Option<usize>,
+    /// Rank among the retrieval graph's candidates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_rank: Option<usize>,
+    /// Reciprocal rank fusion score, when more than one ranking had
+    /// candidates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fused: Option<f32>,
+    /// Reranker score, when the search was reranked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rerank: Option<f32>,
 }
 
 impl SemanticSearchResult {
@@ -230,6 +269,10 @@ pub struct SearchOptions {
     /// Rank records and messages by this author a little higher
     /// ([`PREFER_AUTHOR_BOOST`]); others still compete.
     pub prefer_author: Option<String>,
+
+    /// Record which rankings found each result ([`Signals`]). Traced
+    /// searches skip the query cache.
+    pub trace: bool,
 }
 
 /// What [`SearchOptions::prefer_author`] adds to a matching result's

@@ -48,27 +48,13 @@ use serde_json::Value;
 /// let formatted = format_search_results(&results);
 /// // Returns: [{"text_content": "...", "similarity_score": 0.85, "combined_score": 0.9, ...}, ...]
 /// ```
+#[cfg(feature = "embeddings")]
 pub fn format_search_results(results: &[SemanticSearchResult]) -> Vec<Value> {
+    // The session and global scope responses' fields (one JSONPath
+    // `select` works for every scope), with the session id.
     results
         .iter()
-        .map(|r| {
-            // Same fields as session and global scope (post_cortex_mcp search
-            // responses), so one JSONPath `select` works for every scope.
-            let mut obj = serde_json::json!({
-                "content_id": r.content_id,
-                "session_id": r.session_id,
-                "content_type": format!("{:?}", r.content_type),
-                "text_content": r.text_content,
-                "similarity_score": r.similarity_score,
-                "importance_score": r.importance_score,
-                "timestamp": r.timestamp.to_rfc3339(),
-                "combined_score": r.combined_score
-            });
-            if let (Some(hit), Some(map)) = (&r.neighbour_of, obj.as_object_mut()) {
-                map.insert("neighbour_of".to_string(), Value::String(hit.clone()));
-            }
-            obj
-        })
+        .map(|r| post_cortex_mcp::search::search_hit_to_json(r, true))
         .collect()
 }
 
@@ -77,9 +63,13 @@ mod tests {
     use super::*;
     use post_cortex_memory::content_vectorizer::ContentType;
 
+    #[cfg(feature = "embeddings")]
     #[test]
     fn workspace_results_use_the_session_and_global_field_names() {
         let r = SemanticSearchResult {
+            validity: None,
+            signals: None,
+            confidence: None,
             content_id: "c1".into(),
             session_id: uuid::Uuid::nil(),
             content_type: ContentType::DecisionPoint,

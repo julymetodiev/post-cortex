@@ -11,6 +11,9 @@ use post_cortex_memory::query_cache::{CacheScope, QueryCache, QueryCacheConfig};
 fn create_test_results() -> Arc<[SemanticSearchResult]> {
     Arc::from(vec![
         SemanticSearchResult {
+            validity: None,
+            signals: None,
+            confidence: None,
             content_id: Uuid::new_v4().to_string(),
             session_id: Uuid::new_v4(),
             content_type: ContentType::UpdateContent,
@@ -24,6 +27,9 @@ fn create_test_results() -> Arc<[SemanticSearchResult]> {
             derived_from: Vec::new(),
         },
         SemanticSearchResult {
+            validity: None,
+            signals: None,
+            confidence: None,
             content_id: Uuid::new_v4().to_string(),
             session_id: Uuid::new_v4(),
             content_type: ContentType::UpdateContent,

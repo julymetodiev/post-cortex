@@ -72,6 +72,18 @@ pub(super) async fn handle(
                 .map_err(|e| e.to_mcp_error())
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let metas = updates
+            .iter()
+            .enumerate()
+            .map(|(i, u)| {
+                parse_meta(
+                    u.valid_from.as_deref(),
+                    u.supersedes.as_deref(),
+                    u.confidence,
+                    &format!("updates[{i}]."),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         if req.dry_run.unwrap_or(false) {
             for (i, update) in updates.iter().enumerate() {
@@ -111,15 +123,18 @@ pub(super) async fn handle(
 
         let items: Vec<post_cortex_mcp::ContextUpdateItem> = updates
             .iter()
-            .zip(code_refs)
-            .map(|(u, code_reference)| post_cortex_mcp::ContextUpdateItem {
-                interaction_type: u.interaction_type.clone(),
-                content: u.content.clone(),
-                entities: u.entities.clone(),
-                relations: u.relations.clone(),
-                code_reference,
-                derived_from: u.derived_from.clone().unwrap_or_default(),
-            })
+            .zip(code_refs.into_iter().zip(metas))
+            .map(
+                |(u, (code_reference, meta))| post_cortex_mcp::ContextUpdateItem {
+                    interaction_type: u.interaction_type.clone(),
+                    content: u.content.clone(),
+                    entities: u.entities.clone(),
+                    relations: u.relations.clone(),
+                    code_reference,
+                    derived_from: u.derived_from.clone().unwrap_or_default(),
+                    meta,
+                },
+            )
             .collect();
 
         match post_cortex_mcp::bulk_update_conversation_context(items, uuid, author).await {
@@ -157,6 +172,12 @@ pub(super) async fn handle(
 
         let code_ref = validate_code_reference(req.code_reference.as_ref(), "code_reference")
             .map_err(|e| e.to_mcp_error())?;
+        let meta = parse_meta(
+            req.valid_from.as_deref(),
+            req.supersedes.as_deref(),
+            req.confidence,
+            "",
+        )?;
 
         // Handle dry_run mode for single updates
         if req.dry_run.unwrap_or(false) {
@@ -185,6 +206,7 @@ pub(super) async fn handle(
             uuid,
             author,
             req.derived_from.clone().unwrap_or_default(),
+            meta,
         )
         .await
         {
@@ -192,6 +214,52 @@ pub(super) async fn handle(
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
+}
+
+/// The writer's validity and trust statements; `prefix` names the update
+/// in errors (`updates[2].`).
+fn parse_meta(
+    valid_from: Option<&str>,
+    supersedes: Option<&[String]>,
+    confidence: Option<f32>,
+    prefix: &str,
+) -> Result<post_cortex_core::core::context_update::UpdateMeta, McpError> {
+    let invalid = |field: &str, message: String| {
+        McpError::invalid_params(
+            message,
+            Some(serde_json::json!({"parameter": format!("{prefix}{field}")})),
+        )
+    };
+    let valid_from = valid_from
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| {
+            post_cortex_memory::graph_views::parse_time(v).ok_or_else(|| {
+                invalid(
+                    "valid_from",
+                    format!("valid_from: '{v}' is not an RFC 3339 time or YYYY-MM-DD date"),
+                )
+            })
+        })
+        .transpose()?;
+    let supersedes = supersedes
+        .unwrap_or_default()
+        .iter()
+        .map(|id| {
+            uuid::Uuid::parse_str(id.trim()).map_err(|_| {
+                invalid(
+                    "supersedes",
+                    format!("supersedes: '{id}' is not an entry id"),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(post_cortex_core::core::context_update::UpdateMeta {
+        valid_from,
+        supersedes,
+        confidence,
+        retired_at: None,
+    })
 }
 
 #[cfg(test)]

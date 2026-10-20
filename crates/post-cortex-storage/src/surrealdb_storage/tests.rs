@@ -87,6 +87,7 @@ async fn test_entity_operations() {
 
     let session_id = Uuid::new_v4();
     let entity = EntityData {
+        aliases: Vec::new(),
         name: "rust".to_string(),
         entity_type: EntityType::Technology,
         first_mentioned: Utc::now(),
@@ -232,6 +233,7 @@ async fn test_normalized_context_updates_roundtrip() {
 
     // Create context updates
     let update1 = ContextUpdate {
+        meta: Default::default(),
         id: Uuid::new_v4(),
         timestamp: Utc::now(),
         update_type: UpdateType::QuestionAnswered,
@@ -254,6 +256,7 @@ async fn test_normalized_context_updates_roundtrip() {
     };
 
     let update2 = ContextUpdate {
+        meta: Default::default(),
         id: Uuid::new_v4(),
         timestamp: Utc::now(),
         update_type: UpdateType::DecisionMade,
@@ -415,6 +418,7 @@ fn test_extract_code_references() {
 
     let updates = vec![
         ContextUpdate {
+            meta: Default::default(),
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
             update_type: UpdateType::CodeChanged,
@@ -444,6 +448,7 @@ fn test_extract_code_references() {
             derived_from: Vec::new(),
         },
         ContextUpdate {
+            meta: Default::default(),
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
             update_type: UpdateType::CodeChanged,
@@ -473,6 +478,7 @@ fn test_extract_code_references() {
             derived_from: Vec::new(),
         },
         ContextUpdate {
+            meta: Default::default(),
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
             update_type: UpdateType::QuestionAnswered,
@@ -523,6 +529,7 @@ fn test_extract_code_references() {
 fn test_extract_change_history() {
     let updates = vec![
         ContextUpdate {
+            meta: Default::default(),
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
             update_type: UpdateType::CodeChanged,
@@ -544,6 +551,7 @@ fn test_extract_change_history() {
             derived_from: Vec::new(),
         },
         ContextUpdate {
+            meta: Default::default(),
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
             update_type: UpdateType::QuestionAnswered, // Not CodeChanged
@@ -565,6 +573,7 @@ fn test_extract_change_history() {
             derived_from: Vec::new(),
         },
         ContextUpdate {
+            meta: Default::default(),
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
             update_type: UpdateType::CodeChanged,
@@ -609,6 +618,7 @@ fn test_extract_change_history() {
 fn test_rebuild_structured_context() {
     let updates = vec![
         ContextUpdate {
+            meta: Default::default(),
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
             update_type: UpdateType::DecisionMade,
@@ -630,6 +640,7 @@ fn test_rebuild_structured_context() {
             derived_from: Vec::new(),
         },
         ContextUpdate {
+            meta: Default::default(),
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
             update_type: UpdateType::QuestionAnswered,
@@ -700,6 +711,7 @@ async fn test_full_normalized_roundtrip() {
 
     // Create context update with code reference
     let update = ContextUpdate {
+        meta: Default::default(),
         id: Uuid::new_v4(),
         timestamp: Utc::now(),
         update_type: UpdateType::CodeChanged,
@@ -864,6 +876,7 @@ async fn test_load_session_with_null_name_and_description() {
 
 fn graph_entity(name: &str) -> EntityData {
     EntityData {
+        aliases: Vec::new(),
         name: name.to_string(),
         entity_type: EntityType::Concept,
         first_mentioned: Utc::now(),

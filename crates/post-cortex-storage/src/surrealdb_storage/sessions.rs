@@ -79,6 +79,7 @@ fn entity_fingerprint(entity: &EntityData) -> u64 {
     entity.mention_count.hash(&mut h);
     entity.importance_score.to_bits().hash(&mut h);
     entity.description.hash(&mut h);
+    entity.aliases.hash(&mut h);
     h.finish()
 }
 

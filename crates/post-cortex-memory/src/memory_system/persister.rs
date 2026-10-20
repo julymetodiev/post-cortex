@@ -616,6 +616,7 @@ mod tests {
     fn update() -> ContextUpdate {
         use post_cortex_core::core::context_update::{UpdateContent, UpdateType};
         ContextUpdate {
+            meta: Default::default(),
             id: Uuid::new_v4(),
             timestamp: chrono::Utc::now(),
             update_type: UpdateType::ConceptDefined,

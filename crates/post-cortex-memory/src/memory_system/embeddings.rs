@@ -693,6 +693,7 @@ impl ConversationMemorySystem {
                     results,
                     &sessions,
                     self.config.neighbour_radius,
+                    &self.validity,
                 );
                 Ok(self.complete_message_results(results).await)
             }
@@ -756,8 +757,12 @@ impl ConversationMemorySystem {
                 Err(e) => warn!("Results of session {} left incomplete: {}", id, e),
             }
         }
-        let results =
-            super::neighbours::complete_results(results, &sessions, self.config.neighbour_radius);
+        let results = super::neighbours::complete_results(
+            results,
+            &sessions,
+            self.config.neighbour_radius,
+            &self.validity,
+        );
         self.complete_message_results(results).await
     }
 

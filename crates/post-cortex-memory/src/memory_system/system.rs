@@ -128,6 +128,10 @@ pub struct ConversationMemorySystem {
     /// Retrieval graph per session (see `graph_candidates`)
     #[cfg(feature = "embeddings")]
     pub(crate) retrieval_graphs: Arc<super::embeddings::SessionGraphs>,
+
+    /// Record validity per session, for search results
+    #[cfg(feature = "embeddings")]
+    pub(crate) validity: Arc<super::neighbours::ValidityCache>,
 }
 
 impl ConversationMemorySystem {
@@ -348,6 +352,8 @@ impl ConversationMemorySystem {
             embedding_config_holder,
             #[cfg(feature = "embeddings")]
             retrieval_graphs: Arc::default(),
+            #[cfg(feature = "embeddings")]
+            validity: Arc::default(),
         })
     }
 
@@ -478,6 +484,7 @@ impl ConversationMemorySystem {
                 vectorizer.remove_session_vectors(session_id);
             }
             self.retrieval_graphs.remove(&session_id);
+            self.validity.remove(&session_id);
         }
 
         Ok(deleted)
@@ -544,6 +551,101 @@ impl ConversationMemorySystem {
         self.drop_content_vectors(session_id, &[entry_id.to_string()])
             .await;
 
+        Ok(true)
+    }
+
+    /// Merge entity `alias` into `into` (ROADMAP Phase 3 item 2): its
+    /// mentions, relations and counts move over and its name resolves to
+    /// `into` from then on. The alias's stored row and edges are deleted.
+    /// Returns false if either entity is unknown or both are one.
+    pub async fn merge_entities(
+        &self,
+        session_id: Uuid,
+        alias: &str,
+        into: &str,
+    ) -> Result<bool, String> {
+        let session_arc = self.get_session(session_id).await?;
+        let mut stored_alias = None;
+        let updated =
+            Self::cas_update_session(&session_arc, session_id, "merge_entities", |session| {
+                let Some(name) = session.entity_graph.resolve(alias).map(str::to_string) else {
+                    return false;
+                };
+                if !Arc::make_mut(&mut session.entity_graph).merge_entities(alias, into) {
+                    return false;
+                }
+                stored_alias = Some(name);
+                true
+            })
+            .await?;
+        if updated.is_none() {
+            return Ok(false);
+        }
+        if let Some(name) = stored_alias {
+            self.storage_actor.delete_entity(session_id, &name).await?;
+            self.drop_content_vectors(session_id, &[format!("entity:{name}")])
+                .await;
+        }
+        self.storage_actor
+            .persist_session_nowait(&session_arc, vec![]);
+        Ok(true)
+    }
+
+    /// Retire a record (`forget`, ROADMAP Phase 3 item 9): its validity
+    /// ends now, it stays in the history and the timeline. Returns false if
+    /// it is unknown or already retired.
+    pub async fn forget_update(&self, session_id: Uuid, entry_id: Uuid) -> Result<bool, String> {
+        let session_arc = self.get_session(session_id).await?;
+        let now = chrono::Utc::now();
+        let mut changed = None;
+        let updated =
+            Self::cas_update_session(&session_arc, session_id, "forget_update", |session| {
+                changed = session.retire_update(&entry_id, now);
+                changed.is_some()
+            })
+            .await?;
+        match (updated, changed) {
+            (Some(_), Some(update)) => {
+                // Named explicitly, so the stored row is rewritten.
+                self.storage_actor
+                    .persist_session_nowait(&session_arc, vec![update]);
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// Erase a record and everything derived from it (`purge`, ROADMAP
+    /// Phase 3 item 9, for GDPR erasure): the record row, its embedding and
+    /// full-text entry, and the graph, which is rebuilt from the remaining
+    /// records so entities, descriptions and edges only it introduced are
+    /// gone from memory and storage. Returns false if it is unknown.
+    pub async fn purge_update(&self, session_id: Uuid, entry_id: Uuid) -> Result<bool, String> {
+        let session_arc = self.get_session(session_id).await?;
+        let updated =
+            Self::cas_update_session(&session_arc, session_id, "purge_update", |session| {
+                if !session.remove_update_by_id(&entry_id) {
+                    return false;
+                }
+                session.rebuild_entity_graph_sync();
+                true
+            })
+            .await?;
+        let Some(new_arc) = updated else {
+            return Ok(false);
+        };
+        new_arc.vectorized_update_ids.remove(&entry_id);
+        // The stored graph is rewritten whole: rows of entities and edges
+        // only the record introduced must not come back on the next load.
+        self.storage_actor
+            .clear_session_entities(session_id)
+            .await?;
+        self.storage_actor
+            .persist_session_removals_nowait(&session_arc, vec![entry_id]);
+        self.drop_content_vectors(session_id, &[entry_id.to_string()])
+            .await;
+        #[cfg(feature = "embeddings")]
+        self.retrieval_graphs.remove(&session_id);
         Ok(true)
     }
 

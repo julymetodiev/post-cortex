@@ -31,7 +31,7 @@ use crate::query_cache::CacheScope;
 
 use super::types::{
     AUTHOR_KEY, CHUNK_PARENT_KEY, ContentType, PREFER_AUTHOR_BOOST, SearchMode, SearchOptions,
-    SemanticSearchResult,
+    SemanticSearchResult, Signals,
 };
 use super::vectorizer::ContentVectorizer;
 
@@ -145,6 +145,7 @@ impl ContentVectorizer {
 
         // Check the cache before paying for the embedding.
         if let Some(ref cache) = self.query_cache
+            && !options.trace
             && let Some(cached) = cache.get(params_hash, query)
         {
             debug!("Cache hit for semantic search query: '{}'", query);
@@ -196,16 +197,23 @@ impl ContentVectorizer {
             _ => None,
         };
 
-        let ranked = rerank(reranker, query, rank(search_results, [lexical, graph])).await;
+        let mut traces = options
+            .trace
+            .then(|| traces(&search_results, lexical.as_ref(), graph.as_ref()));
+        let fused = rank(search_results, [lexical, graph]);
+        let ranked = rerank(reranker, query, note_fused(fused, traces.as_mut())).await;
         let mut results = self.process_search_results(
             ranked,
             Some(recency_bias),
             options.prefer_author.as_deref(),
+            traces.as_ref().map(|t| (t, reranker.is_some())),
         )?;
         results.truncate(limit);
         let results: Arc<[SemanticSearchResult]> = Arc::from(results);
 
-        if let Some(ref cache) = self.query_cache {
+        if let Some(ref cache) = self.query_cache
+            && !options.trace
+        {
             cache.insert(query.to_string(), Arc::clone(&results), params_hash, scope);
         }
 
@@ -269,6 +277,7 @@ impl ContentVectorizer {
         );
 
         if let Some(ref cache) = self.query_cache
+            && !options.trace
             && let Some(cached) = cache.get(params_hash, query)
         {
             debug!(
@@ -304,16 +313,23 @@ impl ContentVectorizer {
                 .search_in_sources(&query_embedding, depth, &sources)?
         };
 
-        let ranked = rerank(reranker, query, rank(search_results, [lexical, None])).await;
+        let mut traces = options
+            .trace
+            .then(|| traces(&search_results, lexical.as_ref(), None));
+        let fused = rank(search_results, [lexical, None]);
+        let ranked = rerank(reranker, query, note_fused(fused, traces.as_mut())).await;
         let mut results = self.process_search_results(
             ranked,
             Some(recency_bias),
             options.prefer_author.as_deref(),
+            traces.as_ref().map(|t| (t, reranker.is_some())),
         )?;
         results.truncate(limit);
         let results: Arc<[SemanticSearchResult]> = Arc::from(results);
 
-        if let Some(ref cache) = self.query_cache {
+        if let Some(ref cache) = self.query_cache
+            && !options.trace
+        {
             cache.insert(
                 query.to_string(),
                 Arc::clone(&results),
@@ -465,11 +481,14 @@ impl ContentVectorizer {
     /// relevance in [0, 1] (cosine similarity, or the fused score), which is
     /// what the combined score ranks by; `similarity_score` stays the cosine.
     /// Results by `prefer_author` get [`PREFER_AUTHOR_BOOST`] on top.
+    /// With `traces` (and whether the relevance is a reranker score), each
+    /// result gets its [`Signals`].
     fn process_search_results(
         &self,
         search_results: Vec<(SearchMatch, f32)>,
         recency_bias_override: Option<f32>,
         prefer_author: Option<&str>,
+        traces: Option<(&Traces, bool)>,
     ) -> Result<Vec<SemanticSearchResult>> {
         let now = Utc::now();
         // Defense-in-depth: clamp recency_bias to prevent negative or extreme values
@@ -509,6 +528,16 @@ impl ContentVectorizer {
                 combined_score += PREFER_AUTHOR_BOOST;
             }
 
+            let signals = traces.map(|(traces, reranked)| {
+                let mut signals = traces
+                    .get(&(result.metadata.source.clone(), result.metadata.id.clone()))
+                    .cloned()
+                    .unwrap_or_default();
+                if reranked {
+                    signals.rerank = Some(relevance);
+                }
+                signals
+            });
             // A chunk of a long update answers for the update.
             let content_id = match result.metadata.metadata.get(CHUNK_PARENT_KEY) {
                 Some(parent) => parent.clone(),
@@ -526,6 +555,9 @@ impl ContentVectorizer {
                 neighbour_of: None,
                 author,
                 derived_from: Vec::new(),
+                validity: None,
+                confidence: None,
+                signals,
             });
         }
 
@@ -664,6 +696,61 @@ fn search_depth(limit: usize, lexical: Option<&Vec<SearchMatch>>, reranking: boo
         Some(hits) if !hits.is_empty() => limit.max(FUSION_DEPTH),
         _ => limit,
     }
+}
+
+/// [`Signals`] per (session, content id) of every candidate.
+type Traces = HashMap<(String, String), Signals>;
+
+/// Where each candidate ranked in the vector, BM25 and graph rankings.
+fn traces(
+    vector: &[SearchMatch],
+    lexical: Option<&Vec<SearchMatch>>,
+    graph: Option<&Vec<SearchMatch>>,
+) -> Traces {
+    let mut out: Traces = HashMap::new();
+    let key = |m: &SearchMatch| (m.metadata.source.clone(), m.metadata.id.clone());
+    for (i, m) in vector.iter().enumerate() {
+        let s = out.entry(key(m)).or_default();
+        if s.vector_rank.is_none() {
+            s.vector_rank = Some(i + 1);
+            s.vector_similarity = Some(m.similarity);
+        }
+    }
+    for (i, m) in lexical.into_iter().flatten().enumerate() {
+        out.entry(key(m))
+            .or_default()
+            .bm25_rank
+            .get_or_insert(i + 1);
+    }
+    for (i, m) in graph.into_iter().flatten().enumerate() {
+        out.entry(key(m))
+            .or_default()
+            .graph_rank
+            .get_or_insert(i + 1);
+    }
+    out
+}
+
+/// Record the fused score of each candidate in `traces` (when the ranking
+/// was a fusion, i.e. some candidate is not ranked by similarity alone).
+fn note_fused(
+    ranked: Vec<(SearchMatch, f32)>,
+    traces: Option<&mut Traces>,
+) -> Vec<(SearchMatch, f32)> {
+    if let Some(traces) = traces {
+        let fused = traces
+            .values()
+            .any(|s| s.bm25_rank.is_some() || s.graph_rank.is_some());
+        if fused {
+            for (m, score) in &ranked {
+                if let Some(s) = traces.get_mut(&(m.metadata.source.clone(), m.metadata.id.clone()))
+                {
+                    s.fused = Some(*score);
+                }
+            }
+        }
+    }
+    ranked
 }
 
 /// Reorder the best [`RERANK_POOL`] candidates by the reranker's score;

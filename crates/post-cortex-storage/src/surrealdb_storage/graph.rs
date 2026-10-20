@@ -65,11 +65,13 @@ impl SurrealDBStorage {
             mention_count: entity.mention_count,
             importance_score: entity.importance_score,
             description: entity.description.clone(),
+            aliases: (!entity.aliases.is_empty()).then(|| entity.aliases.clone()),
         }
     }
 
     fn entity_from_record(r: EntityRecord) -> EntityData {
         EntityData {
+            aliases: r.aliases.unwrap_or_default(),
             name: r.name,
             entity_type: Self::parse_entity_type(&r.entity_type),
             first_mentioned: Self::parse_datetime(&r.first_mentioned),

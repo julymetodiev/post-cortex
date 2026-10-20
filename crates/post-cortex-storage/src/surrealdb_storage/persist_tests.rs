@@ -59,6 +59,7 @@ pub(super) async fn test_storage() -> SurrealDBStorage {
 
 fn plain_update(title: &str, offset_ms: i64) -> ContextUpdate {
     ContextUpdate {
+        meta: Default::default(),
         id: Uuid::new_v4(),
         timestamp: Utc::now() + chrono::Duration::milliseconds(offset_ms),
         update_type: UpdateType::ConceptDefined,
@@ -230,6 +231,7 @@ async fn load_keeps_entity_mention_count_and_importance() {
 
     let mut graph = SimpleEntityGraph::new();
     graph.insert_entity(post_cortex_core::core::context_update::EntityData {
+        aliases: Vec::new(),
         name: "Rust".into(),
         entity_type: EntityType::Technology,
         first_mentioned: first,

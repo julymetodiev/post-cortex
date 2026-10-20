@@ -364,6 +364,26 @@ pub async fn handle_setup(
         println!("  Created: .claude/hooks/pcx-card.py");
     }
 
+    // .claude/hooks/pcx-file-context.py (PreToolUse hook: what the memory
+    // says about a file before it is edited)
+    let file_context_path = hooks_dir.join("pcx-file-context.py");
+    if file_context_path.exists() {
+        println!("  .claude/hooks/pcx-file-context.py already exists, skipping");
+    } else {
+        std::fs::write(
+            &file_context_path,
+            include_str!("../templates/pcx-file-context.py"),
+        )
+        .map_err(|e| format!("Failed to write hook script: {}", e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&file_context_path, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| format!("Failed to set permissions: {}", e))?;
+        }
+        println!("  Created: .claude/hooks/pcx-file-context.py");
+    }
+
     // .claude/hooks/pcx-capture.py (Stop hook posting turns to the daemon)
     if capture {
         let capture_path = hooks_dir.join("pcx-capture.py");
@@ -543,8 +563,10 @@ fn generate_claude_md(session_id: &str, workspace_id: &str) -> String {
 }
 
 /// The PCX hooks for `.claude/settings.json`: the template's, the
-/// SessionStart hook that prints the cards from the daemon at `url`, and
-/// with `capture` the Stop hook that posts conversation turns there.
+/// SessionStart hook that prints the cards from the daemon at `url`, the
+/// PreToolUse hook that tells the agent what the memory says about a file
+/// before it is edited, and with `capture` the Stop hook that posts
+/// conversation turns there.
 fn generate_settings_json(
     session_id: &str,
     workspace_id: &str,
@@ -564,6 +586,20 @@ fn generate_settings_json(
                 ),
             }]
         }));
+    }
+    if let Some(hooks) = settings["hooks"].as_object_mut() {
+        hooks.insert(
+            "PreToolUse".to_string(),
+            serde_json::json!([{
+                "matcher": "Edit|Write|MultiEdit",
+                "hooks": [{
+                    "type": "command",
+                    "command": format!(
+                        "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pcx-file-context.py {workspace_id} {url}"
+                    ),
+                }]
+            }]),
+        );
     }
     if capture && let Some(stop) = settings["hooks"]["Stop"].as_array_mut() {
         stop.push(serde_json::json!({
@@ -729,6 +765,17 @@ mod tests {
     fn card_hook_always_capture_hook_when_on() {
         let plain = generate_settings_json("S1", "W1", URL, false);
         assert_eq!(commands(&plain, "Stop").len(), 1);
+        let pre = commands(&plain, "PreToolUse");
+        assert_eq!(pre.len(), 1);
+        assert!(
+            pre[0].ends_with("pcx-file-context.py W1 http://127.0.0.1:3737"),
+            "{}",
+            pre[0]
+        );
+        assert_eq!(
+            plain["hooks"]["PreToolUse"][0]["matcher"],
+            "Edit|Write|MultiEdit"
+        );
         let start = commands(&plain, "SessionStart");
         assert_eq!(start.len(), 2, "compaction re-inject and cards");
         assert!(
@@ -772,6 +819,6 @@ mod tests {
         assert_eq!(merge_hooks(&mut settings, &pcx["hooks"]).unwrap(), 0);
 
         let mut empty = serde_json::json!({});
-        assert_eq!(merge_hooks(&mut empty, &pcx["hooks"]).unwrap(), 5);
+        assert_eq!(merge_hooks(&mut empty, &pcx["hooks"]).unwrap(), 6);
     }
 }

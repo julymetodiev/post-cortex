@@ -40,6 +40,7 @@ use post_cortex_storage::traits::StorageBackendType;
 fn entity(name: &str, kind: EntityType) -> EntityData {
     let now = chrono::Utc::now();
     EntityData {
+        aliases: Vec::new(),
         name: name.to_string(),
         entity_type: kind,
         first_mentioned: now,
@@ -138,6 +139,7 @@ async fn e2e_update_context_against_remote_surrealdb_and_real_embeddings() {
         .expect("create_session must succeed");
 
     let warmup_req = UpdateContextRequest {
+        meta: Default::default(),
         session_id,
         interaction_type: UpdateType::ConceptDefined,
         content: UpdateContent {
@@ -169,6 +171,7 @@ async fn e2e_update_context_against_remote_surrealdb_and_real_embeddings() {
 
     // -- Measured write -------------------------------------------------
     let req = UpdateContextRequest {
+        meta: Default::default(),
         session_id,
         interaction_type: UpdateType::DecisionMade,
         content: UpdateContent {

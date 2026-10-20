@@ -36,6 +36,7 @@ async fn test_mcp_format_semantic_search() -> Result<()> {
     let answer = "The lock-free conversation memory system in Post-Cortex is built using Rust's advanced concurrency primitives to achieve zero-deadlock guarantees. It uses DashMap for concurrent hash maps, AtomicU64 for counters, ArcSwap for atomic pointer swapping, and an actor pattern for asynchronous RocksDB storage operations. The system implements a three-tier memory hierarchy with hot cache for 50 most recent items, warm cache for 200 items, and cold storage in RocksDB for everything else. Entity relationships are tracked using Petgraph, and semantic search is powered by local BERT models generating 384-dimensional L2-normalized embeddings stored in an HNSW index for fast nearest neighbor search. The entire architecture is designed to be production-grade with high throughput and low latency even under heavy concurrent load.";
 
     let make_update = |title: &str| ContextUpdate {
+        meta: Default::default(),
         id: Uuid::new_v4(),
         update_type: UpdateType::QuestionAnswered,
         content: UpdateContent {

@@ -37,6 +37,7 @@ async fn system(embeddings: bool) -> (Arc<ConversationMemorySystem>, tempfile::T
 /// Metadata for an update that mentions `Foo` and `Bar`.
 fn update_metadata(title: &str) -> serde_json::Value {
     let update = ContextUpdate {
+        meta: Default::default(),
         id: Uuid::new_v4(),
         timestamp: chrono::Utc::now(),
         update_type: UpdateType::ConceptDefined,

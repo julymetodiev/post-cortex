@@ -223,6 +223,7 @@ impl SurrealDBStorage {
             DEFINE FIELD IF NOT EXISTS mention_count ON entity TYPE int;
             DEFINE FIELD IF NOT EXISTS importance_score ON entity TYPE float;
             DEFINE FIELD IF NOT EXISTS description ON entity TYPE option<string>;
+            DEFINE FIELD IF NOT EXISTS aliases ON entity TYPE option<array<string>>;
             DEFINE INDEX IF NOT EXISTS idx_entity_session_name ON entity FIELDS session_id, name UNIQUE;
             DEFINE INDEX IF NOT EXISTS idx_entity_session ON entity FIELDS session_id;
             DEFINE INDEX IF NOT EXISTS idx_entity_type ON entity FIELDS entity_type;

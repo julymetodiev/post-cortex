@@ -20,6 +20,8 @@
 
 //! Graph module for entity relationships and Graph-RAG enrichment
 
+pub mod analytics;
 pub mod entity_graph;
 pub mod graph_rag;
 pub mod retrieval_graph;
+pub mod temporal;

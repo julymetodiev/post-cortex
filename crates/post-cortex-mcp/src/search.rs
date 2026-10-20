@@ -63,7 +63,7 @@ pub fn parse_mode(
 /// `include_session_id` is true a `session_id` field is appended (used by the
 /// global search response; session search omits it since the scope is implicit).
 #[cfg(feature = "embeddings")]
-fn search_hit_to_json(
+pub fn search_hit_to_json(
     r: &post_cortex_memory::content_vectorizer::SemanticSearchResult,
     include_session_id: bool,
 ) -> serde_json::Value {
@@ -101,8 +101,36 @@ fn search_hit_to_json(
                 serde_json::json!(r.derived_from),
             );
         }
+        if let Some(v) = &r.validity {
+            map.insert("valid_to".to_string(), serde_json::json!(v.valid_to));
+            map.insert("ended_by".to_string(), serde_json::json!(v.ended_by));
+            map.insert("end_reason".to_string(), serde_json::json!(v.reason));
+        }
+        if let Some(c) = r.confidence {
+            map.insert("confidence".to_string(), serde_json::json!(c));
+        }
+        if let Some(signals) = &r.signals {
+            map.insert("signals".to_string(), serde_json::json!(signals));
+        }
     }
     obj
+}
+
+/// " · ended 2026-10-20: superseded" for a record that no longer holds.
+#[cfg(feature = "embeddings")]
+fn ended_note(r: &post_cortex_memory::content_vectorizer::SemanticSearchResult) -> String {
+    let Some(v) = &r.validity else {
+        return String::new();
+    };
+    let reason = v
+        .reason
+        .and_then(|reason| serde_json::to_value(reason).ok())
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| "ended".to_string());
+    match v.valid_to {
+        Some(at) => format!(" · ended {}: {reason}", at.format("%Y-%m-%d")),
+        None => String::new(),
+    }
 }
 
 /// Build the text block returned alongside the JSON payload, the part an
@@ -165,9 +193,10 @@ fn format_results_message(
                 .map(|a| format!(" · {a}"))
                 .unwrap_or_default();
             message.push_str(&format!(
-                "{mark} {} [{:?}{by}] {}\n",
+                "{mark} {} [{:?}{by}{}] {}\n",
                 r.timestamp.format("%Y-%m-%d %H:%M"),
                 r.content_type,
+                ended_note(r),
                 r.text_content.trim()
             ));
         }
@@ -276,6 +305,7 @@ pub async fn semantic_search_global(
     sources: Option<String>,
     author: Option<String>,
     prefer_author: Option<String>,
+    trace: bool,
 ) -> Result<MCPToolResult> {
     debug!(
         "MCP-TOOLS: semantic_search_global() called with query: '{}' and recency_bias: {:?}",
@@ -319,6 +349,7 @@ pub async fn semantic_search_global(
                 corpus,
                 author: author.filter(|a| !a.trim().is_empty()),
                 prefer_author: prefer_author.filter(|a| !a.trim().is_empty()),
+                trace,
                 ..Default::default()
             },
         )
@@ -367,6 +398,7 @@ pub async fn semantic_search_session(
     sources: Option<String>,
     author: Option<String>,
     prefer_author: Option<String>,
+    trace: bool,
 ) -> Result<MCPToolResult> {
     debug!(
         "MCP-TOOLS: semantic_search_session() called for session {} with query: '{}'",
@@ -408,6 +440,7 @@ pub async fn semantic_search_session(
                 corpus,
                 author: author.filter(|a| !a.trim().is_empty()),
                 prefer_author: prefer_author.filter(|a| !a.trim().is_empty()),
+                trace,
                 ..Default::default()
             },
         )
@@ -666,6 +699,9 @@ mod tests {
 
     fn record(id: &str, minutes: i64, neighbour_of: Option<&str>) -> SemanticSearchResult {
         SemanticSearchResult {
+            validity: None,
+            signals: None,
+            confidence: None,
             content_id: id.into(),
             session_id: Uuid::nil(),
             content_type: ContentType::UserMessage,

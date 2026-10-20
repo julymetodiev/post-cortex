@@ -102,6 +102,7 @@ impl StoredEntity {
     pub fn to_entity_data(&self) -> EntityData {
         use post_cortex_core::core::context_update::EntityType;
         EntityData {
+            aliases: Vec::new(),
             name: self.name.clone(),
             entity_type: match self.entity_type.as_str() {
                 "Technology" => EntityType::Technology,

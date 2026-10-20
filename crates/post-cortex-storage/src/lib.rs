@@ -41,6 +41,8 @@ pub mod traits;
 #[cfg(test)]
 mod card_tests;
 #[cfg(test)]
+mod graph_tests;
+#[cfg(test)]
 mod message_tests;
 
 pub use error::{Error as StorageError, Result as StorageResult, is_not_found};

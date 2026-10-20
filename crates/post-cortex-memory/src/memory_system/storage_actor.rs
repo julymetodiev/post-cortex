@@ -358,7 +358,7 @@ impl StorageActorHandle {
     }
 
     /// Clear all entities and relationships for a session from storage.
-    async fn clear_session_entities(&self, session_id: Uuid) -> Result<(), String> {
+    pub(crate) async fn clear_session_entities(&self, session_id: Uuid) -> Result<(), String> {
         self.send_request(
             OperationType::Medium,
             || format!("ClearSessionEntities {session_id}"),

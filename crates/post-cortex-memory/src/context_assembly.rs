@@ -793,6 +793,7 @@ mod tests {
         let graph = make_graph();
         let updates = vec![
             ContextUpdate {
+                meta: Default::default(),
                 id: uuid::Uuid::new_v4(),
                 update_type: UpdateType::ConceptDefined,
                 content: UpdateContent {
@@ -815,6 +816,7 @@ mod tests {
                 derived_from: Vec::new(),
             },
             ContextUpdate {
+                meta: Default::default(),
                 id: uuid::Uuid::new_v4(),
                 update_type: UpdateType::ConceptDefined,
                 content: UpdateContent {
@@ -907,6 +909,7 @@ mod tests {
     fn test_assemble_context_accepts_shared_updates() {
         let graph = make_graph();
         let update = std::sync::Arc::new(ContextUpdate {
+            meta: Default::default(),
             id: uuid::Uuid::new_v4(),
             update_type: UpdateType::ConceptDefined,
             content: UpdateContent {
@@ -973,6 +976,7 @@ mod tests {
     fn test_format_for_llm() {
         let graph = make_graph();
         let updates = vec![ContextUpdate {
+            meta: Default::default(),
             id: uuid::Uuid::new_v4(),
             update_type: UpdateType::ConceptDefined,
             content: UpdateContent {

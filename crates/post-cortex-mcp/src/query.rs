@@ -490,6 +490,7 @@ mod tests {
 
     fn update(update_type: UpdateType, title: &str) -> ContextUpdate {
         ContextUpdate {
+            meta: Default::default(),
             id: Uuid::new_v4(),
             timestamp: chrono::Utc::now(),
             update_type,

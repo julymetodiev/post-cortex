@@ -314,6 +314,14 @@ pub fn build_router(
         .route("/api/cards", get(api_get_cards))
         .route("/api/cards/user", put(api_put_user_card))
         .route("/api/cards/workspace/{id}", put(api_put_workspace_card))
+        .route("/api/graph", get(api_graph))
+        .route("/api/timeline", get(api_timeline))
+        .route("/api/topics", get(api_topics))
+        .route("/api/radar", get(api_radar))
+        .route("/api/file", get(api_file))
+        .route("/api/entities/{name}/context", get(api_entity_context))
+        .route("/api/entities/{name}/impact", get(api_entity_impact))
+        .route("/api/entities/{name}/lineage", get(api_entity_lineage))
         .with_state(api_state)
         .layer(axum::middleware::from_fn_with_state(
             Arc::new(host_policy.clone()),
@@ -590,6 +598,128 @@ async fn api_append_messages(
         Err(e @ SystemError::InvalidArgument(_)) => Err((StatusCode::BAD_REQUEST, e.to_string())),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     }
+}
+
+type Params = std::collections::HashMap<String, String>;
+
+/// Render a graph view (ROADMAP Phase 4) for the scope named in `params`:
+/// `scope=session|workspace&id=...`, or `session_id=...` /
+/// `workspace_id=...`. The other parameters are the view's, see
+/// [`post_cortex_memory::graph_views::ViewRequest::parse`].
+async fn graph_view(
+    state: &ApiState,
+    view: &str,
+    params: Params,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    use crate::daemon::assembly_scope::{ScopeError, graph_scope};
+    use post_cortex_memory::graph_views::ViewRequest;
+
+    let uuid = |key: &str| -> Result<Option<Uuid>, (StatusCode, String)> {
+        params
+            .get(key)
+            .filter(|v| !v.is_empty())
+            .map(|v| {
+                Uuid::parse_str(v)
+                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("{key}: invalid UUID: {e}")))
+            })
+            .transpose()
+    };
+    let (session, workspace) = match params.get("scope").map(String::as_str) {
+        Some("session") => (uuid("id")?, None),
+        Some("workspace") => (None, uuid("id")?),
+        Some(other) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("scope must be 'session' or 'workspace', got '{other}'"),
+            ));
+        }
+        None => (uuid("session_id")?, uuid("workspace_id")?),
+    };
+    let request = ViewRequest::parse(view, &params).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let scope = graph_scope(&state.memory_system, session, workspace)
+        .await
+        .map_err(|e| match e {
+            ScopeError::Missing => (StatusCode::BAD_REQUEST, e.to_string()),
+            ScopeError::NotFound(_) => (StatusCode::NOT_FOUND, e.to_string()),
+        })?;
+    // Views walk the whole scope; keep them off the async workers.
+    tokio::task::spawn_blocking(move || scope.render(&request))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map(Json)
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))
+}
+
+/// `GET /api/graph`: nodes and edges (`limit`, `at`).
+async fn api_graph(
+    State(state): State<Arc<ApiState>>,
+    Query(params): Query<Params>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    graph_view(&state, "graph", params).await
+}
+
+/// `GET /api/timeline`: records and relation changes (`from`, `to`, `limit`).
+async fn api_timeline(
+    State(state): State<Arc<ApiState>>,
+    Query(params): Query<Params>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    graph_view(&state, "timeline", params).await
+}
+
+/// `GET /api/topics`: topic communities with their key decisions.
+async fn api_topics(
+    State(state): State<Arc<ApiState>>,
+    Query(params): Query<Params>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    graph_view(&state, "topics", params).await
+}
+
+/// `GET /api/radar`: unsolved problems, decisions without rationale, open
+/// questions, stale entities, possible aliases.
+async fn api_radar(
+    State(state): State<Arc<ApiState>>,
+    Query(params): Query<Params>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    graph_view(&state, "radar", params).await
+}
+
+/// `GET /api/file?path=...`: records, past problems, decisions and
+/// dependents of a source file (`depth`, `limit`), for editor hooks.
+async fn api_file(
+    State(state): State<Arc<ApiState>>,
+    Query(params): Query<Params>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    graph_view(&state, "file", params).await
+}
+
+/// `GET /api/entities/{name}/context`.
+async fn api_entity_context(
+    State(state): State<Arc<ApiState>>,
+    Path(name): Path<String>,
+    Query(mut params): Query<Params>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    params.insert("entity".into(), name);
+    graph_view(&state, "entity", params).await
+}
+
+/// `GET /api/entities/{name}/impact` (`depth`, `limit`).
+async fn api_entity_impact(
+    State(state): State<Arc<ApiState>>,
+    Path(name): Path<String>,
+    Query(mut params): Query<Params>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    params.insert("entity".into(), name);
+    graph_view(&state, "impact", params).await
+}
+
+/// `GET /api/entities/{name}/lineage` (`depth`).
+async fn api_entity_lineage(
+    State(state): State<Arc<ApiState>>,
+    Path(name): Path<String>,
+    Query(mut params): Query<Params>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    params.insert("entity".into(), name);
+    graph_view(&state, "lineage", params).await
 }
 
 async fn api_list_sessions(
@@ -1078,6 +1208,238 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let (status, _) = status_and_body(&router, get("/api/sessions", "evil.example")).await;
         assert_eq!(status, StatusCode::OK);
+        ct.cancel();
+    }
+
+    /// The graph views (ROADMAP Phase 4) over REST: session and workspace
+    /// scope, alias lookup, supersession in the timeline, error statuses.
+    #[tokio::test]
+    async fn graph_api_serves_views() {
+        use post_cortex_core::core::context_update::{
+            EntityData, EntityRelationship, EntityType, RelationType, UpdateContent, UpdateMeta,
+            UpdateType,
+        };
+        use post_cortex_core::services::UpdateContextRequest;
+
+        let dir = tempfile::tempdir().unwrap();
+        let memory = Arc::new(
+            ConversationMemorySystem::new(post_cortex_memory::SystemConfig {
+                data_directory: dir.path().to_str().unwrap().to_string(),
+                enable_embeddings: false,
+                ..Default::default()
+            })
+            .await
+            .unwrap(),
+        );
+        let service = Arc::new(MemoryServiceImpl::new(memory.clone()));
+        let ct = CancellationToken::new();
+        let router = build_router(
+            memory.clone(),
+            service.clone(),
+            &policy("127.0.0.1", &[]),
+            None,
+            &ct,
+        );
+        let session = memory
+            .create_session(Some("graph".into()), None)
+            .await
+            .unwrap();
+
+        let entity = |name: &str| EntityData {
+            name: name.into(),
+            entity_type: EntityType::Technology,
+            first_mentioned: chrono::Utc::now(),
+            last_mentioned: chrono::Utc::now(),
+            mention_count: 1,
+            importance_score: 1.0,
+            description: None,
+            aliases: Vec::new(),
+        };
+        let write = |title: &str, store: &str, meta: UpdateMeta| UpdateContextRequest {
+            session_id: session,
+            interaction_type: UpdateType::DecisionMade,
+            content: UpdateContent {
+                title: title.into(),
+                description: format!("{title} because"),
+                details: vec![],
+                examples: vec![],
+                implications: vec![],
+            },
+            entities: vec![entity("pcx"), entity(store)],
+            relations: vec![EntityRelationship {
+                from_entity: "pcx".into(),
+                to_entity: store.into(),
+                relation_type: RelationType::DependsOn,
+                context: "stores data".into(),
+            }],
+            code_reference: None,
+            author: Some("claude-code".into()),
+            derived_from: vec![],
+            meta,
+        };
+        let first = service
+            .update_context(write("use RocksDB", "RocksDB", UpdateMeta::default()))
+            .await
+            .unwrap();
+        let bad = service
+            .update_context(write(
+                "x",
+                "rocks-db",
+                UpdateMeta {
+                    supersedes: vec![Uuid::new_v4()],
+                    ..Default::default()
+                },
+            ))
+            .await;
+        assert!(bad.is_err(), "superseding an unknown record is rejected");
+        service
+            .update_context(write(
+                "move to rocks-db v2",
+                "rocks-db",
+                UpdateMeta {
+                    supersedes: vec![first.entry_id],
+                    confidence: Some(0.75),
+                    ..Default::default()
+                },
+            ))
+            .await
+            .unwrap();
+        // The graph merge runs on the background pipeline.
+        for _ in 0..200 {
+            let s = memory.get_session(session).await.unwrap().load_full();
+            if s.entity_graph
+                .entity_mentions
+                .get("RocksDB")
+                .map_or(0, Vec::len)
+                == 2
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let json = |text: &str| -> serde_json::Value { serde_json::from_str(text).unwrap() };
+        let host = "localhost:3737";
+        let (status, body) = status_and_body(
+            &router,
+            get(&format!("/api/graph?session_id={session}"), host),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let graph = json(&body);
+        let rocks = graph["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"] == "RocksDB")
+            .expect("RocksDB node");
+        assert_eq!(rocks["aliases"], serde_json::json!(["rocks-db"]));
+        assert_eq!(graph["edges"].as_array().unwrap().len(), 1);
+
+        let (status, body) = status_and_body(
+            &router,
+            get(
+                &format!("/api/entities/rocks%20db/context?scope=session&id={session}"),
+                host,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let view = json(&body);
+        assert_eq!(view["entity"]["name"], "RocksDB");
+        assert_eq!(view["total_records"], 2);
+        assert_eq!(view["records"][0]["confidence"], 0.75);
+
+        let (status, body) = status_and_body(
+            &router,
+            get(
+                &format!("/api/entities/RocksDB/impact?session_id={session}"),
+                host,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(json(&body)["dependents"][0]["entity"], "pcx");
+
+        let (status, body) = status_and_body(
+            &router,
+            get(&format!("/api/timeline?session_id={session}"), host),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let events = json(&body)["events"].as_array().unwrap().clone();
+        assert!(
+            events
+                .iter()
+                .any(|e| e["kind"] == "ended" && e["reason"] == "superseded"),
+            "{events:?}"
+        );
+
+        for path in ["topics", "radar"] {
+            let (status, body) = status_and_body(
+                &router,
+                get(&format!("/api/{path}?session_id={session}"), host),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{path}: {body}");
+        }
+        let (status, body) = status_and_body(
+            &router,
+            get(
+                &format!("/api/entities/pcx/lineage?session_id={session}"),
+                host,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        // Workspace scope.
+        let (_, body) = status_and_body(
+            &router,
+            post_json("/api/workspaces", serde_json::json!({"name": "ws"})),
+        )
+        .await;
+        let ws = json(&body)["id"].as_str().unwrap().to_string();
+        let (status, _) = status_and_body(
+            &router,
+            post_json(
+                &format!("/api/workspaces/{ws}/sessions/{session}"),
+                serde_json::json!({}),
+            ),
+        )
+        .await;
+        assert!(status.is_success());
+        let (status, body) = status_and_body(
+            &router,
+            get(&format!("/api/graph?scope=workspace&id={ws}"), host),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(json(&body)["total_nodes"], 2);
+
+        // Errors.
+        for (path, expected) in [
+            ("/api/graph".to_string(), StatusCode::BAD_REQUEST),
+            (
+                format!("/api/graph?session_id={session}&limit=x"),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                format!("/api/graph?scope=team&id={session}"),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                format!("/api/graph?session_id={}", Uuid::new_v4()),
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                format!("/api/entities/nothing/context?session_id={session}"),
+                StatusCode::NOT_FOUND,
+            ),
+        ] {
+            let (status, body) = status_and_body(&router, get(&path, host)).await;
+            assert_eq!(status, expected, "{path}: {body}");
+        }
         ct.cancel();
     }
 }

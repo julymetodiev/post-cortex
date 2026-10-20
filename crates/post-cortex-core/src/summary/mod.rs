@@ -370,11 +370,12 @@ mod tests {
         let graph = Arc::make_mut(&mut session.entity_graph);
         for i in 0..25u32 {
             graph.add_or_update_entity(format!("e{i:02}"), EntityType::Concept, ts(0), "");
+            // No relations: importance follows the mentions.
             graph
                 .entities
                 .get_mut(&format!("e{i:02}"))
                 .unwrap()
-                .importance_score = (i % 3) as f32;
+                .mention_count = i % 3 + 1;
         }
 
         let options = SummaryOptions {

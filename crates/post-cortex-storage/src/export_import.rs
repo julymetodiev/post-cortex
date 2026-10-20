@@ -908,6 +908,7 @@ mod tests {
 
         let updates: Vec<ContextUpdate> = (0..3)
             .map(|i| ContextUpdate {
+                meta: Default::default(),
                 id: Uuid::new_v4(),
                 timestamp: chrono::Utc::now(),
                 update_type: UpdateType::DecisionMade,

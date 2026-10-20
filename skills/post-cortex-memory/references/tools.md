@@ -64,12 +64,14 @@ Cards: one markdown note per project (stack, conventions, current goals) and one
 
 JSONPath subset: `$`, `.field`, `[n]`, `[-n]`, `[a:b]`, `[*]`, `.*`, `[0,3,7]`. No `..`, filters or functions.
 
-Result fields (all scopes): `content_id`, `session_id`, `content_type`, `text_content`, `similarity_score`, `importance_score`, `combined_score`, `timestamp`; `author` and `derived_from` when set.
+| `trace` | `true` adds `signals` to each result: its rank in the vector, BM25 and graph rankings, the fused and reranker scores |
+
+Result fields (all scopes): `content_id`, `session_id`, `content_type`, `text_content`, `similarity_score`, `importance_score`, `combined_score`, `timestamp`; `author`, `derived_from` and `confidence` when set; `valid_to`, `ended_by`, `end_reason` for records that no longer hold (`superseded`, `contradicted`, `restated`, `duplicate`, `forgotten`). Records a later record or `forget` ended, and records written with low confidence, rank lower but stay as history.
 
 ## update_conversation_context
 
-Single mode: `session_id`, `interaction_type`, `content`, `entities`, `relations`, optional `code_reference`, optional `dry_run`, optional `author`, optional `derived_from`.
-Bulk mode: `session_id`, `updates: [{interaction_type, content, entities, relations, code_reference?, derived_from?}]`.
+Single mode: `session_id`, `interaction_type`, `content`, `entities`, `relations`, optional `code_reference`, optional `dry_run`, optional `author`, optional `derived_from`, optional `valid_from`, `supersedes`, `confidence`.
+Bulk mode: `session_id`, `updates: [{interaction_type, content, entities, relations, code_reference?, derived_from?, valid_from?, supersedes?, confidence?}]`.
 
 - `interaction_type`: `qa`, `decision_made`, `problem_solved`, `code_change`, `requirement_added`, `concept_defined`
 - `content`: object of string → string
@@ -79,6 +81,9 @@ Bulk mode: `session_id`, `updates: [{interaction_type, content, entities, relati
 - At least one entity and one relation; both relation ends must appear in `entities`; no self-relations.
 - `author`: who writes it (your agent name, the user, a teammate); defaults to the connection's `X-PCX-Author` header, else the MCP client's name unless that only names an SDK (`rmcp`, `mcp`); pass it when you know who you are. Applies to all updates in bulk mode.
 - `derived_from`: the captured messages the record was drawn from, as `message:<n>` content ids from a `corpus: "messages"` search; each must exist in the session, else the write is rejected. Search hits on the record show them as `derived_from`.
+- `supersedes`: entry ids of earlier records of the session this one replaces (a reversed decision, a changed requirement); they end where this one starts and stay in the history. Without it, a newer decision, requirement or concept about exactly the same entities with a similar title replaces the older one on its own, and `A conflicts_with B` ends older records that asserted another relation between A and B.
+- `valid_from`: when the fact started to hold, if not now (RFC 3339 or `YYYY-MM-DD`). `confidence`: 0..1.
+- Entity names resolve: spellings that differ only in case, spaces, `-` or `_` are one entity ("SurrealDB", "surreal-db"); other synonyms can be merged with `manage_entity` `merge`.
 
 Response (MCP): a success message — single mode "Context updated successfully", bulk mode a success/error count. No entry ID is returned; look it up later via `semantic_search` (`content_id`). An error message explains what was rejected (missing entities/relations, unknown relation type, bad `code_reference`).
 
@@ -122,6 +127,19 @@ For records it uses no embeddings: matches entity names in the query, expands on
 | `analyze_entity_importance` | — |
 | `assemble_context` | `query`, `token_budget` |
 
+Graph views (JSON, the same as the daemon's REST `/api/graph`... routes); add `workspace_id` to any of them to view the whole workspace:
+
+| query_type | parameters | returns |
+|---|---|---|
+| `graph` | `limit` (default 100), `at` | most important entities (`importance` 0..1, `aliases`, `community`) and the relations between them, each with `valid_from` / `valid_to` and the records asserting it; `at` shows the graph as it stood then |
+| `entity` | `entity`, `limit` | one entity by name or alias: relations, the records mentioning it (newest first), its decisions |
+| `impact` | `entity`, `depth` (default 3), `limit` | who depends on it, hop by hop, and the valid decisions, requirements and problems about them: a risk report before changing it |
+| `file` | `path`, `depth`, `limit` | problems solved in a source file, decisions about it, the entities naming it and what depends on them |
+| `timeline` | `from`, `to`, `limit` | records written and ended, relations added and ended, in time order |
+| `topics` | `limit`, `per_topic` | entity communities with their central entities and key decisions: a summary of the project by topic |
+| `lineage` | `entity`, `depth` | "why did we choose X": problem → decision → consequences in time order |
+| `radar` | `limit` | unsolved problems, decisions without rationale, open questions, entities untouched for 90 days, possible aliases |
+
 ## get_structured_summary
 
 `session_id` (required); `include`: array of `decisions`, `insights`, `entities`, `questions`, `all` (default `all`); `decisions_limit`, `entities_limit`, `questions_limit`, `concepts_limit`; `min_confidence` (0–1); `compact` (bool — shorter output, good for catching up).
@@ -130,7 +148,10 @@ For records it uses no embeddings: matches entity names in the query, expands on
 
 `session_id`, `action`:
 - `delete` + `entity_name` — removes the entity and cascades its typed edges.
+- `merge` + `entity_name` + `into` — the first becomes an alias of the second (mentions, relations and counts move over).
 - `delete_update` + `entry_id` — removes one context entry (and its embedding).
+- `forget` + `entry_id` — the record stops holding now but stays in the history (search marks it `forgotten`).
+- `purge` + `entry_id` — erases the record and everything derived from it (embedding, full-text entry, entities and edges only it introduced), e.g. for GDPR erasure. Cannot be undone.
 
 ## admin
 

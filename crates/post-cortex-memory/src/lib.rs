@@ -32,6 +32,7 @@ pub mod content_vectorizer;
 /// Graph-aware context assembly that combines semantic search results with entity-graph traversals.
 pub mod context_assembly;
 pub mod error;
+pub mod graph_views;
 /// JSONPath subset parser and executor for the `select` parameter.
 pub mod jsonpath;
 pub mod memory_system;

@@ -107,8 +107,12 @@ pub struct RetrievalGraph<R> {
     /// Term or entity -> node index (after the records). Entities are keyed
     /// as `"entity:" + lowercased name` so they never collide with terms.
     nodes: HashMap<String, usize>,
-    /// Adjacency over all nodes (records first).
-    edges: Vec<Vec<usize>>,
+    /// Weighted adjacency over all nodes (records first): record-key edges
+    /// weigh 1, relation edges their type's
+    /// [`RelationType::weight`](crate::core::context_update::RelationType::weight).
+    edges: Vec<Vec<(usize, f32)>>,
+    /// Total edge weight per node.
+    strength: Vec<f32>,
     /// Records each non-record node is on, for seed weights.
     df: Vec<f32>,
 }
@@ -158,8 +162,8 @@ impl<R: Clone> RetrievalGraph<R> {
         for (r, keys) in keys_per_record.iter().enumerate() {
             for k in keys {
                 if let Some(&node) = nodes.get(k) {
-                    edges[r].push(node);
-                    edges[node].push(r);
+                    edges[r].push((node, 1.0));
+                    edges[node].push((r, 1.0));
                 }
             }
         }
@@ -171,14 +175,20 @@ impl<R: Clone> RetrievalGraph<R> {
                 continue;
             };
             if a != b {
-                edges[a].push(b);
-                edges[b].push(a);
+                let w = rel.relation_type.weight();
+                edges[a].push((b, w));
+                edges[b].push((a, w));
             }
         }
+        let strength = edges
+            .iter()
+            .map(|e| e.iter().map(|(_, w)| w).sum())
+            .collect();
         Self {
             records: ids,
             nodes,
             edges,
+            strength,
             df,
         }
     }
@@ -218,9 +228,9 @@ impl<R: Clone> RetrievalGraph<R> {
                 if neighbours.is_empty() {
                     continue;
                 }
-                let share = DAMPING * rank[node] / neighbours.len() as f32;
-                for &m in neighbours {
-                    next[m] += share;
+                let share = DAMPING * rank[node] / self.strength[node];
+                for &(m, w) in neighbours {
+                    next[m] += share * w;
                 }
             }
             std::mem::swap(&mut rank, &mut next);

@@ -32,6 +32,7 @@ use post_cortex_embeddings::VectorMetadata;
 
 fn update(title: &str) -> ContextUpdate {
     ContextUpdate {
+        meta: Default::default(),
         id: Uuid::new_v4(),
         timestamp: Utc::now(),
         update_type: UpdateType::ConceptDefined,
@@ -370,6 +371,7 @@ async fn delete_session_removes_every_record_of_the_session() {
                 .upsert_entity(
                     sid,
                     &EntityData {
+                        aliases: Vec::new(),
                         name: name.into(),
                         entity_type: EntityType::Concept,
                         first_mentioned: Utc::now(),
@@ -428,6 +430,7 @@ async fn clear_session_entities_drops_entities_and_relationships() {
             .upsert_entity(
                 id,
                 &EntityData {
+                    aliases: Vec::new(),
                     name: name.into(),
                     entity_type: EntityType::Concept,
                     first_mentioned: Utc::now(),

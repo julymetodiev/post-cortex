@@ -108,14 +108,21 @@ Note: Mutually exclusive with select (Form A)."#
 /// Request payload for the `manage_entity` tool.
 #[derive(Deserialize, JsonSchema, Debug)]
 pub struct ManageEntityRequest {
-    /// Entity management action (`delete` or `delete_update`).
+    /// Entity management action.
     #[schemars(description = r#"Action to perform on session content.
 
 Valid values:
 - delete: Remove an entity from the session (cascades typed edges). Requires entity_name.
+- merge: Merge entity_name into `into` when both name one thing ("Surreal" into "SurrealDB"): mentions,
+  relations and counts move over and entity_name becomes an alias. Spellings that differ only in case,
+  spaces, '-' or '_' merge on their own. Requires entity_name and into.
 - delete_update: Remove a single context update (ghost / bad row) by entry_id. Requires entry_id.
+- forget: Retire a record that no longer holds: it stops being valid now but stays in the history
+  (timeline, search with its end date). Requires entry_id.
+- purge: Erase a record and everything derived from it (embedding, full-text entry, entities and edges
+  only it introduced), e.g. for GDPR erasure. Cannot be undone. Requires entry_id.
 
-Note: Must be lowercase. Additional actions may be added later."#)]
+Note: Must be lowercase."#)]
     pub action: String,
     /// Session UUID that contains the target entity or update.
     #[schemars(description = r#"Session UUID containing the entity/update.
@@ -141,6 +148,10 @@ Note: This is the `entry_id` returned by `assemble_context` items, or the id of 
 ContextUpdate stored in the session. Use it to remove ghost / mis-shaped writes."#
     )]
     pub entry_id: Option<String>,
+    /// Target entity of the `merge` action.
+    #[schemars(description = r#"Entity to merge entity_name into (required for action=merge)."#)]
+    #[serde(default)]
+    pub into: Option<String>,
 }
 
 // =============================================================================
@@ -310,6 +321,23 @@ from search results (e.g. ["message:12", "message:13"]); optional. Each must exi
     )]
     #[serde(default)]
     pub derived_from: Option<Vec<String>>,
+    /// When the fact started to hold.
+    #[schemars(
+        description = r#"When the fact started to hold, if not now (RFC 3339 or YYYY-MM-DD); optional."#
+    )]
+    #[serde(default)]
+    pub valid_from: Option<String>,
+    /// Earlier records this one replaces.
+    #[schemars(
+        description = r#"Entry ids of earlier records of this session that this one replaces (e.g. a
+decision that reverses an older decision); optional. They stay in the history, marked as ended."#
+    )]
+    #[serde(default)]
+    pub supersedes: Option<Vec<String>>,
+    /// How sure the writer is.
+    #[schemars(description = r#"How sure you are, 0..1; optional."#)]
+    #[serde(default)]
+    pub confidence: Option<f32>,
 }
 
 /// Request payload for the `update_conversation_context` tool.
@@ -387,6 +415,23 @@ from search results (e.g. ["message:12", "message:13"]); optional. Each must exi
     )]
     #[serde(default)]
     pub derived_from: Option<Vec<String>>,
+    /// When the fact started to hold.
+    #[schemars(
+        description = r#"When the fact started to hold, if not now (RFC 3339 or YYYY-MM-DD); optional."#
+    )]
+    #[serde(default)]
+    pub valid_from: Option<String>,
+    /// Earlier records this one replaces.
+    #[schemars(
+        description = r#"Entry ids of earlier records of this session that this one replaces (e.g. a
+decision that reverses an older decision); optional. They stay in the history, marked as ended."#
+    )]
+    #[serde(default)]
+    pub supersedes: Option<Vec<String>>,
+    /// How sure the writer is.
+    #[schemars(description = r#"How sure you are, 0..1; optional."#)]
+    #[serde(default)]
+    pub confidence: Option<f32>,
     /// Bulk update array; overrides single-update fields when present.
     #[schemars(
         description = r#"Array of updates for bulk operation (overrides single fields if provided).
@@ -606,6 +651,13 @@ Use messages to find what was said in a conversation that was never logged as a 
 own agent name to favour your own past work. Unlike author, others' results still appear."#
     )]
     pub prefer_author: Option<String>,
+    /// Report how each result was found.
+    #[schemars(
+        description = r#"Add `signals` to each result: its rank in the vector, BM25 and graph rankings,
+the fused score and the reranker score (optional, default false). For debugging and tuning."#
+    )]
+    #[serde(default)]
+    pub trace: Option<bool>,
     /// Form A: single JSONPath expression. The matched value is returned
     /// directly instead of the full response payload.
     #[schemars(
@@ -696,7 +748,7 @@ pub struct QueryConversationContextRequest {
     pub session_id: String,
     /// Query type selector.
     #[schemars(
-        description = "Query type. Supported: find_related_entities, get_entity_context, search_updates, entity_importance, entity_network, find_related_content (topic, max_results), key_decisions, key_insights (limit), session_statistics, structured_summary, decisions, open_questions, related_entities, all_entities, trace_relationships, get_most_important_entities, get_recently_mentioned_entities, analyze_entity_importance, find_entities_by_type, assemble_context, recent_changes, code_references."
+        description = "Query type. Supported: find_related_entities, get_entity_context, search_updates, entity_importance, entity_network, find_related_content (topic, max_results), key_decisions, key_insights (limit), session_statistics, structured_summary, decisions, open_questions, related_entities, all_entities, trace_relationships, get_most_important_entities, get_recently_mentioned_entities, analyze_entity_importance, find_entities_by_type, assemble_context, recent_changes, code_references. Graph views (JSON; add workspace_id to view a whole workspace): graph (limit, at), entity (entity, limit: records, decisions, relations, aliases), impact (entity, depth: who depends on it plus valid decisions/requirements/problems about them, a pre-change risk report), timeline (from, to, limit: records written/ended, relations added/ended), topics (limit, per_topic: entity communities with key decisions), lineage (entity, depth: problem -> decision -> consequences in time order), radar (limit: unsolved problems, decisions without rationale, open questions, stale entities, possible aliases)."
     )]
     pub query_type: String,
     /// Key-value query parameters.

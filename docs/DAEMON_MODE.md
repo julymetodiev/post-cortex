@@ -361,6 +361,41 @@ curl -X PUT http://127.0.0.1:3737/api/cards/workspace/<uuid> \
 # 200 with the new version, 409 with the latest one if it changed meanwhile
 ```
 
+## Graph and memory API
+
+Read-only JSON views of what post-cortex knows, for dashboards, editors and
+agents (the same views as the MCP `query_conversation_context` graph types and
+the gRPC `GetGraphView` RPC). Each takes the scope as `scope=session|workspace&id=<uuid>`
+(or `session_id=` / `workspace_id=`), and uses the same auth and allowed hosts
+as the rest of `/api/*`.
+
+| Route | Parameters | Returns |
+|---|---|---|
+| `GET /api/graph` | `limit`, `at` | nodes (entity, type, aliases, importance, mention count, records, first/last seen, community) and edges (relation type, context, weight, validity, records asserting it) |
+| `GET /api/entities/{name}/context` | `limit` | the entity (by name or alias), its relations, the records mentioning it, its decisions |
+| `GET /api/entities/{name}/impact` | `depth`, `limit` | everything that depends on it and the valid decisions, requirements and problems about them |
+| `GET /api/entities/{name}/lineage` | `depth` | problem → decision → consequences in time order |
+| `GET /api/timeline` | `from`, `to`, `limit` | records written and ended, relations added and ended |
+| `GET /api/topics` | `limit`, `per_topic` | entity communities with central entities and key decisions |
+| `GET /api/radar` | `limit` | unsolved problems, decisions without rationale, open questions, stale entities, possible aliases |
+| `GET /api/file` | `path`, `depth`, `limit` | problems solved in a source file, decisions about it, what depends on it |
+
+Records have a validity interval: a record ends when a later one supersedes it
+(`supersedes` on write, or the same fact restated about the same entities), when
+a later one asserts `conflicts_with` between entities it related, or when it is
+forgotten (`manage_entity` `forget`). Ended records stay in the history: the
+timeline shows when and why they ended, and search ranks them lower.
+
+`pcx setup` also installs a PreToolUse hook, `.claude/hooks/pcx-file-context.py`,
+that gives the agent what the memory says about a file (past problems, decisions,
+dependents) before it edits it.
+
+```bash
+curl "http://127.0.0.1:3737/api/graph?scope=workspace&id=<uuid>&limit=200"
+curl "http://127.0.0.1:3737/api/entities/SurrealDB/impact?session_id=<uuid>&depth=2"
+curl "http://127.0.0.1:3737/api/timeline?session_id=<uuid>&from=2026-10-01"
+```
+
 ## Troubleshooting
 
 **Port already in use:**

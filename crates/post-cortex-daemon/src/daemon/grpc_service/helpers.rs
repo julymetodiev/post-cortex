@@ -164,6 +164,7 @@ pub(super) fn proto_update_to_request(
         &proto.relations,
         proto.author,
         proto.derived_from,
+        proto_meta(proto.valid_from, &proto.supersedes, proto.confidence)?,
     )
 }
 
@@ -182,7 +183,42 @@ pub(super) fn proto_bulk_item_to_request(
         &item.relations,
         author,
         item.derived_from,
+        proto_meta(item.valid_from, &item.supersedes, item.confidence)?,
     )
+}
+
+/// The writer's validity and trust statements of a proto update.
+fn proto_meta(
+    valid_from: Option<String>,
+    supersedes: &[String],
+    confidence: Option<f32>,
+) -> Result<post_cortex_core::core::context_update::UpdateMeta, Status> {
+    let valid_from = valid_from
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| {
+            post_cortex_memory::graph_views::parse_time(v).ok_or_else(|| {
+                Status::invalid_argument(format!(
+                    "valid_from: '{v}' is not an RFC 3339 time or YYYY-MM-DD date"
+                ))
+            })
+        })
+        .transpose()?;
+    let supersedes = supersedes
+        .iter()
+        .map(|id| {
+            Uuid::parse_str(id.trim()).map_err(|_| {
+                Status::invalid_argument(format!("supersedes: '{id}' is not an entry id"))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(post_cortex_core::core::context_update::UpdateMeta {
+        valid_from,
+        supersedes,
+        confidence,
+        retired_at: None,
+    })
 }
 
 fn translate_payload(
@@ -193,6 +229,7 @@ fn translate_payload(
     relations_proto: &[super::pb::RelationInfo],
     author: Option<String>,
     derived_from: Vec<String>,
+    meta: post_cortex_core::core::context_update::UpdateMeta,
 ) -> Result<ServiceUpdateRequest, Status> {
     let interaction_type = parse_update_type(interaction_type);
     let content_proto = content_proto.unwrap_or_default();
@@ -207,6 +244,7 @@ fn translate_payload(
     let entities: Vec<EntityData> = entities_proto
         .iter()
         .map(|e| EntityData {
+            aliases: Vec::new(),
             name: e.name.clone(),
             entity_type: parse_entity_type(&e.entity_type),
             first_mentioned: chrono::Utc::now(),
@@ -245,6 +283,7 @@ fn translate_payload(
             .map(|a| a.trim().to_string())
             .filter(|a| !a.is_empty()),
         derived_from,
+        meta,
     })
 }
 

@@ -43,7 +43,7 @@ use post_cortex_core::workspace::SessionRole;
 
 use super::RealRocksDBStorage;
 use super::core::{SessionLocks, blocking, keys_with_prefix, prefix_read_opts, scan_prefix};
-use super::legacy::{CHECKPOINT_V3, decode_checkpoint, decode_update};
+use super::legacy::{CHECKPOINT_V4, decode_checkpoint, decode_update};
 use super::messages::message_next_key;
 use super::types::{SessionCheckpoint, StoredWorkspace, StoredWorkspaceSession};
 
@@ -180,6 +180,7 @@ fn read_session(db: &DB, session_id: Uuid) -> Result<Option<LoadedSession>> {
     // An embedded list wins: it was written by a version that keeps the
     // blob authoritative (possibly after this one, on a downgrade).
     let Some(index) = index.filter(|_| session.incremental_updates.is_empty()) else {
+        session.relink_entity_mentions();
         return Ok(Some(LoadedSession {
             session,
             legacy_blob: Some(blob),
@@ -197,6 +198,7 @@ fn read_session(db: &DB, session_id: Uuid) -> Result<Option<LoadedSession>> {
         }
     }
     session.set_incremental_updates(updates);
+    session.relink_entity_mentions();
     Ok(Some(LoadedSession {
         session,
         legacy_blob: None,
@@ -457,7 +459,7 @@ impl RealRocksDBStorage {
         let checkpoint = checkpoint.clone();
 
         tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut checkpoint_data = CHECKPOINT_V3.to_vec();
+            let mut checkpoint_data = CHECKPOINT_V4.to_vec();
             checkpoint_data.extend(
                 bincode::serde::encode_to_vec(&checkpoint, bincode::config::standard())
                     .map_err(|e| anyhow::anyhow!("Failed to serialize checkpoint: {}", e))?,

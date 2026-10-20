@@ -116,6 +116,7 @@ pub(super) async fn handle(
                 req.sources.clone(),
                 req.author.clone(),
                 req.prefer_author.clone(),
+                req.trace.unwrap_or(false),
             )
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -205,6 +206,7 @@ pub(super) async fn handle(
                         corpus,
                         author: req.author.clone().filter(|a| !a.trim().is_empty()),
                         prefer_author: req.prefer_author.clone().filter(|a| !a.trim().is_empty()),
+                        trace: req.trace.unwrap_or(false),
                         ..Default::default()
                     },
                 )
@@ -235,6 +237,7 @@ pub(super) async fn handle(
                 req.sources.clone(),
                 req.author.clone(),
                 req.prefer_author.clone(),
+                req.trace.unwrap_or(false),
             )
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;

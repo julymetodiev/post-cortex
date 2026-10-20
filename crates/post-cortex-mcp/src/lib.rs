@@ -498,6 +498,11 @@ pub struct ContextUpdateItem {
     /// Captured messages the update was drawn from (`message:<seq>`).
     #[serde(default)]
     pub derived_from: Vec<String>,
+    /// Validity and trust the writer states (`valid_from`, `supersedes`,
+    /// `confidence`).
+    #[serde(default)]
+    #[schemars(skip)]
+    pub meta: post_cortex_core::core::context_update::UpdateMeta,
 }
 
 /// Wire shape for an entity carried by an MCP `update_conversation_context`

@@ -52,6 +52,49 @@ fn session_info(summary: post_cortex_storage::traits::SessionSummary) -> Session
     }
 }
 
+/// Metadata of a search result: `neighbour_of`, `author`, `derived_from`
+/// (comma-separated), and for records that no longer hold `valid_to`,
+/// `ended_by`, `end_reason`; `confidence`; `signals` (JSON) when traced.
+#[cfg(feature = "embeddings")]
+fn result_metadata(
+    r: &post_cortex_memory::content_vectorizer::SemanticSearchResult,
+) -> std::collections::HashMap<String, String> {
+    let mut m = std::collections::HashMap::new();
+    if let Some(hit) = &r.neighbour_of {
+        m.insert("neighbour_of".to_string(), hit.clone());
+    }
+    if let Some(a) = &r.author {
+        m.insert("author".to_string(), a.clone());
+    }
+    if !r.derived_from.is_empty() {
+        m.insert("derived_from".to_string(), r.derived_from.join(","));
+    }
+    if let Some(v) = &r.validity {
+        if let Some(end) = v.valid_to {
+            m.insert("valid_to".to_string(), end.to_rfc3339());
+        }
+        if let Some(by) = v.ended_by {
+            m.insert("ended_by".to_string(), by.to_string());
+        }
+        if let Some(reason) = v.reason.and_then(|r| serde_json::to_value(r).ok()) {
+            m.insert(
+                "end_reason".to_string(),
+                reason.as_str().unwrap_or_default().to_string(),
+            );
+        }
+    }
+    if let Some(c) = r.confidence {
+        m.insert("confidence".to_string(), c.to_string());
+    }
+    if let Some(signals) = &r.signals {
+        m.insert(
+            "signals".to_string(),
+            serde_json::json!(signals).to_string(),
+        );
+    }
+    m
+}
+
 /// gRPC service backed by ConversationMemorySystem.
 ///
 /// Holds both the raw [`ConversationMemorySystem`] (used by handlers
@@ -314,6 +357,85 @@ impl PostCortex for PcxGrpcService {
         }
     }
 
+    async fn merge_entities(
+        &self,
+        request: Request<MergeEntitiesRequest>,
+    ) -> Result<Response<MergeEntitiesResponse>, Status> {
+        let req = request.into_inner();
+        if req.entity_name.trim().is_empty() || req.into.trim().is_empty() {
+            return Err(Status::invalid_argument(
+                "entity_name and into must not be empty",
+            ));
+        }
+        let session_id = parse_uuid(&req.session_id)?;
+        let merged = self
+            .memory
+            .merge_entities(session_id, req.entity_name.trim(), req.into.trim())
+            .await
+            .map_err(Status::internal)?;
+        Ok(Response::new(MergeEntitiesResponse { merged }))
+    }
+
+    async fn forget_update(
+        &self,
+        request: Request<UpdateRefRequest>,
+    ) -> Result<Response<UpdateRefResponse>, Status> {
+        let req = request.into_inner();
+        let (session_id, entry_id) = (parse_uuid(&req.session_id)?, parse_uuid(&req.entry_id)?);
+        let existed = self
+            .memory
+            .forget_update(session_id, entry_id)
+            .await
+            .map_err(Status::internal)?;
+        Ok(Response::new(UpdateRefResponse { existed }))
+    }
+
+    async fn purge_update(
+        &self,
+        request: Request<UpdateRefRequest>,
+    ) -> Result<Response<UpdateRefResponse>, Status> {
+        let req = request.into_inner();
+        let (session_id, entry_id) = (parse_uuid(&req.session_id)?, parse_uuid(&req.entry_id)?);
+        let existed = self
+            .memory
+            .purge_update(session_id, entry_id)
+            .await
+            .map_err(Status::internal)?;
+        Ok(Response::new(UpdateRefResponse { existed }))
+    }
+
+    async fn get_graph_view(
+        &self,
+        request: Request<GetGraphViewRequest>,
+    ) -> Result<Response<TextResponse>, Status> {
+        use crate::daemon::assembly_scope::{ScopeError, graph_scope};
+        use post_cortex_memory::graph_views::ViewRequest;
+
+        let req = request.into_inner();
+        let optional = |raw: &str| -> Result<Option<Uuid>, Status> {
+            if raw.is_empty() {
+                Ok(None)
+            } else {
+                parse_uuid(raw).map(Some)
+            }
+        };
+        let (session_id, workspace_id) = (optional(&req.session_id)?, optional(&req.workspace_id)?);
+        let view = ViewRequest::parse(&req.view, &req.params).map_err(Status::invalid_argument)?;
+        let scope = graph_scope(&self.memory, session_id, workspace_id)
+            .await
+            .map_err(|e| match e {
+                ScopeError::Missing => Status::invalid_argument(e.to_string()),
+                ScopeError::NotFound(_) => Status::not_found(e.to_string()),
+            })?;
+        let value = tokio::task::spawn_blocking(move || scope.render(&view))
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?
+            .map_err(|e| Status::not_found(e.to_string()))?;
+        Ok(Response::new(TextResponse {
+            text: value.to_string(),
+        }))
+    }
+
     async fn update_context(
         &self,
         request: Request<UpdateContextRequest>,
@@ -539,6 +661,7 @@ impl PostCortex for PcxGrpcService {
                 corpus,
                 author: req.author.clone().filter(|a| !a.trim().is_empty()),
                 prefer_author: req.prefer_author.clone().filter(|a| !a.trim().is_empty()),
+                trace: req.trace.unwrap_or(false),
                 ..Default::default()
             };
             // workspace_id takes precedence over session_id
@@ -593,21 +716,12 @@ impl PostCortex for PcxGrpcService {
                 .into_iter()
                 .filter(|r| r.combined_score >= min_score)
                 .map(|r| SearchResult {
-                    entry_id: r.content_id,
-                    content: r.text_content,
+                    content: r.text_content.clone(),
                     score: r.combined_score,
                     session_id: r.session_id.to_string(),
                     content_type: format!("{:?}", r.content_type),
-                    metadata: r
-                        .neighbour_of
-                        .map(|hit| ("neighbour_of".to_string(), hit))
-                        .into_iter()
-                        .chain(r.author.map(|a| ("author".to_string(), a)))
-                        .chain(
-                            (!r.derived_from.is_empty())
-                                .then(|| ("derived_from".to_string(), r.derived_from.join(","))),
-                        )
-                        .collect(),
+                    metadata: result_metadata(&r),
+                    entry_id: r.content_id,
                 })
                 .collect();
 
@@ -710,21 +824,12 @@ impl PostCortex for PcxGrpcService {
             let results: Vec<SearchResult> = search_results
                 .into_iter()
                 .map(|r| SearchResult {
-                    entry_id: r.content_id,
-                    content: r.text_content,
+                    content: r.text_content.clone(),
                     score: r.combined_score,
                     session_id: r.session_id.to_string(),
                     content_type: format!("{:?}", r.content_type),
-                    metadata: r
-                        .neighbour_of
-                        .map(|hit| ("neighbour_of".to_string(), hit))
-                        .into_iter()
-                        .chain(r.author.map(|a| ("author".to_string(), a)))
-                        .chain(
-                            (!r.derived_from.is_empty())
-                                .then(|| ("derived_from".to_string(), r.derived_from.join(","))),
-                        )
-                        .collect(),
+                    metadata: result_metadata(&r),
+                    entry_id: r.content_id,
                 })
                 .collect();
 

@@ -72,6 +72,10 @@ pub struct UpdateContextRequest {
     /// (`message:<seq>`); each must exist.
     #[serde(default)]
     pub derived_from: Vec<String>,
+    /// Validity and trust the writer states: `valid_from`, `supersedes`
+    /// (entry ids of the session), `confidence`. `retired_at` is rejected.
+    #[serde(default)]
+    pub meta: crate::core::context_update::UpdateMeta,
 }
 
 /// Outcome of a single write.

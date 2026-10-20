@@ -268,6 +268,9 @@ fn message_text(message: &Message) -> String {
 #[cfg(feature = "embeddings")]
 fn message_neighbour(message: &Message, hit: &SemanticSearchResult) -> SemanticSearchResult {
     SemanticSearchResult {
+        validity: None,
+        signals: None,
+        confidence: None,
         content_id: message::content_id(message.seq),
         session_id: message.session_id,
         content_type: ContentType::Message,
@@ -360,6 +363,9 @@ mod tests {
 
         let result =
             |content_id: &str, content_type: ContentType, score: f32| SemanticSearchResult {
+                validity: None,
+                signals: None,
+                confidence: None,
                 content_id: content_id.to_string(),
                 session_id: sid,
                 content_type,

@@ -84,6 +84,7 @@ async fn test_rocksdb_graph_storage_entities() {
 
     // Create test entity
     let entity = EntityData {
+        aliases: Vec::new(),
         name: "Rust".to_string(),
         entity_type: EntityType::Technology,
         first_mentioned: Utc::now(),
@@ -142,6 +143,7 @@ async fn test_rocksdb_graph_storage_relationships() {
 
     // Create test entities
     let rust = EntityData {
+        aliases: Vec::new(),
         name: "Rust".to_string(),
         entity_type: EntityType::Technology,
         first_mentioned: Utc::now(),
@@ -152,6 +154,7 @@ async fn test_rocksdb_graph_storage_relationships() {
     };
 
     let tokio = EntityData {
+        aliases: Vec::new(),
         name: "Tokio".to_string(),
         entity_type: EntityType::Technology,
         first_mentioned: Utc::now(),
@@ -207,6 +210,7 @@ async fn test_rocksdb_graph_storage_shortest_path() {
     // Create chain: A -> B -> C
     for name in ["A", "B", "C"] {
         let entity = EntityData {
+            aliases: Vec::new(),
             name: name.to_string(),
             entity_type: EntityType::Concept,
             first_mentioned: Utc::now(),
@@ -257,6 +261,7 @@ async fn test_rocksdb_graph_storage_shortest_path() {
 
     // No path exists to unconnected node
     let entity_d = EntityData {
+        aliases: Vec::new(),
         name: "D".to_string(),
         entity_type: EntityType::Concept,
         first_mentioned: Utc::now(),

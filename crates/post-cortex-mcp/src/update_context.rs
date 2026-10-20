@@ -13,7 +13,7 @@
 use anyhow::{Result, anyhow};
 use post_cortex_core::core::context_update::{
     CodeReference, EntityData, EntityRelationship, EntityType, RelationType, UpdateContent,
-    UpdateType,
+    UpdateMeta, UpdateType,
 };
 use post_cortex_core::core::timeout_utils::with_mcp_timeout;
 use post_cortex_core::services::{
@@ -189,6 +189,7 @@ fn entities_to_domain(items: &[EntityItem]) -> Vec<EntityData> {
     items
         .iter()
         .map(|e| EntityData {
+            aliases: Vec::new(),
             name: e.name.clone(),
             entity_type: parse_entity_type(&e.entity_type),
             first_mentioned: now,
@@ -230,6 +231,7 @@ fn build_request(
     code_reference: Option<CodeReference>,
     author: Option<String>,
     derived_from: Vec<String>,
+    meta: UpdateMeta,
 ) -> Result<ServiceUpdateRequest> {
     let (update_type, update_content) = build_content(interaction_type, content)?;
     Ok(ServiceUpdateRequest {
@@ -241,6 +243,7 @@ fn build_request(
         code_reference,
         author,
         derived_from,
+        meta,
     })
 }
 
@@ -262,6 +265,7 @@ pub async fn update_conversation_context(
     session_id: Uuid,
     author: Option<String>,
     derived_from: Vec<String>,
+    meta: UpdateMeta,
 ) -> Result<MCPToolResult> {
     debug!("MCP-TOOLS: update_conversation_context() called");
     let service = get_service().await?;
@@ -275,6 +279,7 @@ pub async fn update_conversation_context(
         code_reference,
         author,
         derived_from,
+        meta,
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -348,6 +353,7 @@ pub async fn bulk_update_conversation_context(
             item.code_reference.clone(),
             author.clone(),
             item.derived_from.clone(),
+            item.meta.clone(),
         ) {
             Ok(req) => requests.push(req),
             Err(e) => {

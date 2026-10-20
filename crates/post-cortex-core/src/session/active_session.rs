@@ -23,7 +23,7 @@
 //! the crate. It stores tiered context (hot / warm / cold), a structured
 //! state snapshot, code references, an entity graph, and vectorization
 //! tracking — all wrapped in `Arc` for cheap clone-on-write semantics.
-use crate::core::context_update::{ContextUpdate, EntityType, UpdateType};
+use crate::core::context_update::{ContextUpdate, UpdateType};
 use crate::core::structured_context::StructuredContext;
 use crate::graph::entity_graph::SimpleEntityGraph;
 use crate::session::session_components::{HotContext, SessionMetadata};
@@ -475,7 +475,7 @@ impl ActiveSession {
             vectorized_ids.insert(vid);
         }
 
-        Self {
+        let mut session = Self {
             metadata: Arc::new(metadata),
             last_updated,
             hot_context: Arc::new(hot_context),
@@ -487,7 +487,17 @@ impl ActiveSession {
             change_history: Arc::new(change_history.into_iter().map(Arc::new).collect()),
             entity_graph: Arc::new(entity_graph),
             vectorized_update_ids: vectorized_ids,
-        }
+        };
+        session.relink_entity_mentions();
+        session
+    }
+
+    /// Rebuild the entity graph's record links from `incremental_updates`
+    /// (see [`SimpleEntityGraph::relink_mentions`]); storage backends call
+    /// it after loading a session.
+    pub fn relink_entity_mentions(&mut self) {
+        let updates = Arc::clone(&self.incremental_updates);
+        Arc::make_mut(&mut self.entity_graph).relink_mentions(updates.iter().map(|u| &**u));
     }
 
     /// Borrowed serialisation view; see [`ActiveSessionView`].
@@ -1005,33 +1015,12 @@ impl ActiveSession {
         removed
     }
 
-    /// Rebuild the entity graph by clearing it and replaying all updates through NER extraction.
-    /// Returns (entities_before, entities_after) counts.
+    /// Rebuild the entity graph from the updates; see
+    /// [`Self::rebuild_entity_graph_sync`]. Returns (entities_before,
+    /// entities_after) counts.
     pub async fn rebuild_entity_graph_from_updates(&mut self) -> anyhow::Result<(usize, usize)> {
         let entities_before = self.entity_graph.entity_count();
-        // Start from a fresh graph instead of `make_mut` + `clear`, which
-        // would deep-clone a shared graph only to empty it.
-        self.entity_graph = Arc::new(SimpleEntityGraph::new());
-
-        // Cheap: clones the outer Arc, not the updates.
-        let updates = Arc::clone(&self.incremental_updates);
-        let total = updates.len();
-        debug!(
-            "Rebuilding entity graph: {} updates to process, {} entities cleared",
-            total, entities_before
-        );
-
-        for (i, update) in updates.iter().enumerate() {
-            if (i + 1) % 10 == 0 || i + 1 == total {
-                debug!(
-                    "Rebuilding entity graph: {}/{} updates processed",
-                    i + 1,
-                    total
-                );
-            }
-            self.update_entity_graph(update).await?;
-        }
-
+        self.rebuild_entity_graph_sync();
         let entities_after = self.entity_graph.entity_count();
         debug!(
             "Entity graph rebuild complete: {} -> {} entities",
@@ -1163,52 +1152,63 @@ impl ActiveSession {
     }
 
     async fn update_entity_graph(&mut self, update: &ContextUpdate) -> anyhow::Result<()> {
-        debug!(
-            "update_entity_graph: Starting entity graph update for update {}",
-            update.id
-        );
-
-        // When typed entities are provided (from Claude), use them directly — skip NER entirely.
-        if !update.typed_entities.is_empty() {
-            let entity_graph = Arc::make_mut(&mut self.entity_graph);
-
-            for typed_entity in &update.typed_entities {
-                entity_graph.add_or_update_entity(
-                    typed_entity.name.clone(),
-                    typed_entity.entity_type.clone(),
-                    update.timestamp,
-                    &format!("Provided by caller: {}", update.content.title),
-                );
-            }
-
-            for rel in &update.creates_relationships {
-                entity_graph.add_relationship(rel.clone());
-            }
-
-            debug!(
-                "update_entity_graph: Used {} caller-provided entities, {} relationships (NER skipped)",
-                update.typed_entities.len(),
-                update.creates_relationships.len(),
-            );
-            return Ok(());
-        }
-
-        // Untyped entity strings (legacy path — no extraction, just add what's given)
-        let entity_graph = Arc::make_mut(&mut self.entity_graph);
-        for name in &update.creates_entities {
-            entity_graph.add_or_update_entity(
-                name.clone(),
-                EntityType::Concept,
-                update.timestamp,
-                &format!("From update: {}", update.content.title),
-            );
-        }
-        for rel in &update.creates_relationships {
-            entity_graph.add_relationship(rel.clone());
-        }
-
-        debug!("update_entity_graph: completed successfully");
+        Arc::make_mut(&mut self.entity_graph).apply_update(update);
         Ok(())
+    }
+
+    /// Rebuild the entity graph from `incremental_updates` alone, e.g.
+    /// after a purge, so nothing derived from a removed record survives.
+    /// Explicit merges (aliases that do not resolve by name alone) are
+    /// kept.
+    pub fn rebuild_entity_graph_sync(&mut self) {
+        let merges = self.entity_graph.explicit_aliases();
+        let mut graph = SimpleEntityGraph::new();
+        for update in self.incremental_updates.iter() {
+            graph.apply_update(update);
+        }
+        for (alias, into) in merges {
+            graph.merge_entities(&alias, &into);
+        }
+        self.entity_graph = Arc::new(graph);
+    }
+
+    /// Retire an update at `at` (`forget`): it stays in the history but
+    /// stops being valid then. Returns the changed update (for the storage
+    /// write), or `None` if it is unknown or already retired.
+    pub fn retire_update(&mut self, entry_id: &Uuid, at: DateTime<Utc>) -> Option<ContextUpdate> {
+        let pos = self
+            .incremental_updates
+            .iter()
+            .position(|u| u.id == *entry_id)?;
+        if self.incremental_updates[pos].meta.retired_at.is_some() {
+            return None;
+        }
+        let mut changed = ContextUpdate::clone(&self.incremental_updates[pos]);
+        changed.meta.retired_at = Some(at);
+        let shared = Arc::new(changed.clone());
+        Arc::make_mut(&mut self.incremental_updates)[pos] = Arc::clone(&shared);
+        if self.hot_context.contains_id(entry_id) {
+            let max = self.metadata.user_preferences.max_hot_context_size;
+            let arcs = self.hot_context.snapshot_arcs();
+            self.hot_context = Arc::new(HotContext::from_updates(
+                arcs.into_iter().map(|u| {
+                    if u.id == *entry_id {
+                        Arc::clone(&shared)
+                    } else {
+                        u
+                    }
+                }),
+                max,
+            ));
+        }
+        if self.warm_context.iter().any(|c| c.update.id == *entry_id) {
+            for c in Arc::make_mut(&mut self.warm_context).iter_mut() {
+                if c.update.id == *entry_id {
+                    c.update = changed.clone();
+                }
+            }
+        }
+        Some(changed)
     }
 
     async fn add_code_reference(&mut self, code_ref: &CodeReference) -> anyhow::Result<()> {
@@ -1354,6 +1354,7 @@ impl ActiveSession {
                 .map_err(|e| format!("Invalid ContextUpdate metadata: {e}"))?
         } else {
             ContextUpdate {
+                meta: Default::default(),
                 id: Uuid::new_v4(),
                 update_type: UpdateType::ConceptDefined,
                 content: UpdateContent {
@@ -1489,6 +1490,7 @@ mod tests {
 
     fn update(i: u32, update_type: UpdateType, with_code: bool) -> ContextUpdate {
         ContextUpdate {
+            meta: Default::default(),
             id: Uuid::new_v4(),
             timestamp: Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, i).unwrap(),
             update_type,
@@ -1555,9 +1557,10 @@ mod tests {
         v
     }
 
-    /// Updates written before authorship and `derived_from` have neither;
-    /// read back, they serialise them as null and []. Those fields are the
-    /// only expected difference.
+    /// Updates written before authorship, `derived_from` and `meta` (and
+    /// entities before `aliases`) have none of them; read back, they
+    /// serialise them as null, [] and defaults. Those fields are the only
+    /// expected difference.
     fn without_new_update_fields(v: &mut serde_json::Value) {
         match v {
             serde_json::Value::Object(obj) => {
@@ -1566,6 +1569,15 @@ mod tests {
                 }
                 if obj.get("derived_from") == Some(&serde_json::json!([])) {
                     obj.remove("derived_from");
+                }
+                let no_meta =
+                    serde_json::to_value(crate::core::context_update::UpdateMeta::default())
+                        .unwrap();
+                if obj.get("meta") == Some(&no_meta) {
+                    obj.remove("meta");
+                }
+                if obj.get("aliases") == Some(&serde_json::json!([])) {
+                    obj.remove("aliases");
                 }
                 obj.values_mut().for_each(without_new_update_fields);
             }

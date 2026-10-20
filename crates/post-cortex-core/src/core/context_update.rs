@@ -91,6 +91,37 @@ pub struct ContextUpdate {
     /// [`crate::core::message::content_id`]).
     #[serde(default)]
     pub derived_from: Vec<String>,
+
+    /// What the writer stated about the record's validity and trust, and
+    /// whether it was retired (ROADMAP Phase 3 items 7-9).
+    #[serde(default)]
+    pub meta: UpdateMeta,
+}
+
+/// Validity, trust and retirement of a [`ContextUpdate`].
+///
+/// A record has three clocks: `timestamp` is when post-cortex learnt it
+/// (known time, which is also its system time, since records are only ever
+/// appended and later records change what holds), and its validity
+/// interval is when it held in the world: from `valid_from` (default: the
+/// timestamp) until a later record supersedes it. Supersession is derived
+/// from the records, see [`crate::graph::temporal`].
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct UpdateMeta {
+    /// When the fact started to hold, if not when it was written.
+    #[serde(default)]
+    pub valid_from: Option<DateTime<Utc>>,
+    /// Earlier records of the same session this one replaces; their
+    /// validity ends where this one's begins.
+    #[serde(default)]
+    pub supersedes: Vec<Uuid>,
+    /// How sure the writer was, in [0, 1].
+    #[serde(default)]
+    pub confidence: Option<f32>,
+    /// Set by `forget`: the record stops being valid then but stays in the
+    /// history (unlike purge, which deletes it).
+    #[serde(default)]
+    pub retired_at: Option<DateTime<Utc>>,
 }
 
 /// Structured content payload for a context update
@@ -161,6 +192,66 @@ pub enum RelationType {
     Solves,
 }
 
+impl UpdateType {
+    /// Wire name, as the `interaction_type` of the tools ("decision_made").
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            UpdateType::QuestionAnswered => "qa",
+            UpdateType::ProblemSolved => "problem_solved",
+            UpdateType::CodeChanged => "code_change",
+            UpdateType::DecisionMade => "decision_made",
+            UpdateType::ConceptDefined => "concept_defined",
+            UpdateType::RequirementAdded => "requirement_added",
+        }
+    }
+}
+
+impl EntityType {
+    /// Wire name, as the `entity_type` of the tools ("code_component").
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EntityType::Technology => "technology",
+            EntityType::Concept => "concept",
+            EntityType::Problem => "problem",
+            EntityType::Solution => "solution",
+            EntityType::Decision => "decision",
+            EntityType::CodeComponent => "code_component",
+        }
+    }
+}
+
+impl RelationType {
+    /// Wire name, as the `relation_type` of the tools ("depends_on").
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RelationType::RequiredBy => "required_by",
+            RelationType::LeadsTo => "leads_to",
+            RelationType::RelatedTo => "related_to",
+            RelationType::ConflictsWith => "conflicts_with",
+            RelationType::DependsOn => "depends_on",
+            RelationType::Implements => "implements",
+            RelationType::CausedBy => "caused_by",
+            RelationType::Solves => "solves",
+        }
+    }
+
+    /// How strongly the relation ties its entities together, in (0, 1]:
+    /// causal and structural links count fully, `related_to` (the catch-all)
+    /// least. Used by centrality, communities and graph expansion. Defaults,
+    /// not yet tuned on the benchmarks.
+    pub fn weight(&self) -> f32 {
+        match self {
+            RelationType::DependsOn
+            | RelationType::Implements
+            | RelationType::Solves
+            | RelationType::CausedBy => 1.0,
+            RelationType::RequiredBy | RelationType::LeadsTo => 0.8,
+            RelationType::ConflictsWith => 0.6,
+            RelationType::RelatedTo => 0.4,
+        }
+    }
+}
+
 /// Parses a `RelationType` from its string representation
 impl std::str::FromStr for RelationType {
     type Err = String;
@@ -214,4 +305,9 @@ pub struct EntityData {
     pub importance_score: f32,
     /// Optional human-readable description
     pub description: Option<String>,
+    /// Other names this entity was written under ("surreal-db" for
+    /// "SurrealDB"); they resolve to it. See
+    /// [`SimpleEntityGraph::resolve`](crate::graph::entity_graph::SimpleEntityGraph::resolve).
+    #[serde(default)]
+    pub aliases: Vec<String>,
 }

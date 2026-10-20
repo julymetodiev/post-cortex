@@ -38,6 +38,18 @@ service PostCortex {
   // the 8 relation tables. Atomic against in-memory session cache so the
   // delete sticks even when the daemon has the session loaded.
   rpc DeleteEntity(DeleteEntityRequest) returns (DeleteEntityResponse);
+  // Merge one entity into another (both name one thing); the first becomes
+  // an alias of the second.
+  rpc MergeEntities(MergeEntitiesRequest) returns (MergeEntitiesResponse);
+  // Retire a record: its validity ends now, it stays in the history.
+  rpc ForgetUpdate(UpdateRefRequest) returns (UpdateRefResponse);
+  // Erase a record and everything derived from it (GDPR erasure).
+  rpc PurgeUpdate(UpdateRefRequest) returns (UpdateRefResponse);
+
+  // --- Graph and memory views (ROADMAP Phase 4) ---
+  // JSON of one view: graph, entity, impact, timeline, topics, lineage,
+  // radar. Same views and parameters as the REST /api/graph... routes.
+  rpc GetGraphView(GetGraphViewRequest) returns (TextResponse);
 
   // --- Workspace Management ---
   rpc CreateWorkspace(CreateWorkspaceRequest) returns (CreateWorkspaceResponse);
@@ -154,6 +166,40 @@ message DeleteEntityResponse {
   bool existed = 1;
 }
 
+message MergeEntitiesRequest {
+  string session_id = 1;
+  // The entity that becomes an alias.
+  string entity_name = 2;
+  // The entity it merges into.
+  string into = 3;
+}
+
+message MergeEntitiesResponse {
+  // False if either entity is unknown or both are one.
+  bool merged = 1;
+}
+
+message UpdateRefRequest {
+  string session_id = 1;
+  string entry_id = 2;
+}
+
+message UpdateRefResponse {
+  // False if the record is unknown (or, for ForgetUpdate, already retired).
+  bool existed = 1;
+}
+
+message GetGraphViewRequest {
+  // graph, entity, impact, timeline, topics, lineage or radar.
+  string view = 1;
+  // The session to view, or any member of the workspace.
+  string session_id = 2;
+  // View the whole workspace instead (optional).
+  string workspace_id = 3;
+  // View parameters: limit, at, from, to, depth, per_topic, entity.
+  map<string, string> params = 4;
+}
+
 // ============ Context Update ============
 
 message EntityInfo {
@@ -182,6 +228,12 @@ message UpdateContextRequest {
   optional string author = 7;
   // Captured messages of the session it was drawn from (`message:<seq>`).
   repeated string derived_from = 8;
+  // When the fact started to hold, if not now (RFC 3339 or YYYY-MM-DD).
+  optional string valid_from = 9;
+  // Entry ids of earlier records of the session this one replaces.
+  repeated string supersedes = 10;
+  // How sure the writer is, 0..1.
+  optional float confidence = 11;
 }
 
 message ContextContent {
@@ -218,6 +270,10 @@ message ContextUpdateItem {
   repeated RelationInfo relations = 4;
   // Captured messages of the session it was drawn from (`message:<seq>`).
   repeated string derived_from = 5;
+  // As in UpdateContextRequest.
+  optional string valid_from = 6;
+  repeated string supersedes = 7;
+  optional float confidence = 8;
 }
 
 message BulkUpdateContextRequest {
@@ -294,6 +350,9 @@ message SemanticSearchRequest {
   optional string author = 10;
   // Rank results by this author a little higher; others still appear.
   optional string prefer_author = 11;
+  // Add "signals" (JSON: ranks in the vector, BM25 and graph rankings, fused
+  // and reranker scores) to each result's metadata.
+  optional bool trace = 12;
 }
 
 message SearchResult {
@@ -302,6 +361,8 @@ message SearchResult {
   float score = 3;
   string session_id = 4;
   string content_type = 5;
+  // neighbour_of, author, derived_from; for records that no longer hold
+  // valid_to, ended_by, end_reason; confidence; signals (JSON) when traced.
   map<string, string> metadata = 6;
 }
 

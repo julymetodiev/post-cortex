@@ -29,7 +29,7 @@ pub mod vectorizer;
 pub(crate) use search::RERANK_POOL;
 pub use types::{
     ContentType, ContentVectorizerConfig, PREFER_AUTHOR_BOOST, SearchMode, SearchOptions,
-    SemanticSearchResult,
+    SemanticSearchResult, Signals,
 };
 pub use vectorizer::ContentVectorizer;
 

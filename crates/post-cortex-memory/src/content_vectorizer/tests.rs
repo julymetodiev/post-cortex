@@ -215,6 +215,7 @@ async fn vectorizer_with(full_text_index: bool) -> (ContentVectorizer, Arc<FakeS
 
 fn update(title: &str, entity: &str) -> ContextUpdate {
     ContextUpdate {
+        meta: Default::default(),
         id: Uuid::new_v4(),
         timestamp: Utc::now(),
         update_type: UpdateType::ConceptDefined,

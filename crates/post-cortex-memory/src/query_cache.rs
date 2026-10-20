@@ -535,6 +535,9 @@ mod tests {
 
     fn result(session_id: Uuid, text: &str) -> SemanticSearchResult {
         SemanticSearchResult {
+            validity: None,
+            signals: None,
+            confidence: None,
             content_id: Uuid::new_v4().to_string(),
             session_id,
             content_type: ContentType::UpdateContent,

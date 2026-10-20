@@ -142,6 +142,40 @@ impl MemoryServiceImpl {
         }
     }
 
+    /// `meta` is well-formed: confidence in [0, 1], and every superseded
+    /// record exists in the session and is older than now.
+    async fn check_meta(&self, req: &UpdateContextRequest) -> Result<(), SystemError> {
+        if let Some(c) = req.meta.confidence
+            && !(0.0..=1.0).contains(&c)
+        {
+            return Err(SystemError::InvalidArgument(format!(
+                "confidence must be between 0 and 1, got {c}"
+            )));
+        }
+        if req.meta.retired_at.is_some() {
+            return Err(SystemError::InvalidArgument(
+                "retired_at is set by forget, not on write".into(),
+            ));
+        }
+        if req.meta.supersedes.is_empty() {
+            return Ok(());
+        }
+        let session = self
+            .system
+            .get_session(req.session_id)
+            .await
+            .map_err(|_| SystemError::SessionNotFound(req.session_id))?
+            .load_full();
+        let known: HashSet<Uuid> = session.incremental_updates.iter().map(|u| u.id).collect();
+        match req.meta.supersedes.iter().find(|id| !known.contains(id)) {
+            Some(missing) => Err(SystemError::InvalidArgument(format!(
+                "supersedes: entry {missing} is not in session {}",
+                req.session_id
+            ))),
+            None => Ok(()),
+        }
+    }
+
     /// A workspace card needs an existing workspace.
     fn require_card_scope(&self, scope: CardScope) -> Result<(), SystemError> {
         match scope {
@@ -199,6 +233,7 @@ impl PostCortexService for MemoryServiceImpl {
         log_redactions(req.session_id, &self.redactor.redact_request(&mut req));
         validate_update_request(&req)?;
         self.check_derived_from(&req).await?;
+        self.check_meta(&req).await?;
 
         let description = build_description(&req);
         let context_update = build_context_update(&req);
@@ -370,6 +405,7 @@ impl PostCortexService for MemoryServiceImpl {
             };
             validate_update_request(item).map_err(prefixed)?;
             self.check_derived_from(item).await.map_err(prefixed)?;
+            self.check_meta(item).await.map_err(prefixed)?;
         }
 
         let mut entry_ids = Vec::with_capacity(req.updates.len());
@@ -591,6 +627,7 @@ fn build_context_update(req: &UpdateContextRequest) -> ContextUpdate {
         typed_entities,
         author: req.author.clone(),
         derived_from: req.derived_from.clone(),
+        meta: req.meta.clone(),
     }
 }
 
@@ -722,6 +759,7 @@ mod tests {
 
     fn entity(name: &str) -> EntityData {
         EntityData {
+            aliases: Vec::new(),
             name: name.to_string(),
             entity_type: EntityType::Concept,
             first_mentioned: Utc::now(),
@@ -743,6 +781,7 @@ mod tests {
 
     fn good_request() -> UpdateContextRequest {
         UpdateContextRequest {
+            meta: Default::default(),
             session_id: Uuid::new_v4(),
             interaction_type: UpdateType::ConceptDefined,
             content: UpdateContent {

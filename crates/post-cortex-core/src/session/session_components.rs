@@ -493,6 +493,7 @@ mod tests {
         // Add updates
         for i in 0..5 {
             let update = ContextUpdate {
+                meta: Default::default(),
                 id: Uuid::new_v4(),
                 timestamp: Utc::now(),
                 update_type: UpdateType::QuestionAnswered,

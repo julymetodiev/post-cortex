@@ -16,7 +16,7 @@ use super::QueryConversationContextRequest;
 use super::mcp_result_to_call_result;
 
 pub(super) async fn handle(
-    _memory_system: &Arc<ConversationMemorySystem>,
+    memory_system: &Arc<ConversationMemorySystem>,
     params: Parameters<serde_json::Value>,
 ) -> Result<CallToolResult, McpError> {
     let req: QueryConversationContextRequest = coerce_and_validate(params.0)
@@ -46,7 +46,12 @@ pub(super) async fn handle(
 
     let uuid = validate_session_id(&req.session_id).map_err(|e| e.to_mcp_error())?;
 
-    match req.query_type.to_lowercase().as_str() {
+    let query_type = req.query_type.to_lowercase();
+    if post_cortex_memory::graph_views::VIEW_NAMES.contains(&query_type.as_str()) {
+        return graph_view(memory_system, &query_type, uuid, &req.parameters).await;
+    }
+
+    match query_type.as_str() {
         "entity_importance" => {
             let limit = req
                 .parameters
@@ -160,4 +165,38 @@ pub(super) async fn handle(
             }
         }
     }
+}
+
+/// A graph view (ROADMAP Phase 4) of the session, or of the workspace named
+/// by the `workspace_id` parameter.
+async fn graph_view(
+    memory_system: &Arc<ConversationMemorySystem>,
+    view: &str,
+    session_id: uuid::Uuid,
+    parameters: &std::collections::HashMap<String, String>,
+) -> Result<CallToolResult, McpError> {
+    use crate::daemon::assembly_scope::graph_scope;
+    use post_cortex_memory::graph_views::ViewRequest;
+
+    let request = ViewRequest::parse(view, parameters)
+        .map_err(|e| McpError::invalid_params(e, Some(serde_json::json!({"query_type": view}))))?;
+    let workspace = match parameters.get("workspace_id").filter(|v| !v.is_empty()) {
+        Some(raw) => Some(uuid::Uuid::parse_str(raw).map_err(|_| {
+            McpError::invalid_params(
+                format!("workspace_id: invalid UUID '{raw}'"),
+                Some(serde_json::json!({"parameter": "workspace_id"})),
+            )
+        })?),
+        None => None,
+    };
+    let scope = graph_scope(memory_system, Some(session_id), workspace)
+        .await
+        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+    let data = tokio::task::spawn_blocking(move || scope.render(&request))
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?
+        .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+    Ok(mcp_result_to_call_result(
+        post_cortex_mcp::MCPToolResult::success(format!("{view} view"), Some(data)),
+    ))
 }

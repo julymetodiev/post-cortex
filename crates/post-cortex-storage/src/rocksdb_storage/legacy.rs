@@ -10,18 +10,19 @@
 // The above copyright notice and this permission notice shall be included in all
 // copies or substantial portions of the Software.
 
-//! Bincode layouts written before `ContextUpdate::author` and
-//! `ContextUpdate::derived_from` existed.
+//! Bincode layouts written before `ContextUpdate::author`,
+//! `ContextUpdate::derived_from` and `ContextUpdate::meta` existed.
 //!
 //! Bincode is not self-describing: a struct with a new field cannot read
 //! rows written without it. Update rows end with the update, so a newer
 //! layout fails cleanly on an older row (the input ends before the new
 //! field) and [`decode_update`] falls back layout by layout: current, then
-//! [`AuthoredContextUpdate`], then [`LegacyContextUpdate`]. Checkpoints hold
-//! a list of updates followed by more fields, where a misread would not
-//! fail cleanly, so each layout has its marker: [`CHECKPOINT_V3`] for the
-//! current one, [`CHECKPOINT_V2`] for [`AuthoredSessionCheckpoint`], none
-//! for [`LegacySessionCheckpoint`].
+//! [`DerivedContextUpdate`], [`AuthoredContextUpdate`] and
+//! [`LegacyContextUpdate`]. Checkpoints hold a list of updates followed by
+//! more fields, where a misread would not fail cleanly, so each layout has
+//! its marker: [`CHECKPOINT_V4`] for the current one, [`CHECKPOINT_V3`]
+//! for derived, [`CHECKPOINT_V2`] for authored updates, none for legacy
+//! ones.
 //!
 //! These structs are frozen: they must keep the field order and types of
 //! the old layout.
@@ -42,7 +43,10 @@ use post_cortex_core::session::active_session::{ChangeRecord, CodeReference};
 use super::types::SessionCheckpoint;
 
 /// Marks a checkpoint written with the current `ContextUpdate` layout.
-pub(super) const CHECKPOINT_V3: &[u8] = b"pcx-ckpt-v3\0";
+pub(super) const CHECKPOINT_V4: &[u8] = b"pcx-ckpt-v4\0";
+
+/// Marks a checkpoint written with [`DerivedContextUpdate`]s.
+const CHECKPOINT_V3: &[u8] = b"pcx-ckpt-v3\0";
 
 /// Marks a checkpoint written with [`AuthoredContextUpdate`]s.
 const CHECKPOINT_V2: &[u8] = b"pcx-ckpt-v2\0";
@@ -79,6 +83,7 @@ impl From<LegacyContextUpdate> for ContextUpdate {
             typed_entities: u.typed_entities,
             author: None,
             derived_from: Vec::new(),
+            meta: Default::default(),
         }
     }
 }
@@ -93,6 +98,20 @@ impl From<AuthoredContextUpdate> for ContextUpdate {
     fn from(AuthoredContextUpdate(update, author): AuthoredContextUpdate) -> Self {
         Self {
             author,
+            ..update.into()
+        }
+    }
+}
+
+/// `ContextUpdate` with `author` and `derived_from`, before `meta`.
+#[derive(Deserialize)]
+struct DerivedContextUpdate(LegacyContextUpdate, Option<String>, Vec<String>);
+
+impl From<DerivedContextUpdate> for ContextUpdate {
+    fn from(DerivedContextUpdate(update, author, derived_from): DerivedContextUpdate) -> Self {
+        Self {
+            author,
+            derived_from,
             ..update.into()
         }
     }
@@ -136,10 +155,11 @@ fn bincode_decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Option<T> {
         .map(|(v, _)| v)
 }
 
-/// An update row in the current layout, else in the layout before
-/// `derived_from`, else in the one before `author`.
+/// An update row in the current layout, else in the layout before `meta`,
+/// before `derived_from`, before `author`.
 pub(super) fn decode_update(bytes: &[u8]) -> Option<ContextUpdate> {
     bincode_decode::<ContextUpdate>(bytes)
+        .or_else(|| bincode_decode::<DerivedContextUpdate>(bytes).map(Into::into))
         .or_else(|| bincode_decode::<AuthoredContextUpdate>(bytes).map(Into::into))
         .or_else(|| bincode_decode::<LegacyContextUpdate>(bytes).map(Into::into))
 }
@@ -147,8 +167,10 @@ pub(super) fn decode_update(bytes: &[u8]) -> Option<ContextUpdate> {
 /// A checkpoint in the layout its marker names; unmarked ones are from
 /// before `author`.
 pub(super) fn decode_checkpoint(bytes: &[u8]) -> Option<SessionCheckpoint> {
-    if let Some(rest) = bytes.strip_prefix(CHECKPOINT_V3) {
+    if let Some(rest) = bytes.strip_prefix(CHECKPOINT_V4) {
         bincode_decode::<SessionCheckpoint>(rest)
+    } else if let Some(rest) = bytes.strip_prefix(CHECKPOINT_V3) {
+        bincode_decode::<LegacySessionCheckpoint<DerivedContextUpdate>>(rest).map(Into::into)
     } else if let Some(rest) = bytes.strip_prefix(CHECKPOINT_V2) {
         bincode_decode::<LegacySessionCheckpoint<AuthoredContextUpdate>>(rest).map(Into::into)
     } else {
@@ -234,12 +256,34 @@ mod tests {
         assert_eq!(update.author.as_deref(), Some("hermes:eq-lead"));
         assert!(update.derived_from.is_empty());
 
+        let derived = encode(&(
+            OldUpdate {
+                id,
+                timestamp: Utc::now(),
+                update_type: UpdateType::DecisionMade,
+                content: &content,
+                related_code: None,
+                parent_update: None,
+                user_marked_important: false,
+                creates_entities: Vec::new(),
+                creates_relationships: Vec::new(),
+                references_entities: Vec::new(),
+                typed_entities: Vec::new(),
+            },
+            Some("claude-code"),
+            vec!["message:3"],
+        ));
+        let update = decode_update(&derived).expect("derived row");
+        assert_eq!(update.author.as_deref(), Some("claude-code"));
+        assert_eq!(update.derived_from, ["message:3"]);
+        assert_eq!(update.meta, Default::default());
+
         let mut new = update.clone();
-        new.author = Some("claude-code".to_string());
-        new.derived_from = vec!["message:3".to_string()];
+        new.meta.supersedes = vec![Uuid::new_v4()];
+        new.meta.confidence = Some(0.5);
         let decoded = decode_update(&encode(&new)).expect("current row");
-        assert_eq!(decoded.author.as_deref(), Some("claude-code"));
         assert_eq!(decoded.derived_from, ["message:3"]);
+        assert_eq!(decoded.meta, new.meta);
     }
 
     /// Mirror of the checkpoint layout around updates of type `U`.
@@ -301,12 +345,22 @@ mod tests {
         assert_eq!(authored.recent_updates[0].author.as_deref(), Some("alice"));
         assert_eq!(authored.compression_ratio, 2.0);
 
-        let mut update = authored.recent_updates[0].clone();
-        update.derived_from = vec!["message:1".to_string()];
         let mut v3 = CHECKPOINT_V3.to_vec();
-        v3.extend(encode(&checkpoint(vec![update])));
-        let current = decode_checkpoint(&v3).unwrap();
-        assert_eq!(current.recent_updates[0].derived_from, ["message:1"]);
-        assert_eq!(current.total_updates, 9);
+        v3.extend(encode(&checkpoint(vec![(
+            old(),
+            Some("bob"),
+            vec!["message:1"],
+        )])));
+        let derived = decode_checkpoint(&v3).unwrap();
+        assert_eq!(derived.recent_updates[0].derived_from, ["message:1"]);
+        assert_eq!(derived.total_updates, 9);
+
+        let mut update = derived.recent_updates[0].clone();
+        update.meta.retired_at = Some(Utc::now());
+        let mut v4 = CHECKPOINT_V4.to_vec();
+        v4.extend(encode(&checkpoint(vec![update.clone()])));
+        let current = decode_checkpoint(&v4).unwrap();
+        assert_eq!(current.recent_updates[0].meta, update.meta);
+        assert_eq!(current.compression_ratio, 2.0);
     }
 }

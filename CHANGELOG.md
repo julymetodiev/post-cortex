@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Graph and memory API.** Read-only JSON views over a session or a
+  workspace: `GET /api/graph` (nodes with aliases, importance, community;
+  edges with weight and validity; `at` for the graph as it stood then),
+  `/api/entities/{name}/context`, `/impact`, `/lineage`, `/api/timeline`,
+  `/api/topics`, `/api/radar`, `/api/file`. The same views over MCP
+  (`query_conversation_context` types `graph`, `entity`, `impact`, `timeline`,
+  `topics`, `lineage`, `radar`, `file`) and gRPC (`GetGraphView`).
+- **Record validity.** Records hold until a later record supersedes them
+  (new `supersedes` on write, or the same fact restated about the same
+  entities), a later `conflicts_with` contradicts a relation they asserted, or
+  they are forgotten. Writes take `valid_from` and `confidence` too. Search
+  marks records that no longer hold (`valid_to`, `ended_by`, `end_reason`) and
+  ranks explicitly ended and low-confidence ones lower.
+- **Entity resolution.** Names that differ only in case, spaces, `-` or `_`
+  are one entity, with the other spellings as aliases (also for graphs stored
+  before, on load). `manage_entity` `merge` (gRPC `MergeEntities`) merges
+  synonyms.
+- **Forget and purge.** `manage_entity` `forget` ends a record and keeps its
+  history; `purge` erases it with its embedding, full-text entry and the
+  entities and edges only it introduced (gRPC `ForgetUpdate`, `PurgeUpdate`).
+- **Records link to their entities.** Every record is linked to the entities
+  it mentions, on both backends, rebuilt from the records on load.
+- **Importance from the graph.** Entity importance is weighted PageRank over
+  the typed relations, personalised by mentions and faded for entities not
+  mentioned for months; entity tools and summaries rank by it. Relation types
+  weigh differently in the retrieval graph too (`depends_on` 1.0 …
+  `related_to` 0.4).
+- **Retrieval traces.** `semantic_search` `trace: true` (gRPC `trace`) adds
+  each result's rank in the vector, BM25 and graph rankings and its fused and
+  reranker scores.
+- `pcx setup` installs a PreToolUse hook that shows the agent past problems,
+  decisions and dependents of a file before it edits it.
+
+### Changed
+
+- RocksDB update rows and checkpoints have a new layout for the record
+  metadata; older rows and checkpoints still load.
+
 ### Fixed
 
 - Cards written over MCP (`manage_workspace` `update_card`) or REST

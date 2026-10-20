@@ -20,7 +20,9 @@
 
 //! Petgraph-backed entity graph with deterministic serialization
 
-use crate::core::context_update::{EntityData, EntityRelationship, EntityType, RelationType};
+use crate::core::context_update::{
+    ContextUpdate, EntityData, EntityRelationship, EntityType, RelationType,
+};
 use chrono::{DateTime, Utc};
 use petgraph::Direction;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -159,13 +161,6 @@ impl RelationRef<'_> {
     }
 }
 
-/// Order entity data by importance (desc), ties by name (asc). NaN-safe.
-fn by_importance_desc(a: &&EntityData, b: &&EntityData) -> std::cmp::Ordering {
-    b.importance_score
-        .total_cmp(&a.importance_score)
-        .then_with(|| a.name.cmp(&b.name))
-}
-
 /// The `limit` smallest elements of `items` under `cmp`, sorted.
 /// O(n + k log k) instead of a full O(n log n) sort. Not stable: give `cmp`
 /// a total tie-break when the order of equal elements matters.
@@ -205,6 +200,46 @@ pub struct SimpleEntityGraph {
     /// CRITICAL: Rebuilt automatically after deserialization
     #[serde(skip)]
     node_to_entity: HashMap<NodeIndex, String>,
+
+    /// [`entity_key`] of every entity name and alias -> the entity's name.
+    /// Rebuilt automatically after deserialization.
+    #[serde(skip)]
+    alias_index: HashMap<String, String>,
+}
+
+/// Resolution key of an entity name: lowercase, without whitespace, `-` and
+/// `_`, so "SurrealDB", "surreal-db" and "Surreal DB" are one entity. Other
+/// characters stay significant ("C++" and "C#" differ from "C", paths keep
+/// their dots and slashes); merges beyond this are explicit
+/// ([`SimpleEntityGraph::merge_entities`]).
+pub fn entity_key(name: &str) -> String {
+    let key: String = name
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-' && *c != '_')
+        .flat_map(char::to_lowercase)
+        .collect();
+    if key.is_empty() {
+        name.to_lowercase()
+    } else {
+        key
+    }
+}
+
+/// Names an update mentions: its typed, created and referenced entities and
+/// the endpoints of its relations (may repeat).
+pub fn mentioned_names(update: &ContextUpdate) -> impl Iterator<Item = &str> {
+    update
+        .typed_entities
+        .iter()
+        .map(|e| e.name.as_str())
+        .chain(update.creates_entities.iter().map(String::as_str))
+        .chain(update.references_entities.iter().map(String::as_str))
+        .chain(
+            update
+                .creates_relationships
+                .iter()
+                .flat_map(|r| [r.from_entity.as_str(), r.to_entity.as_str()]),
+        )
 }
 
 // Intermediate structure for deserializing graph data with entity names instead of indices
@@ -321,13 +356,16 @@ impl<'de> Deserialize<'de> for SimpleEntityGraph {
             }
         }
 
-        Ok(SimpleEntityGraph {
+        let mut graph = SimpleEntityGraph {
             entities: data.entities,
             entity_mentions: data.entity_mentions,
             graph: data.graph,
             entity_to_node,
             node_to_entity,
-        })
+            alias_index: HashMap::new(),
+        };
+        graph.rebuild_alias_index();
+        Ok(graph)
     }
 }
 
@@ -346,6 +384,7 @@ impl SimpleEntityGraph {
             graph: DiGraph::new(),
             entity_to_node: HashMap::new(),
             node_to_entity: HashMap::new(),
+            alias_index: HashMap::new(),
         }
     }
 
@@ -356,6 +395,7 @@ impl SimpleEntityGraph {
         self.graph.clear();
         self.entity_to_node.clear();
         self.node_to_entity.clear();
+        self.alias_index.clear();
     }
 
     /// Remove a single entity and all its incident edges. Returns true if
@@ -382,7 +422,237 @@ impl SimpleEntityGraph {
 
         self.entities.remove(name);
         self.entity_mentions.remove(name);
+        self.alias_index.retain(|_, canonical| canonical != name);
         true
+    }
+
+    /// The name of the entity `name` refers to: itself, or the entity it is
+    /// an alias of (same [`entity_key`], or merged explicitly).
+    pub fn resolve(&self, name: &str) -> Option<&str> {
+        if let Some((stored, _)) = self.entities.get_key_value(name) {
+            return Some(stored);
+        }
+        self.alias_index.get(&entity_key(name)).map(String::as_str)
+    }
+
+    /// Record `alias` as another name of the entity `name` resolves to.
+    fn note_alias(&mut self, name: &str, alias: &str) {
+        let Some(canonical) = self.resolve(name).map(str::to_string) else {
+            return;
+        };
+        if let Some(entity) = self.entities.get_mut(&canonical)
+            && alias != entity.name
+            && !entity.aliases.iter().any(|a| a == alias)
+        {
+            entity.aliases.push(alias.to_string());
+        }
+        self.alias_index
+            .entry(entity_key(alias))
+            .or_insert(canonical);
+    }
+
+    /// Index `canonical` and its aliases; keys already taken by another
+    /// entity keep pointing there.
+    fn index_names(&mut self, canonical: &str) {
+        let Some(entity) = self.entities.get(canonical) else {
+            return;
+        };
+        let keys: Vec<String> = std::iter::once(&entity.name)
+            .chain(&entity.aliases)
+            .map(|n| entity_key(n))
+            .collect();
+        for key in keys {
+            self.alias_index
+                .entry(key)
+                .or_insert_with(|| canonical.to_string());
+        }
+    }
+
+    /// Rebuild the alias index from the entities, merging entities whose
+    /// names share a key into the earliest mentioned one (ties: by name).
+    fn rebuild_alias_index(&mut self) {
+        self.alias_index.clear();
+        let mut order: Vec<(DateTime<Utc>, String)> = self
+            .entities
+            .values()
+            .map(|e| (e.first_mentioned, e.name.clone()))
+            .collect();
+        order.sort();
+        let mut merges = Vec::new();
+        for (_, name) in &order {
+            let entity = &self.entities[name];
+            for alias in std::iter::once(&entity.name).chain(&entity.aliases) {
+                match self.alias_index.entry(entity_key(alias)) {
+                    std::collections::hash_map::Entry::Vacant(slot) => {
+                        slot.insert(name.clone());
+                    }
+                    std::collections::hash_map::Entry::Occupied(slot) => {
+                        if slot.get() != name {
+                            merges.push((name.clone(), slot.get().clone()));
+                        }
+                    }
+                }
+            }
+        }
+        for (alias, into) in merges {
+            self.merge_entities(&alias, &into);
+        }
+    }
+
+    /// Fold entity `alias` into `into`: its mentions, counts, aliases and
+    /// relations move over, and its name becomes an alias of `into`
+    /// (relations between the two are dropped). Both names may be aliases
+    /// themselves. False if either is unknown or both are the same entity.
+    pub fn merge_entities(&mut self, alias: &str, into: &str) -> bool {
+        let (Some(alias), Some(into)) = (
+            self.resolve(alias).map(str::to_string),
+            self.resolve(into).map(str::to_string),
+        ) else {
+            return false;
+        };
+        if alias == into {
+            return false;
+        }
+        let Some(gone) = self.entities.get(&alias).cloned() else {
+            return false;
+        };
+        let relations: Vec<EntityRelationship> = self
+            .relationships_of(&alias)
+            .iter()
+            .map(RelationRef::to_relationship)
+            .collect();
+        let mentions = self
+            .entity_mentions
+            .get(&alias)
+            .cloned()
+            .unwrap_or_default();
+        self.remove_entity(&alias);
+
+        if let Some(target) = self.entities.get_mut(&into) {
+            target.mention_count += gone.mention_count;
+            target.first_mentioned = target.first_mentioned.min(gone.first_mentioned);
+            target.last_mentioned = target.last_mentioned.max(gone.last_mentioned);
+            target.importance_score = target.importance_score.max(gone.importance_score);
+            if target.description.is_none() {
+                target.description = gone.description;
+            }
+            for name in std::iter::once(gone.name).chain(gone.aliases) {
+                if name != target.name && !target.aliases.contains(&name) {
+                    target.aliases.push(name);
+                }
+            }
+        }
+        for key in self
+            .entities
+            .get(&into)
+            .map(|e| {
+                std::iter::once(&e.name)
+                    .chain(&e.aliases)
+                    .map(|n| entity_key(n))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+        {
+            self.alias_index.insert(key, into.clone());
+        }
+
+        if !mentions.is_empty() {
+            let ids = self.entity_mentions.entry(into.clone()).or_default();
+            let mut seen: HashSet<uuid::Uuid> = ids.iter().copied().collect();
+            ids.extend(mentions.into_iter().filter(|id| seen.insert(*id)));
+        }
+        for mut rel in relations {
+            if rel.from_entity == alias {
+                rel.from_entity = into.clone();
+            }
+            if rel.to_entity == alias {
+                rel.to_entity = into.clone();
+            }
+            if rel.from_entity != rel.to_entity {
+                self.add_relationship(rel);
+            }
+        }
+        true
+    }
+
+    /// (alias, entity) pairs merged explicitly: aliases whose key differs
+    /// from their entity's, which replaying the records would not merge.
+    pub fn explicit_aliases(&self) -> Vec<(String, String)> {
+        self.entities
+            .values()
+            .flat_map(|e| {
+                let key = entity_key(&e.name);
+                e.aliases
+                    .iter()
+                    .filter(move |a| entity_key(a) != key)
+                    .map(move |a| (a.clone(), e.name.clone()))
+            })
+            .collect()
+    }
+
+    /// Add what `update` says to the graph: its entities (typed ones as
+    /// given, else the untyped names as concepts), its relations, and the
+    /// links from them to the record.
+    pub fn apply_update(&mut self, update: &ContextUpdate) {
+        if update.typed_entities.is_empty() {
+            for name in &update.creates_entities {
+                self.add_or_update_entity(
+                    name.clone(),
+                    EntityType::Concept,
+                    update.timestamp,
+                    &format!("From update: {}", update.content.title),
+                );
+            }
+        } else {
+            for typed in &update.typed_entities {
+                self.add_or_update_entity(
+                    typed.name.clone(),
+                    typed.entity_type.clone(),
+                    update.timestamp,
+                    &format!("Provided by caller: {}", update.content.title),
+                );
+            }
+        }
+        for rel in &update.creates_relationships {
+            self.add_relationship(rel.clone());
+        }
+        self.link_mentions(update);
+    }
+
+    /// Link `update` to every known entity it mentions (see
+    /// [`mentioned_names`]), once per entity. Counts are not touched: the
+    /// mention itself was counted when the entity was added.
+    pub fn link_mentions(&mut self, update: &ContextUpdate) {
+        let mut linked: HashSet<String> = HashSet::new();
+        for name in mentioned_names(update) {
+            let Some(canonical) = self.resolve(name).map(str::to_string) else {
+                continue;
+            };
+            if linked.insert(canonical.clone()) {
+                let ids = self.entity_mentions.entry(canonical).or_default();
+                if !ids.contains(&update.id) {
+                    ids.push(update.id);
+                }
+            }
+        }
+    }
+
+    /// Rebuild every entity's mention list from `updates` (oldest first).
+    /// Mentions are derived from the records, so storage need not keep
+    /// them: both backends call this on load.
+    pub fn relink_mentions<'a>(&mut self, updates: impl IntoIterator<Item = &'a ContextUpdate>) {
+        self.entity_mentions.clear();
+        for update in updates {
+            for name in mentioned_names(update) {
+                let Some(canonical) = self.resolve(name).map(str::to_string) else {
+                    continue;
+                };
+                let ids = self.entity_mentions.entry(canonical).or_default();
+                if ids.last() != Some(&update.id) && !ids.contains(&update.id) {
+                    ids.push(update.id);
+                }
+            }
+        }
     }
 
     /// Check if entity exists in the graph
@@ -407,13 +677,33 @@ impl SimpleEntityGraph {
     /// a graph from storage: unlike
     /// [`add_or_update_entity`](Self::add_or_update_entity) it keeps the
     /// stored mention count, importance score and first-mention time.
+    ///
+    /// An entity whose name resolves to another one (same [`entity_key`],
+    /// e.g. two spellings stored before resolution existed) is merged with
+    /// it, into the one mentioned first.
     pub fn insert_entity(&mut self, entity: EntityData) {
-        if !self.entity_to_node.contains_key(&entity.name) {
-            let node_index = self.graph.add_node(entity.name.clone());
-            self.entity_to_node.insert(entity.name.clone(), node_index);
-            self.node_to_entity.insert(node_index, entity.name.clone());
+        let name = entity.name.clone();
+        let other = std::iter::once(&entity.name)
+            .chain(&entity.aliases)
+            .find_map(|n| self.resolve(n).filter(|other| *other != name))
+            .map(str::to_string);
+        if !self.entity_to_node.contains_key(&name) {
+            let node_index = self.graph.add_node(name.clone());
+            self.entity_to_node.insert(name.clone(), node_index);
+            self.node_to_entity.insert(node_index, name.clone());
         }
-        self.entities.insert(entity.name.clone(), entity);
+        self.entities.insert(name.clone(), entity);
+        self.index_names(&name);
+        if let Some(other) = other {
+            let mine = (self.entities[&name].first_mentioned, &name);
+            let theirs = (self.entities[&other].first_mentioned, &other);
+            let (alias, into) = if mine < theirs {
+                (other.clone(), name.clone())
+            } else {
+                (name.clone(), other.clone())
+            };
+            self.merge_entities(&alias, &into);
+        }
     }
 
     /// Record a mention of an entity: create it (mention count 1) or bump
@@ -425,12 +715,20 @@ impl SimpleEntityGraph {
         timestamp: DateTime<Utc>,
         description: &str,
     ) {
+        let written = name;
+        let name = self
+            .resolve(&written)
+            .map(str::to_string)
+            .unwrap_or_else(|| written.clone());
         match self.entities.get_mut(&name) {
             Some(entity) => {
                 entity.last_mentioned = timestamp;
                 entity.mention_count += 1;
                 if entity.description.is_none() && !description.is_empty() {
                     entity.description = Some(description.to_string());
+                }
+                if written != entity.name && !entity.aliases.contains(&written) {
+                    entity.aliases.push(written);
                 }
 
                 // CRITICAL FIX: Ensure node exists in graph even for existing entities
@@ -445,6 +743,7 @@ impl SimpleEntityGraph {
                 self.entities.insert(
                     name.clone(),
                     EntityData {
+                        aliases: Vec::new(),
                         name: name.clone(),
                         entity_type,
                         first_mentioned: timestamp,
@@ -462,7 +761,8 @@ impl SimpleEntityGraph {
                 // Add node to graph
                 let node_index = self.graph.add_node(name.clone());
                 self.entity_to_node.insert(name.clone(), node_index);
-                self.node_to_entity.insert(node_index, name);
+                self.node_to_entity.insert(node_index, name.clone());
+                self.index_names(&name);
             }
         }
     }
@@ -475,6 +775,8 @@ impl SimpleEntityGraph {
         entity_type: EntityType,
         timestamp: DateTime<Utc>,
     ) -> NodeIndex {
+        let resolved = self.resolve(name).map(str::to_string);
+        let name = resolved.as_deref().unwrap_or(name);
         // Check if node already exists
         if let Some(&node_idx) = self.entity_to_node.get(name) {
             return node_idx;
@@ -524,6 +826,10 @@ impl SimpleEntityGraph {
             self.get_or_create_node(&relationship.from_entity, EntityType::Concept, timestamp);
         let to_node =
             self.get_or_create_node(&relationship.to_entity, EntityType::Concept, timestamp);
+        if from_node == to_node && relationship.from_entity != relationship.to_entity {
+            // Two spellings of one entity: not a relation.
+            return;
+        }
 
         let existing = self
             .graph
@@ -560,11 +866,16 @@ impl SimpleEntityGraph {
                 data.last_mentioned,
                 data.description.as_deref().unwrap_or(""),
             );
+            for alias in &data.aliases {
+                self.note_alias(name, alias);
+            }
         }
 
         // Merge entity mention lists (HashSet dedupe: O(m) per entity, not O(m²))
         for (name, mentions) in &other.entity_mentions {
-            let entry = self.entity_mentions.entry(name.clone()).or_default();
+            // The name may be an alias here (spelt differently elsewhere).
+            let name = self.resolve(name).unwrap_or(name).to_string();
+            let entry = self.entity_mentions.entry(name).or_default();
             let mut seen: HashSet<uuid::Uuid> = entry.iter().copied().collect();
             for id in mentions {
                 if seen.insert(*id) {
@@ -697,10 +1008,17 @@ impl SimpleEntityGraph {
             .collect()
     }
 
-    /// Get the `limit` most important entities (highest score first, ties
-    /// by name). Top-k selection; NaN scores never panic.
+    /// Get the `limit` most important entities (highest
+    /// [`centrality`](Self::centrality) first, ties by name). Top-k
+    /// selection.
     pub fn get_most_important_entities(&self, limit: usize) -> Vec<&EntityData> {
-        top_k_by(self.entities.values().collect(), limit, by_importance_desc)
+        let centrality = self.centrality();
+        let score = |e: &EntityData| centrality.get(&e.name).copied().unwrap_or(0.0);
+        top_k_by(self.entities.values().collect(), limit, |a, b| {
+            score(b)
+                .total_cmp(&score(a))
+                .then_with(|| a.name.cmp(&b.name))
+        })
     }
 
     /// Get the `limit` most recently mentioned entities (newest first, ties
@@ -1068,9 +1386,17 @@ impl SimpleEntityGraph {
         network
     }
 
+    /// Importance of every entity in (0, 1]: centrality in the weighted
+    /// relation graph, personalised by mentions and faded by staleness
+    /// (see [`super::analytics::importance`]).
+    pub fn centrality(&self) -> BTreeMap<String, f32> {
+        super::analytics::importance(self)
+    }
+
     /// Analyze entity importance with graph metrics
     ///
-    /// Sorted by enhanced importance (highest first), ties by name.
+    /// Sorted by [`centrality`](Self::centrality) (highest first), ties by
+    /// name.
     pub fn analyze_entity_importance(&self) -> Vec<EntityAnalysis> {
         self.analyze_entity_importance_top(usize::MAX)
     }
@@ -1088,6 +1414,7 @@ impl SimpleEntityGraph {
             update_references: usize,
         }
 
+        let centrality = self.centrality();
         let mut scored = Vec::with_capacity(self.entities.len());
         for (name, entity) in &self.entities {
             let node = self.entity_to_node.get(name);
@@ -1111,10 +1438,8 @@ impl SimpleEntityGraph {
                 .map(|mentions| mentions.len())
                 .unwrap_or(0);
 
-            // Enhanced importance with graph centrality
-            let degree_centrality = relationship_count as f32;
             scored.push(Scored {
-                score: entity.importance_score + (degree_centrality * 0.1),
+                score: centrality.get(name).copied().unwrap_or(0.0),
                 name,
                 entity,
                 relationship_count,
@@ -1144,16 +1469,7 @@ impl SimpleEntityGraph {
     /// [`analyze_entity_importance`](Self::analyze_entity_importance) have
     /// an `importance_score` of at least `min`, without building them.
     pub fn count_entities_with_importance_at_least(&self, min: f32) -> usize {
-        self.entities
-            .iter()
-            .filter(|(name, entity)| {
-                let degree = self.entity_to_node.get(*name).map_or(0, |&n| {
-                    self.graph.edges_directed(n, Direction::Outgoing).count()
-                        + self.graph.edges_directed(n, Direction::Incoming).count()
-                });
-                entity.importance_score + (degree as f32 * 0.1) >= min
-            })
-            .count()
+        self.centrality().values().filter(|s| **s >= min).count()
     }
 
     /// New petgraph-specific methods
@@ -1252,6 +1568,13 @@ impl SimpleEntityGraph {
     /// Number of relationship edges (O(1)).
     pub fn edge_count(&self) -> usize {
         self.graph.edge_count()
+    }
+
+    /// Every relationship in the graph, borrowed (edge order).
+    pub fn relationships(&self) -> impl Iterator<Item = RelationRef<'_>> {
+        self.graph
+            .edge_references()
+            .filter_map(|edge| self.relation_ref(edge))
     }
 
     fn relation_ref<'a>(
@@ -2291,28 +2614,30 @@ mod tests {
         let now = Utc::now();
         for (i, name) in ["a", "b", "c", "d", "e"].iter().enumerate() {
             graph.add_or_update_entity(name.to_string(), EntityType::Concept, now, "");
-            graph.entities.get_mut(*name).unwrap().importance_score = i as f32;
+            // Without relations, importance follows the mentions.
+            graph.entities.get_mut(*name).unwrap().mention_count = i as u32 + 1;
         }
+        // The stored score no longer ranks; a NaN there must not panic
+        // (release profile is panic = "abort").
         graph.entities.get_mut("c").unwrap().importance_score = f32::NAN;
 
-        // Must not panic (release profile is panic = "abort").
         let analysis = graph.analyze_entity_importance();
         assert_eq!(analysis.len(), 5);
+        assert!(analysis.iter().all(|a| a.importance_score.is_finite()));
 
         let top: Vec<&str> = graph
             .get_most_important_entities(2)
             .iter()
             .map(|e| e.name.as_str())
             .collect();
-        // NaN sorts as the largest value under total_cmp.
-        assert_eq!(top, vec!["c", "e"]);
+        assert_eq!(top, vec!["e", "d"]);
 
         let all: Vec<&str> = graph
             .get_most_important_entities(100)
             .iter()
             .map(|e| e.name.as_str())
             .collect();
-        assert_eq!(all, vec!["c", "e", "d", "b", "a"]);
+        assert_eq!(all, vec!["e", "d", "c", "b", "a"]);
         assert!(graph.get_most_important_entities(0).is_empty());
         assert_eq!(graph.get_recently_mentioned_entities(3).len(), 3);
     }

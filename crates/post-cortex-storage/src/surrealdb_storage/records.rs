@@ -119,6 +119,9 @@ pub(super) struct EntityRecord {
     pub(super) mention_count: u32,
     pub(super) importance_score: f32,
     pub(super) description: Option<String>,
+    /// Other names the entity was written under (NONE on rows from before
+    /// entity resolution).
+    pub(super) aliases: Option<Vec<String>>,
 }
 
 /// Embedding record for vector storage

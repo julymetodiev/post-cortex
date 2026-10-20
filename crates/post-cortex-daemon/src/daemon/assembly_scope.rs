@@ -146,6 +146,62 @@ async fn conversation_excerpts(
     Vec::new()
 }
 
+/// Why a graph scope could not be built.
+#[derive(Debug)]
+pub(crate) enum ScopeError {
+    /// Neither a session nor a workspace was named.
+    Missing,
+    /// The session or workspace does not exist.
+    NotFound(String),
+}
+
+impl std::fmt::Display for ScopeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ScopeError::Missing => write!(f, "either a session id or a workspace id is required"),
+            ScopeError::NotFound(what) => write!(f, "{what} not found"),
+        }
+    }
+}
+
+/// The sessions and graph the graph views read: the workspace's members and
+/// their merged graph (cached, see [`WORKSPACE_GRAPHS`]) when `workspace` is
+/// given, else the one session.
+pub(crate) async fn graph_scope(
+    memory: &ConversationMemorySystem,
+    session: Option<Uuid>,
+    workspace: Option<Uuid>,
+) -> Result<post_cortex_memory::graph_views::GraphScope, ScopeError> {
+    use post_cortex_memory::graph_views::GraphScope;
+    if let Some(ws_id) = workspace {
+        let ws = memory
+            .workspace_manager
+            .get_workspace(&ws_id)
+            .ok_or_else(|| ScopeError::NotFound(format!("workspace {ws_id}")))?;
+        let mut sessions = Vec::new();
+        let mut graphs = Vec::new();
+        for (session_id, _role) in ws.get_all_sessions() {
+            if let Ok(arc) = memory.get_session(session_id).await {
+                let session = arc.load_full();
+                graphs.push((session_id, Arc::clone(&session.entity_graph)));
+                sessions.push(session);
+            }
+        }
+        let graph = WORKSPACE_GRAPHS.merged(ws_id, graphs);
+        return Ok(GraphScope { sessions, graph });
+    }
+    let session_id = session.ok_or(ScopeError::Missing)?;
+    let session = memory
+        .get_session(session_id)
+        .await
+        .map_err(|_| ScopeError::NotFound(format!("session {session_id}")))?
+        .load_full();
+    Ok(GraphScope {
+        graph: Arc::clone(&session.entity_graph),
+        sessions: vec![session],
+    })
+}
+
 struct CachedMerge {
     sources: Vec<(Uuid, Arc<SimpleEntityGraph>)>,
     merged: Arc<SimpleEntityGraph>,
