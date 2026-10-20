@@ -62,21 +62,36 @@ pub const AUTHOR_HEADER: &str = "x-pcx-author";
 /// application using it.
 const SDK_CLIENT_NAMES: &[&str] = &["rmcp", "mcp"];
 
+/// The [`AUTHOR_HEADER`] of an HTTP request, when set.
+pub(crate) fn header_author(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get(AUTHOR_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(String::from)
+}
+
 /// Author of a write that names none: the [`AUTHOR_HEADER`] of the HTTP
 /// request, else the MCP client's name unless that only names its SDK.
 fn default_author(
     parts: Option<&axum::http::request::Parts>,
     client_name: Option<&str>,
 ) -> Option<String> {
-    let header = parts
-        .and_then(|p| p.headers.get(AUTHOR_HEADER))
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|v| !v.is_empty());
     let client = client_name
         .map(str::trim)
-        .filter(|n| !n.is_empty() && !SDK_CLIENT_NAMES.contains(&n.to_ascii_lowercase().as_str()));
-    header.or(client).map(String::from)
+        .filter(|n| !n.is_empty() && !SDK_CLIENT_NAMES.contains(&n.to_ascii_lowercase().as_str()))
+        .map(String::from);
+    parts.and_then(|p| header_author(&p.headers)).or(client)
+}
+
+/// [`default_author`] of a tool call.
+fn caller_author(peer: &Peer<RoleServer>, extensions: &Extensions) -> Option<String> {
+    let info = peer.peer_info();
+    default_author(
+        extensions.get::<axum::http::request::Parts>(),
+        info.as_ref().map(|info| info.client_info.name.as_str()),
+    )
 }
 
 /// Post-Cortex MCP Service
@@ -221,11 +236,7 @@ impl PostCortexService {
         peer: Peer<RoleServer>,
         extensions: Extensions,
     ) -> Result<CallToolResult, McpError> {
-        let info = peer.peer_info();
-        let author = default_author(
-            extensions.get::<axum::http::request::Parts>(),
-            info.as_ref().map(|info| info.client_info.name.as_str()),
-        );
+        let author = caller_author(&peer, &extensions);
         update_context::handle(&self.memory_system, params, author).await
     }
 
@@ -269,8 +280,11 @@ impl PostCortexService {
     async fn manage_workspace(
         &self,
         params: Parameters<serde_json::Value>,
+        peer: Peer<RoleServer>,
+        extensions: Extensions,
     ) -> Result<CallToolResult, McpError> {
-        workspace::handle(&self.memory_system, params).await
+        let author = caller_author(&peer, &extensions);
+        workspace::handle(&self.memory_system, params, author).await
     }
 
     #[tool(

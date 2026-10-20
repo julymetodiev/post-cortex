@@ -184,8 +184,8 @@ Every HTTP request except `GET /health`, and every gRPC call, must then send
 `Authorization: Bearer <token>`. The `pcx` CLI and the stdio proxy read the
 same config and send it automatically. MCP clients over HTTP add the header,
 e.g. `claude mcp add --transport http post-cortex http://host:3737/mcp --header "Authorization: Bearer <token>" --header "X-PCX-Author: claude-code"`.
-`X-PCX-Author` (or `PC_AUTHOR` for the stdio proxy) is the default author of
-the connection's writes; without it the daemon uses the MCP client's name,
+`X-PCX-Author` (or `PC_AUTHOR` for the stdio proxy and the `pcx` CLI) is the
+default author of the connection's writes, records and cards; without it the daemon uses the MCP client's name,
 unless that only names an SDK (`rmcp`, `mcp`).
 Without a token on a non-loopback bind the daemon logs a warning at startup.
 

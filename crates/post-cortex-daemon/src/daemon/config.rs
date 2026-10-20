@@ -313,6 +313,13 @@ impl DaemonConfig {
             value.set_sensitive(true);
             headers.insert(reqwest::header::AUTHORIZATION, value);
         }
+        // PC_AUTHOR names the caller as the author of its writes.
+        if let Ok(author) = std::env::var("PC_AUTHOR")
+            && let Ok(value) = reqwest::header::HeaderValue::from_str(author.trim())
+            && !author.trim().is_empty()
+        {
+            headers.insert(crate::daemon::mcp_service::AUTHOR_HEADER, value);
+        }
         reqwest::Client::builder()
             .default_headers(headers)
             .build()

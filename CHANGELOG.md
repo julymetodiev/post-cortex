@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Cards written over MCP (`manage_workspace` `update_card`) or REST
+  (`PUT /api/cards/...`) without an author take the `X-PCX-Author` header,
+  and over MCP the client's name, like records do; MCP `update_card` also
+  takes `author`. `PC_AUTHOR` now applies to every `pcx` request (card edits
+  too), not only the stdio proxy.
+
 ## [0.5.0] - 2026-10-20 — Retrieval pipeline, conversation capture, cards and authorship
 
 ### Added

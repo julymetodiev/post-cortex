@@ -24,6 +24,7 @@ use super::ManageWorkspaceRequest;
 pub(super) async fn handle(
     _memory_system: &Arc<ConversationMemorySystem>,
     params: Parameters<serde_json::Value>,
+    default_author: Option<String>,
 ) -> Result<CallToolResult, McpError> {
     let req: ManageWorkspaceRequest = coerce_and_validate(params.0)
         .map_err(|e| {
@@ -233,7 +234,14 @@ pub(super) async fn handle(
                     scope,
                     text: content,
                     expected_version,
-                    author: None,
+                    // The caller's own name for itself, else the header's or
+                    // the client's.
+                    author: req
+                        .author
+                        .clone()
+                        .map(|a| a.trim().to_string())
+                        .filter(|a| !a.is_empty())
+                        .or(default_author),
                 })
                 .await
                 .map_err(system_error)?;
@@ -300,5 +308,59 @@ fn system_error(e: SystemError) -> McpError {
             McpError::invalid_params(e.to_string(), None)
         }
         e => McpError::internal_error(e.to_string(), None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// update_card stores the caller's author, else the default one.
+    #[tokio::test]
+    async fn card_author_defaults_to_the_caller() {
+        let _global = crate::daemon::MCP_GLOBAL_TEST_LOCK.lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let memory = Arc::new(
+            ConversationMemorySystem::new(post_cortex_memory::SystemConfig {
+                data_directory: dir.path().to_str().unwrap().to_string(),
+                enable_embeddings: false,
+                ..Default::default()
+            })
+            .await
+            .unwrap(),
+        );
+        post_cortex_mcp::inject_memory_system(memory.clone());
+        let write = |version: u64, author: Option<&str>| {
+            let mut body = serde_json::json!({
+                "action": "update_card", "card": "user",
+                "content": format!("v{}", version + 1), "expected_version": version,
+            });
+            if let Some(author) = author {
+                body["author"] = serde_json::Value::String(author.to_string());
+            }
+            Parameters(body)
+        };
+        handle(&memory, write(0, None), Some("claude-code".to_string()))
+            .await
+            .unwrap();
+        handle(
+            &memory,
+            write(1, Some("julius")),
+            Some("claude-code".to_string()),
+        )
+        .await
+        .unwrap();
+
+        let service = card_service().await.unwrap();
+        let response = service
+            .get_card(GetCardRequest {
+                scope: CardScope::User,
+                history: 1,
+            })
+            .await
+            .unwrap();
+        let card = response.card.unwrap();
+        assert_eq!(card.author.as_deref(), Some("julius"));
+        assert_eq!(response.history[0].author.as_deref(), Some("claude-code"));
     }
 }

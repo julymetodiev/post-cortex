@@ -515,25 +515,29 @@ async fn api_get_cards(
 
 async fn api_put_user_card(
     State(state): State<Arc<ApiState>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<PutCardBody>,
 ) -> Result<(StatusCode, Json<UpdateCardResponse>), (StatusCode, String)> {
-    put_card(&state, CardScope::User, body).await
+    put_card(&state, CardScope::User, body, &headers).await
 }
 
 async fn api_put_workspace_card(
     State(state): State<Arc<ApiState>>,
     Path(id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<PutCardBody>,
 ) -> Result<(StatusCode, Json<UpdateCardResponse>), (StatusCode, String)> {
-    put_card(&state, CardScope::Workspace(id), body).await
+    put_card(&state, CardScope::Workspace(id), body, &headers).await
 }
 
 /// 200 with the new version, or 409 with the latest one when the card
-/// changed since `expected_version`.
+/// changed since `expected_version`. The author is the body's, else the
+/// `X-PCX-Author` header's.
 async fn put_card(
     state: &ApiState,
     scope: CardScope,
     body: PutCardBody,
+    headers: &axum::http::HeaderMap,
 ) -> Result<(StatusCode, Json<UpdateCardResponse>), (StatusCode, String)> {
     let response = state
         .service
@@ -541,7 +545,11 @@ async fn put_card(
             scope,
             text: body.content,
             expected_version: body.expected_version,
-            author: body.author,
+            author: body
+                .author
+                .map(|a| a.trim().to_string())
+                .filter(|a| !a.is_empty())
+                .or_else(|| crate::daemon::mcp_service::header_author(headers)),
         })
         .await
         .map_err(card_error)?;
@@ -1030,9 +1038,13 @@ mod tests {
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(json(&text)["card"]["text"], "## Stack\nrust");
 
-        let (status, _) =
-            status_and_body(&router, put("/api/cards/user".to_string(), "be brief", 0)).await;
+        let mut by_header = put("/api/cards/user".to_string(), "be brief", 0);
+        by_header
+            .headers_mut()
+            .insert("x-pcx-author", "claude-code".parse().unwrap());
+        let (status, text) = status_and_body(&router, by_header).await;
         assert_eq!(status, StatusCode::OK);
+        assert_eq!(json(&text)["card"]["author"], "claude-code");
 
         let (status, text) = status_and_body(
             &router,

@@ -831,4 +831,11 @@ Read it with get_card first."#
         description = r#"Older versions of the card to return as well (for get_card; default 0)."#
     )]
     pub history: Option<u32>,
+    /// Who writes the card (used by `update_card`).
+    #[schemars(
+        description = r#"Who writes the card (for update_card, optional): your agent name, the user, a teammate.
+Defaults to the X-PCX-Author header of the connection, else the MCP client's name unless that only
+names an SDK."#
+    )]
+    pub author: Option<String>,
 }

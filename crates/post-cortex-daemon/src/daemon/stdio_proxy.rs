@@ -85,10 +85,6 @@ pub async fn run_stdio_proxy(config: DaemonConfig) -> Result<(), String> {
 
     let mcp_url = format!("http://{}:{}/mcp", config.host, config.port);
     let client = config.http_client();
-    // PC_AUTHOR names the caller as the author of its writes.
-    let author = std::env::var("PC_AUTHOR")
-        .ok()
-        .filter(|a| !a.trim().is_empty());
 
     info!("Connecting to daemon at {}", mcp_url);
 
@@ -100,7 +96,6 @@ pub async fn run_stdio_proxy(config: DaemonConfig) -> Result<(), String> {
         let client = client.clone();
         let mcp_url = mcp_url.clone();
         let session_id = session_id.clone();
-        let author = author.clone();
 
         move || {
             let stdin = io::stdin();
@@ -113,7 +108,6 @@ pub async fn run_stdio_proxy(config: DaemonConfig) -> Result<(), String> {
                         let client = client.clone();
                         let url = mcp_url.clone();
                         let session_id = session_id.clone();
-                        let author = author.clone();
 
                         rt.block_on(async {
                             // Build request with proper headers for Streamable HTTP
@@ -121,13 +115,6 @@ pub async fn run_stdio_proxy(config: DaemonConfig) -> Result<(), String> {
                                 .post(&url)
                                 .header("Content-Type", "application/json")
                                 .header("Accept", "application/json, text/event-stream");
-
-                            if let Some(author) = &author {
-                                request = request.header(
-                                    crate::daemon::mcp_service::AUTHOR_HEADER,
-                                    author.as_str(),
-                                );
-                            }
 
                             // Add session ID header if we have one (lock-free load)
                             let current_sid = session_id.load();
