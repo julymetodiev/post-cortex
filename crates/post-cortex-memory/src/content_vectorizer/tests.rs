@@ -842,6 +842,11 @@ async fn messages_are_searched_only_when_asked_for() {
         chat(session.id(), 1, "the zebracorn import failed on a timeout"),
     ];
     assert_eq!(v.vectorize_messages(&messages).await.unwrap(), 2);
+    assert_eq!(
+        v.vectorize_messages(&messages).await.unwrap(),
+        0,
+        "turns with vectors are skipped"
+    );
     assert!(
         storage
             .rows
@@ -889,4 +894,8 @@ async fn messages_are_searched_only_when_asked_for() {
     let left = search(Corpus::Messages).await.unwrap();
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].content_id, "message:1");
+
+    // A turn whose vector is missing is embedded again; the other is not.
+    assert_eq!(v.vectorize_messages(&messages).await.unwrap(), 1);
+    assert_eq!(search(Corpus::Messages).await.unwrap().len(), 2);
 }

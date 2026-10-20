@@ -55,6 +55,13 @@ Examples:
 Note: Must be > 0. Items are packed highest-score-first until budget is consumed."#
     )]
     pub token_budget: Option<u32>,
+    /// What to assemble from: `records`, `messages` or `all`.
+    #[schemars(description = r#"What to assemble from (optional; default: records).
+
+- records: the structured records, entity graph and impact analysis
+- messages: conversation excerpts (captured turns matching the query, with the turns around them), plus the entity graph and impact analysis
+- all: both; records get half of the token budget"#)]
+    pub sources: Option<String>,
     /// Form A: single JSONPath expression. The matched value is returned
     /// directly instead of the full response payload.
     #[schemars(

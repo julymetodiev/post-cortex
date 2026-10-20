@@ -379,9 +379,23 @@ impl ConversationMemorySystem {
             .map(Arc::clone)
     }
 
-    /// Vectorize a session's content (requires embeddings feature)
+    /// Vectorize a session's content: its updates and entities, and the
+    /// captured messages that have no vectors yet (an embedding that failed
+    /// on append). Returns how many vectors were added.
     #[cfg(feature = "embeddings")]
     pub async fn vectorize_session(&self, session_id: Uuid) -> Result<usize, String> {
+        let updates = self.vectorize_session_updates(session_id).await?;
+        let messages = self.vectorize_session_messages(session_id).await?;
+        Ok(updates + messages)
+    }
+
+    /// Vectorize a session's updates and entities (requires embeddings
+    /// feature). Searches call this when a session lacks update vectors.
+    #[cfg(feature = "embeddings")]
+    pub(crate) async fn vectorize_session_updates(
+        &self,
+        session_id: Uuid,
+    ) -> Result<usize, String> {
         // Lazy-initialize vectorizer if needed
         let vectorizer = self.ensure_vectorizer_initialized().await?;
 
@@ -653,7 +667,7 @@ impl ConversationMemorySystem {
                 "Session {} not vectorized, auto-vectorizing before search",
                 session_id
             );
-            if let Err(e) = self.vectorize_session(session_id).await {
+            if let Err(e) = self.vectorize_session_updates(session_id).await {
                 warn!(
                     "Auto-vectorization failed for session {}: {}",
                     session_id, e
@@ -768,7 +782,7 @@ impl ConversationMemorySystem {
                 "Session {} not vectorized, auto-vectorizing before related content search",
                 session_id
             );
-            if let Err(e) = self.vectorize_session(session_id).await {
+            if let Err(e) = self.vectorize_session_updates(session_id).await {
                 warn!(
                     "Auto-vectorization failed for session {}: {}",
                     session_id, e

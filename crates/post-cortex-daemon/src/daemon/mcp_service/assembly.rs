@@ -55,58 +55,72 @@ pub(super) async fn handle(
         .filter(|b| *b > 0)
         .map(|b| b as usize)
         .unwrap_or(4000);
+    let corpus = post_cortex_mcp::search::parse_sources(req.sources.clone()).map_err(|e| {
+        McpError::invalid_params(e, Some(serde_json::json!({"parameter": "sources"})))
+    })?;
 
-    let (updates, graph) = if let Some(ws_raw) = req.workspace_id.as_ref().filter(|s| !s.is_empty())
-    {
-        let ws_uuid = Uuid::parse_str(ws_raw).map_err(|_| {
-            CoercionError::new(
-                "Invalid UUID",
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid UUID format"),
-                Some(serde_json::Value::String(ws_raw.clone())),
-            )
-            .with_parameter_path("workspace_id".to_string())
-            .with_expected_type("Valid UUID string")
-            .to_mcp_error()
-        })?;
-
-        let workspace = memory_system
-            .workspace_manager
-            .get_workspace(&ws_uuid)
-            .ok_or_else(|| {
-                McpError::invalid_params(
-                    format!("Workspace {} not found", ws_uuid),
-                    Some(serde_json::Value::String("workspace_id".to_string())),
+    let (updates, graph, sessions) =
+        if let Some(ws_raw) = req.workspace_id.as_ref().filter(|s| !s.is_empty()) {
+            let ws_uuid = Uuid::parse_str(ws_raw).map_err(|_| {
+                CoercionError::new(
+                    "Invalid UUID",
+                    std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid UUID format"),
+                    Some(serde_json::Value::String(ws_raw.clone())),
                 )
+                .with_parameter_path("workspace_id".to_string())
+                .with_expected_type("Valid UUID string")
+                .to_mcp_error()
             })?;
 
-        let mut all_updates = Vec::new();
-        let mut graphs = Vec::new();
+            let workspace = memory_system
+                .workspace_manager
+                .get_workspace(&ws_uuid)
+                .ok_or_else(|| {
+                    McpError::invalid_params(
+                        format!("Workspace {} not found", ws_uuid),
+                        Some(serde_json::Value::String("workspace_id".to_string())),
+                    )
+                })?;
 
-        for (ws_session_id, _role) in workspace.get_all_sessions() {
-            if let Ok(session_arc) = memory_system.get_session(ws_session_id).await {
-                let session = session_arc.load();
-                assembly_scope::session_updates(&session, &mut all_updates);
-                graphs.push((ws_session_id, Arc::clone(&session.entity_graph)));
+            let mut all_updates = Vec::new();
+            let mut graphs = Vec::new();
+            let mut sessions = Vec::new();
+
+            for (ws_session_id, _role) in workspace.get_all_sessions() {
+                if let Ok(session_arc) = memory_system.get_session(ws_session_id).await {
+                    let session = session_arc.load();
+                    assembly_scope::session_updates(&session, &mut all_updates);
+                    graphs.push((ws_session_id, Arc::clone(&session.entity_graph)));
+                    sessions.push(ws_session_id);
+                }
             }
-        }
 
-        let merged = assembly_scope::WORKSPACE_GRAPHS.merged(ws_uuid, graphs);
-        (all_updates, merged)
-    } else {
-        let sid_raw = req.session_id.as_ref().unwrap();
-        let session_id = validate_session_id(sid_raw).map_err(|e| e.to_mcp_error())?;
+            let merged = assembly_scope::WORKSPACE_GRAPHS.merged(ws_uuid, graphs);
+            (all_updates, merged, sessions)
+        } else {
+            let sid_raw = req.session_id.as_ref().unwrap();
+            let session_id = validate_session_id(sid_raw).map_err(|e| e.to_mcp_error())?;
 
-        let session_arc = memory_system
-            .get_session(session_id)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Session not found: {}", e), None))?;
-        let session = session_arc.load();
-        let mut updates = Vec::new();
-        assembly_scope::session_updates(&session, &mut updates);
-        (updates, Arc::clone(&session.entity_graph))
-    };
+            let session_arc = memory_system
+                .get_session(session_id)
+                .await
+                .map_err(|e| McpError::internal_error(format!("Session not found: {}", e), None))?;
+            let session = session_arc.load();
+            let mut updates = Vec::new();
+            assembly_scope::session_updates(&session, &mut updates);
+            (updates, Arc::clone(&session.entity_graph), vec![session_id])
+        };
 
-    let assembled = context_assembly::assemble_context(&req.query, &graph, &updates, token_budget);
+    let assembled = assembly_scope::assemble(
+        memory_system,
+        &req.query,
+        &graph,
+        &updates,
+        &sessions,
+        token_budget,
+        corpus,
+    )
+    .await;
     let formatted_text = context_assembly::format_for_llm(&assembled);
 
     let payload = serde_json::json!({

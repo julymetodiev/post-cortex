@@ -157,8 +157,8 @@ impl ContentVectorizer {
     }
 
     /// Vectorize turns of a session's message stream (see
-    /// [`message_vectors`]); turns too short to embed are skipped. Returns
-    /// how many vectors were added.
+    /// [`message_vectors`]); turns too short to embed and turns that already
+    /// have vectors are skipped. Returns how many vectors were added.
     ///
     /// # Errors
     /// Returns an error if the texts cannot be embedded.
@@ -166,6 +166,14 @@ impl ContentVectorizer {
         let vectors: Vec<(String, VectorMetadata)> = messages
             .iter()
             .filter(|m| self.should_vectorize_text(&m.text))
+            .filter(|m| {
+                source_content_ids(
+                    &self.vector_db,
+                    &message::content_id(m.seq),
+                    &m.session_id.to_string(),
+                )
+                .is_empty()
+            })
             .flat_map(|m| message_vectors(m, self.config.max_text_length))
             .collect();
         if vectors.is_empty() {

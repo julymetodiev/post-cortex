@@ -14,6 +14,10 @@ use uuid::Uuid;
 use post_cortex_core::core::message::{self, Message, NewMessage};
 
 use super::system::ConversationMemorySystem;
+
+/// Messages embedded per call when a session's stream is backfilled.
+#[cfg(feature = "embeddings")]
+const MESSAGE_EMBED_BATCH: usize = 256;
 #[cfg(feature = "embeddings")]
 use crate::content_vectorizer::{ContentType, SemanticSearchResult};
 
@@ -135,6 +139,98 @@ impl ConversationMemorySystem {
             }
         }
         out
+    }
+
+    /// The captured turns of `sessions` that best match `query`, each with
+    /// the turns around it, as context excerpts in conversation order
+    /// (`[date] role: text`), at most `limit` matches. A fast search: no
+    /// reranking.
+    ///
+    /// # Errors
+    /// The search failed.
+    #[cfg(feature = "embeddings")]
+    pub async fn conversation_excerpts(
+        &self,
+        sessions: &[Uuid],
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::context_assembly::ContextItem>, String> {
+        let options = crate::content_vectorizer::SearchOptions {
+            limit: Some(limit),
+            mode: Some(crate::content_vectorizer::SearchMode::Fast),
+            corpus: post_cortex_embeddings::Corpus::Messages,
+            ..Default::default()
+        };
+        let results = match sessions {
+            [] => return Ok(Vec::new()),
+            [session_id] => {
+                self.semantic_search_session(*session_id, query, options)
+                    .await?
+            }
+            sessions => {
+                self.semantic_search_multisession(sessions, query, options)
+                    .await?
+            }
+        };
+        // Group each match with its neighbours, in stream order.
+        let mut turns: Vec<_> = results
+            .into_iter()
+            .filter(|r| r.content_type == ContentType::Message)
+            .collect();
+        turns.sort_by_key(|r| {
+            (
+                r.session_id,
+                message::seq_of_content_id(&r.content_id).unwrap_or(u64::MAX),
+            )
+        });
+        Ok(turns
+            .into_iter()
+            .map(|r| {
+                crate::context_assembly::excerpt(
+                    format!(
+                        "[{}] {}",
+                        r.timestamp.format("%Y-%m-%d %H:%M"),
+                        r.text_content
+                    ),
+                    r.combined_score.clamp(0.0, 1.0),
+                    format!("{}/{}", r.session_id, r.content_id),
+                )
+            })
+            .collect())
+    }
+
+    /// Embed the captured messages of `session_id` that have no vectors
+    /// yet. Returns how many vectors were added.
+    ///
+    /// # Errors
+    /// The stream could not be read or the vectorizer not started.
+    #[cfg(feature = "embeddings")]
+    pub(crate) async fn vectorize_session_messages(
+        &self,
+        session_id: Uuid,
+    ) -> Result<usize, String> {
+        let messages = self
+            .storage_actor
+            .load_messages(session_id, 0..u64::MAX)
+            .await?;
+        if messages.is_empty() {
+            return Ok(0);
+        }
+        let vectorizer = self.ensure_vectorizer_initialized().await?;
+        let mut added = 0;
+        for batch in messages.chunks(MESSAGE_EMBED_BATCH) {
+            added += vectorizer
+                .vectorize_messages(batch)
+                .await
+                .map_err(|e| format!("Embedding messages of session {session_id} failed: {e:#}"))?;
+        }
+        if added > 0 {
+            info!(
+                "Embedded {} message vectors of session {}",
+                added, session_id
+            );
+        }
+        Ok(added)
     }
 
     #[cfg(feature = "embeddings")]

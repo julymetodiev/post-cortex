@@ -951,8 +951,11 @@ impl PostCortex for PcxGrpcService {
         use crate::daemon::assembly_scope;
         use post_cortex_memory::context_assembly;
 
+        let corpus = post_cortex_mcp::search::parse_sources(req.sources.clone())
+            .map_err(Status::invalid_argument)?;
+
         // Resolve scope: workspace_id takes precedence over session_id
-        let (updates, graph) = if req
+        let (updates, graph, sessions) = if req
             .workspace_id
             .as_deref()
             .map(|s| !s.is_empty())
@@ -968,6 +971,7 @@ impl PostCortex for PcxGrpcService {
 
             let mut all_updates = Vec::new();
             let mut graphs = Vec::new();
+            let mut sessions = Vec::new();
 
             for (ws_session_id, _role) in workspace.get_all_sessions() {
                 match self.memory.get_session(ws_session_id).await {
@@ -975,6 +979,7 @@ impl PostCortex for PcxGrpcService {
                         let session = session_arc.load();
                         assembly_scope::session_updates(&session, &mut all_updates);
                         graphs.push((ws_session_id, Arc::clone(&session.entity_graph)));
+                        sessions.push(ws_session_id);
                     }
                     Err(e) => {
                         warn!(
@@ -986,7 +991,7 @@ impl PostCortex for PcxGrpcService {
             }
 
             let merged = assembly_scope::WORKSPACE_GRAPHS.merged(workspace_id, graphs);
-            (all_updates, merged)
+            (all_updates, merged, sessions)
         } else {
             // Single-session: borrow the session's graph instead of cloning it
             let session_id = parse_uuid(&req.session_id)?;
@@ -998,11 +1003,19 @@ impl PostCortex for PcxGrpcService {
             let session = session_arc.load();
             let mut updates = Vec::new();
             assembly_scope::session_updates(&session, &mut updates);
-            (updates, Arc::clone(&session.entity_graph))
+            (updates, Arc::clone(&session.entity_graph), vec![session_id])
         };
 
-        let assembled =
-            context_assembly::assemble_context(&req.query, &graph, &updates, token_budget);
+        let assembled = assembly_scope::assemble(
+            &self.memory,
+            &req.query,
+            &graph,
+            &updates,
+            &sessions,
+            token_budget,
+            corpus,
+        )
+        .await;
 
         let formatted_text = context_assembly::format_for_llm(&assembled);
 
@@ -1021,6 +1034,7 @@ impl PostCortex for PcxGrpcService {
                         context_assembly::ContextSource::SemanticMatch => "semantic_match",
                         context_assembly::ContextSource::GraphTraversal { via_entity } => via_entity,
                         context_assembly::ContextSource::RecentUpdate => "recent_update",
+                        context_assembly::ContextSource::Conversation => "conversation",
                     },
                     "entities": item.entities,
                     "token_estimate": item.token_estimate,
@@ -1098,6 +1112,9 @@ impl PostCortex for PcxGrpcService {
                     }
                     context_assembly::ContextSource::RecentUpdate => {
                         ("recent_update".to_string(), String::new())
+                    }
+                    context_assembly::ContextSource::Conversation => {
+                        ("conversation".to_string(), String::new())
                     }
                 };
                 AssembledContextItem {

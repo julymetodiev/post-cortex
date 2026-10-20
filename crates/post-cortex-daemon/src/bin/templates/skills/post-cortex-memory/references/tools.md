@@ -81,9 +81,10 @@ Response (MCP): a success message — single mode "Context updated successfully"
 | `query` (required) | name the components you care about |
 | `session_id` or `workspace_id` | one of them |
 | `token_budget` | default 4000 |
+| `sources` | `records` (default) \| `messages` \| `all`; with messages, the captured turns that match the query come as conversation excerpts (with the turns around them); `all` gives the records half the budget |
 | `select` / `select_map` | e.g. `$.formatted_text` to get only the prompt-ready block |
 
-No embeddings: matches entity names in the query, expands one hop, ranks recent updates by entity matches and recency. Returns `items`, `entity_context` (`DirectMention` / `GraphNeighbor{via, relation}`), `impact` (reverse dependencies), `total_tokens`, `formatted_text`.
+For records it uses no embeddings: matches entity names in the query, expands one hop, ranks recent updates by entity matches and recency. Returns `items` (excerpts have `source: Conversation`), `entity_context` (`DirectMention` / `GraphNeighbor{via, relation}`), `impact` (reverse dependencies), `total_tokens`, `formatted_text`.
 
 ## query_conversation_context
 

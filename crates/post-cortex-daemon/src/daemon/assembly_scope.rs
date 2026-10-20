@@ -15,6 +15,9 @@ use dashmap::DashMap;
 use post_cortex_core::core::context_update::ContextUpdate;
 use post_cortex_core::graph::entity_graph::SimpleEntityGraph;
 use post_cortex_core::session::active_session::ActiveSession;
+use post_cortex_embeddings::Corpus;
+use post_cortex_memory::ConversationMemorySystem;
+use post_cortex_memory::context_assembly::{self, AssembledContext};
 use uuid::Uuid;
 
 /// Updates visible to assembly for one session: hot context followed by the
@@ -30,6 +33,45 @@ pub(crate) fn session_updates(session: &ActiveSession, out: &mut Vec<ContextUpda
 /// Holding the source `Arc`s is what makes pointer comparison sound: while
 /// they are alive their addresses cannot be reused, and `Arc::make_mut` on a
 /// session's graph is forced to copy instead of mutating in place.
+/// Turns matched per assembly that covers messages (each comes with its
+/// neighbouring turns).
+const EXCERPT_MATCHES: usize = 5;
+
+/// Assemble context for `query` from `corpus`: records (`updates` and
+/// `graph`), conversation excerpts of `sessions`, or both. With both, the
+/// records get half of `token_budget` and the excerpts what is left; with
+/// messages only, the records are left out (entity context and impact
+/// analysis stay). If the excerpt search fails the records stand alone.
+pub(crate) async fn assemble(
+    memory: &ConversationMemorySystem,
+    query: &str,
+    graph: &SimpleEntityGraph,
+    updates: &[ContextUpdate],
+    sessions: &[Uuid],
+    token_budget: usize,
+    corpus: Corpus,
+) -> AssembledContext {
+    let (updates, record_budget) = match corpus {
+        Corpus::Records => (updates, token_budget),
+        Corpus::All => (updates, token_budget / 2),
+        Corpus::Messages => (&[][..], token_budget),
+    };
+    let mut ctx = context_assembly::assemble_context(query, graph, updates, record_budget);
+    #[cfg(feature = "embeddings")]
+    if corpus != Corpus::Records {
+        match memory
+            .conversation_excerpts(sessions, query, EXCERPT_MATCHES)
+            .await
+        {
+            Ok(excerpts) => context_assembly::add_excerpts(&mut ctx, excerpts, token_budget),
+            Err(e) => tracing::warn!("Conversation excerpts left out of assembled context: {e}"),
+        }
+    }
+    #[cfg(not(feature = "embeddings"))]
+    let _ = (memory, sessions);
+    ctx
+}
+
 struct CachedMerge {
     sources: Vec<(Uuid, Arc<SimpleEntityGraph>)>,
     merged: Arc<SimpleEntityGraph>,

@@ -50,6 +50,9 @@ pub enum ContextSource {
     },
     /// Recent update in the session
     RecentUpdate,
+    /// A captured conversation turn (the message stream), found by
+    /// semantic search or next to a turn that was
+    Conversation,
 }
 
 /// Result of graph-aware context assembly
@@ -541,6 +544,31 @@ pub fn assemble_context<U: Borrow<ContextUpdate>>(
     }
 }
 
+/// Add conversation excerpts (see [`ContextSource::Conversation`]) to `ctx`
+/// in their order, as far as `token_budget` allows: an excerpt that does not
+/// fit is skipped.
+pub fn add_excerpts(ctx: &mut AssembledContext, excerpts: Vec<ContextItem>, token_budget: usize) {
+    for item in excerpts {
+        if ctx.total_tokens + item.token_estimate > token_budget {
+            continue;
+        }
+        ctx.total_tokens += item.token_estimate;
+        ctx.items.push(item);
+    }
+}
+
+/// A conversation excerpt for [`add_excerpts`].
+pub fn excerpt(text: String, score: f32, entry_id: String) -> ContextItem {
+    ContextItem {
+        token_estimate: estimate_tokens(&text),
+        text,
+        score,
+        source: ContextSource::Conversation,
+        entities: Vec::new(),
+        entry_id,
+    }
+}
+
 /// Format assembled context as a text block suitable for LLM injection.
 pub fn format_for_llm(ctx: &AssembledContext) -> String {
     let mut parts: Vec<String> = Vec::new();
@@ -585,13 +613,21 @@ pub fn format_for_llm(ctx: &AssembledContext) -> String {
         ));
     }
 
-    // Context items
-    if !ctx.items.is_empty() {
-        let content_lines: Vec<String> = ctx.items.iter().map(|item| item.text.clone()).collect();
+    // Context items: records, then conversation excerpts
+    let (excerpts, records): (Vec<&ContextItem>, Vec<&ContextItem>) = ctx
+        .items
+        .iter()
+        .partition(|item| item.source == ContextSource::Conversation);
+    if !records.is_empty() {
+        let content_lines: Vec<&str> = records.iter().map(|item| item.text.as_str()).collect();
         parts.push(format!(
             "Relevant context:\n{}",
             content_lines.join("\n---\n")
         ));
+    }
+    if !excerpts.is_empty() {
+        let lines: Vec<&str> = excerpts.iter().map(|item| item.text.as_str()).collect();
+        parts.push(format!("Conversation excerpts:\n{}", lines.join("\n")));
     }
 
     parts.join("\n\n")
@@ -832,6 +868,39 @@ mod tests {
         assert_eq!(from_shared.items[0].text, from_owned.items[0].text);
         assert_eq!(from_shared.items[0].score, from_owned.items[0].score);
         assert_eq!(from_shared.items[0].entities, vec!["RocksDB".to_string()]);
+    }
+
+    /// Excerpts fill what the budget leaves, in order, and are formatted as
+    /// their own section after the records.
+    #[test]
+    fn excerpts_fill_the_remaining_budget() {
+        let graph = make_graph();
+        let mut ctx = assemble_context("rocksdb", &graph, &[] as &[ContextUpdate], 1000);
+        let base = ctx.total_tokens;
+        let turn = |text: &str| excerpt(text.to_string(), 0.5, format!("s/{text}"));
+        let long = "x".repeat(4 * (1000 - base) + 40);
+        add_excerpts(
+            &mut ctx,
+            vec![
+                turn("user: why rocksdb?"),
+                turn(&long),
+                turn("assistant: speed"),
+            ],
+            1000,
+        );
+        let texts: Vec<&str> = ctx.items.iter().map(|i| i.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            ["user: why rocksdb?", "assistant: speed"],
+            "the long one does not fit"
+        );
+        assert!(ctx.total_tokens <= 1000);
+        let formatted = format_for_llm(&ctx);
+        assert!(
+            formatted.contains("Conversation excerpts:\nuser: why rocksdb?\nassistant: speed"),
+            "{formatted}"
+        );
+        assert!(!formatted.contains("Relevant context:"));
     }
 
     #[test]

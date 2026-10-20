@@ -324,6 +324,9 @@ curl -X POST http://127.0.0.1:3737/api/messages \
 Captured turns are searched only when asked for: `semantic_search` with
 `sources: "messages"` (or `"all"`; the default is `"records"`). Each turn
 found comes back whole, with the turns around it (`neighbour_radius`).
+`assemble_context` takes the same `sources` and adds the matching turns as
+conversation excerpts. `admin` `vectorize_session` also embeds turns whose
+embedding failed when they were captured.
 
 ```toml
 # ~/.post-cortex/daemon.toml

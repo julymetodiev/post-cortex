@@ -370,12 +370,14 @@ message AssembleContextRequest {
   optional string select_string = 5;
   // Form B: map of output-key → JSONPath expression → object with same keys returned.
   map<string, string> select_map = 6;
+  // What to assemble from: "records", "messages" or "all". Unset = records.
+  optional string sources = 7;
 }
 
 message AssembledContextItem {
   string text = 1;
   float score = 2;
-  string source = 3;          // "semantic_match", "graph_traversal", "recent_update"
+  string source = 3;          // "semantic_match", "graph_traversal", "recent_update", "conversation"
   string via_entity = 4;      // For graph_traversal source, the entity it was found through
   repeated string entities = 5;
   uint32 token_estimate = 6;
