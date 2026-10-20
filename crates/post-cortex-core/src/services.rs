@@ -91,6 +91,13 @@ pub trait PostCortexService: Send + Sync + 'static {
         req: AppendMessagesRequest,
     ) -> Result<AppendMessagesResponse, SystemError>;
 
+    /// Read a project or user card.
+    async fn get_card(&self, req: GetCardRequest) -> Result<GetCardResponse, SystemError>;
+
+    /// Write the next version of a project or user card, unless it changed
+    /// since the version the caller edited.
+    async fn update_card(&self, req: UpdateCardRequest) -> Result<UpdateCardResponse, SystemError>;
+
     // ------------------------------------------------------------------
     // Read path
     // ------------------------------------------------------------------

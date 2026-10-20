@@ -12,6 +12,7 @@
 // not just keyword-similar.
 
 use chrono::Utc;
+use post_cortex_core::core::card::{Card, CardScope};
 use post_cortex_core::core::context_update::{ContextUpdate, EntityRelationship, RelationType};
 use post_cortex_core::graph::entity_graph::SimpleEntityGraph;
 use serde::{Deserialize, Serialize};
@@ -66,6 +67,10 @@ pub struct AssembledContext {
     pub impact: Vec<ImpactEntry>,
     /// Total estimated tokens
     pub total_tokens: usize,
+    /// The user card and project cards in front of the context (see
+    /// [`add_cards`]).
+    #[serde(default)]
+    pub cards: Vec<Card>,
 }
 
 /// An entity and its graph neighborhood relevant to the query
@@ -541,7 +546,29 @@ pub fn assemble_context<U: Borrow<ContextUpdate>>(
         entity_context,
         impact,
         total_tokens,
+        cards: Vec::new(),
     }
+}
+
+/// Tokens the non-empty `cards` take in front of a context.
+pub fn card_tokens(cards: &[Card]) -> usize {
+    cards
+        .iter()
+        .filter(|c| !c.text.trim().is_empty())
+        .map(|c| estimate_tokens(&c.text) + 8)
+        .sum()
+}
+
+/// Put the user and project `cards` in front of `ctx` (empty ones are
+/// left out). They always go in; callers keep [`card_tokens`] free in the
+/// budget they give the rest.
+pub fn add_cards(ctx: &mut AssembledContext, cards: Vec<Card>) {
+    let cards: Vec<Card> = cards
+        .into_iter()
+        .filter(|c| !c.text.trim().is_empty())
+        .collect();
+    ctx.total_tokens += card_tokens(&cards);
+    ctx.cards = cards;
 }
 
 /// Add conversation excerpts (see [`ContextSource::Conversation`]) to `ctx`
@@ -572,6 +599,15 @@ pub fn excerpt(text: String, score: f32, entry_id: String) -> ContextItem {
 /// Format assembled context as a text block suitable for LLM injection.
 pub fn format_for_llm(ctx: &AssembledContext) -> String {
     let mut parts: Vec<String> = Vec::new();
+
+    // Cards first: the standing context of the user and the project.
+    for card in &ctx.cards {
+        let title = match card.scope {
+            CardScope::User => "User card",
+            CardScope::Workspace(_) => "Project card",
+        };
+        parts.push(format!("{title}:\n{}", card.text.trim()));
+    }
 
     // Entity graph summary
     if !ctx.entity_context.is_empty() {

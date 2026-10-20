@@ -23,20 +23,24 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use post_cortex_core::core::card::{CardScope, MAX_CARD_BYTES};
 use post_cortex_core::core::context_update::{ContextUpdate, EntityRelationship, TypedEntity};
 use post_cortex_core::core::error::SystemError;
 use post_cortex_core::redact::{RedactionCounts, Redactor};
 use post_cortex_core::services::{
     AdminRequest, AdminResponse, AppendMessagesRequest, AppendMessagesResponse,
     AssembleContextRequest, AssembleContextResponse, BulkUpdateContextRequest,
-    BulkUpdateContextResponse, HealthReport, ManageEntityRequest, ManageEntityResponse,
-    ManageSessionRequest, ManageSessionResponse, ManageWorkspaceRequest, ManageWorkspaceResponse,
-    PostCortexService, QueryContextRequest, QueryContextResponse, SemanticSearchRequest,
-    SemanticSearchResponse, StructuredSummaryRequest, StructuredSummaryResponse,
-    UpdateContextRequest, UpdateContextResponse,
+    BulkUpdateContextResponse, GetCardRequest, GetCardResponse, HealthReport, ManageEntityRequest,
+    ManageEntityResponse, ManageSessionRequest, ManageSessionResponse, ManageWorkspaceRequest,
+    ManageWorkspaceResponse, PostCortexService, QueryContextRequest, QueryContextResponse,
+    SemanticSearchRequest, SemanticSearchResponse, StructuredSummaryRequest,
+    StructuredSummaryResponse, UpdateCardRequest, UpdateCardResponse, UpdateContextRequest,
+    UpdateContextResponse,
 };
 use tracing::warn;
 use uuid::Uuid;
+
+use post_cortex_storage::traits::CardWrite;
 
 use crate::memory_system::ConversationMemorySystem;
 use crate::pipeline::{
@@ -96,6 +100,18 @@ impl MemoryServiceImpl {
     #[must_use]
     pub fn inner(&self) -> &Arc<ConversationMemorySystem> {
         &self.system
+    }
+
+    /// A workspace card needs an existing workspace.
+    fn require_card_scope(&self, scope: CardScope) -> Result<(), SystemError> {
+        match scope {
+            CardScope::Workspace(id)
+                if self.system.workspace_manager.get_workspace(&id).is_none() =>
+            {
+                Err(SystemError::WorkspaceNotFound(id))
+            }
+            _ => Ok(()),
+        }
     }
 
     fn not_yet_wired<T>(op: &'static str) -> Result<T, SystemError> {
@@ -219,6 +235,66 @@ impl PostCortexService for MemoryServiceImpl {
             skipped: submitted - stored.len(),
             appended: stored.iter().map(|m| m.seq).collect(),
             vectorized,
+        })
+    }
+
+    #[tracing::instrument(skip(self, req), fields(scope = %req.scope.key()), name = "post_cortex.get_card")]
+    async fn get_card(&self, req: GetCardRequest) -> Result<GetCardResponse, SystemError> {
+        self.require_card_scope(req.scope)?;
+        let actor = &self.system.storage_actor;
+        if req.history == 0 {
+            return Ok(GetCardResponse {
+                card: actor
+                    .get_card(req.scope)
+                    .await
+                    .map_err(SystemError::Internal)?,
+                history: Vec::new(),
+            });
+        }
+        let mut versions = actor
+            .card_history(req.scope, req.history + 1)
+            .await
+            .map_err(SystemError::Internal)?
+            .into_iter();
+        Ok(GetCardResponse {
+            card: versions.next(),
+            history: versions.collect(),
+        })
+    }
+
+    #[tracing::instrument(
+        skip(self, req),
+        fields(scope = %req.scope.key(), expected_version = req.expected_version),
+        name = "post_cortex.update_card",
+    )]
+    async fn update_card(&self, req: UpdateCardRequest) -> Result<UpdateCardResponse, SystemError> {
+        self.require_card_scope(req.scope)?;
+        let mut counts = RedactionCounts::new();
+        let text = self.redactor.redact_str(req.text.trim_end(), &mut counts);
+        if !counts.is_empty() {
+            tracing::info!(scope = %req.scope.key(), ?counts, "update_card: redacted sensitive values");
+        }
+        if text.len() > MAX_CARD_BYTES {
+            return Err(SystemError::InvalidArgument(format!(
+                "update_card: the card is {} bytes, the limit is {MAX_CARD_BYTES}; shorten it",
+                text.len()
+            )));
+        }
+        let write = self
+            .system
+            .storage_actor
+            .put_card(req.scope, text, req.author, req.expected_version)
+            .await
+            .map_err(SystemError::Internal)?;
+        Ok(match write {
+            CardWrite::Written(card) => UpdateCardResponse {
+                written: true,
+                card: Some(card),
+            },
+            CardWrite::Conflict(latest) => UpdateCardResponse {
+                written: false,
+                card: latest,
+            },
         })
     }
 
@@ -882,5 +958,80 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, SystemError::InvalidArgument(ref m) if m.contains("does not match")));
         std::fs::remove_dir_all(&test_dir).unwrap();
+    }
+
+    /// Cards: an unknown workspace is refused, versions advance, a stale
+    /// version conflicts with the latest returned, secrets are redacted and
+    /// the size limit holds.
+    #[tokio::test]
+    async fn cards_are_versioned_redacted_and_bounded() {
+        let (svc, dir) = make_service("cards").await;
+        let update = |scope, text: &str, expected_version| UpdateCardRequest {
+            scope,
+            text: text.to_string(),
+            expected_version,
+            author: Some("claude".to_string()),
+        };
+
+        let unknown = CardScope::Workspace(Uuid::new_v4());
+        assert!(matches!(
+            svc.update_card(update(unknown, "x", 0)).await,
+            Err(SystemError::WorkspaceNotFound(_))
+        ));
+
+        let ws = svc
+            .inner()
+            .workspace_manager
+            .create_workspace("cards".to_string(), String::new());
+        let scope = CardScope::Workspace(ws);
+        let first = svc
+            .update_card(update(
+                scope,
+                "## Stack\nrust; key AKIAABCDEFGHIJKLMNOP\n\n",
+                0,
+            ))
+            .await
+            .unwrap();
+        assert!(first.written);
+        let card = first.card.unwrap();
+        assert_eq!(card.version, 1);
+        assert!(card.text.contains("[REDACTED:"), "{}", card.text);
+        assert!(
+            !card.text.ends_with('\n'),
+            "trailing blank lines are trimmed"
+        );
+
+        let stale = svc.update_card(update(scope, "other", 0)).await.unwrap();
+        assert!(!stale.written);
+        assert_eq!(stale.card.unwrap().version, 1, "the latest comes back");
+
+        assert!(matches!(
+            svc.update_card(update(scope, &"x".repeat(MAX_CARD_BYTES + 1), 1))
+                .await,
+            Err(SystemError::InvalidArgument(_))
+        ));
+        assert!(
+            svc.update_card(update(scope, "## Stack\nrust", 1))
+                .await
+                .unwrap()
+                .written
+        );
+
+        let read = svc
+            .get_card(GetCardRequest { scope, history: 5 })
+            .await
+            .unwrap();
+        assert_eq!(read.card.unwrap().version, 2);
+        assert_eq!(read.history.len(), 1);
+        let user = svc
+            .get_card(GetCardRequest {
+                scope: CardScope::User,
+                history: 0,
+            })
+            .await
+            .unwrap();
+        assert!(user.card.is_none());
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

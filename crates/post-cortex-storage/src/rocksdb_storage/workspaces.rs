@@ -164,6 +164,11 @@ impl RealRocksDBStorage {
             for key in keys_to_delete {
                 batch.delete(&key);
             }
+            super::cards::delete_card_in(
+                &db,
+                &mut batch,
+                post_cortex_core::core::card::CardScope::Workspace(workspace_id),
+            )?;
             db.write(batch)?;
 
             info!(

@@ -59,7 +59,7 @@ pub(super) async fn handle(
         McpError::invalid_params(e, Some(serde_json::json!({"parameter": "sources"})))
     })?;
 
-    let (updates, graph, sessions) =
+    let (updates, graph, sessions, workspaces) =
         if let Some(ws_raw) = req.workspace_id.as_ref().filter(|s| !s.is_empty()) {
             let ws_uuid = Uuid::parse_str(ws_raw).map_err(|_| {
                 CoercionError::new(
@@ -96,7 +96,7 @@ pub(super) async fn handle(
             }
 
             let merged = assembly_scope::WORKSPACE_GRAPHS.merged(ws_uuid, graphs);
-            (all_updates, merged, sessions)
+            (all_updates, merged, sessions, vec![ws_uuid])
         } else {
             let sid_raw = req.session_id.as_ref().unwrap();
             let session_id = validate_session_id(sid_raw).map_err(|e| e.to_mcp_error())?;
@@ -108,7 +108,12 @@ pub(super) async fn handle(
             let session = session_arc.load();
             let mut updates = Vec::new();
             assembly_scope::session_updates(&session, &mut updates);
-            (updates, Arc::clone(&session.entity_graph), vec![session_id])
+            (
+                updates,
+                Arc::clone(&session.entity_graph),
+                vec![session_id],
+                assembly_scope::workspaces_of(memory_system, session_id),
+            )
         };
 
     let assembled = assembly_scope::assemble(
@@ -117,6 +122,7 @@ pub(super) async fn handle(
         &graph,
         &updates,
         &sessions,
+        &workspaces,
         token_budget,
         corpus,
     )
@@ -130,6 +136,7 @@ pub(super) async fn handle(
         "items": assembled.items,
         "entity_context": assembled.entity_context,
         "impact": assembled.impact,
+        "cards": assembled.cards,
         "formatted_text": formatted_text,
     });
 

@@ -7,10 +7,11 @@ use tokio::time::timeout;
 use tracing::{error, info, trace};
 use uuid::Uuid;
 
+use post_cortex_core::core::card::{Card, CardScope};
 use post_cortex_core::core::message::{Message, NewMessage};
 use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_proto::pb::{CascadeInvalidateReport, FreshnessEntry, SourceReference, SymbolId};
-use post_cortex_storage::traits::SessionSummary;
+use post_cortex_storage::traits::{CardWrite, SessionSummary};
 
 use super::config::OperationType;
 use super::persister::{PersistSink, SessionHandle, SessionPersister, StorageSink};
@@ -193,6 +194,35 @@ pub enum StorageMessage {
         cutoff: chrono::DateTime<chrono::Utc>,
         /// One-shot channel for returning `(session, seq)` of each deleted message.
         response_tx: oneshot::Sender<Result<Vec<(Uuid, u64)>, String>>,
+    },
+    /// Read the latest version of a card.
+    GetCard {
+        /// Whose card.
+        scope: CardScope,
+        /// One-shot channel for returning the card.
+        response_tx: oneshot::Sender<Result<Option<Card>, String>>,
+    },
+    /// Write the next version of a card if the latest is the expected one.
+    PutCard {
+        /// Whose card.
+        scope: CardScope,
+        /// New text.
+        text: String,
+        /// Who writes it.
+        author: Option<String>,
+        /// Version the text was edited from (0: none).
+        expected_version: u64,
+        /// One-shot channel for returning the outcome.
+        response_tx: oneshot::Sender<Result<CardWrite, String>>,
+    },
+    /// Read the newest versions of a card.
+    CardHistory {
+        /// Whose card.
+        scope: CardScope,
+        /// Most versions to return.
+        limit: usize,
+        /// One-shot channel for returning the versions, newest first.
+        response_tx: oneshot::Sender<Result<Vec<Card>, String>>,
     },
     /// Register a source reference for freshness tracking.
     RegisterSource {
@@ -688,6 +718,53 @@ impl StorageActorHandle {
         .await
     }
 
+    /// The latest version of the card of `scope`.
+    pub async fn get_card(&self, scope: CardScope) -> Result<Option<Card>, String> {
+        self.send_request(
+            OperationType::Fast,
+            || format!("GetCard {}", scope.key()),
+            |response_tx| StorageMessage::GetCard { scope, response_tx },
+        )
+        .await
+    }
+
+    /// Store `text` as the next version of the card of `scope` if its latest
+    /// version is `expected_version`.
+    pub async fn put_card(
+        &self,
+        scope: CardScope,
+        text: String,
+        author: Option<String>,
+        expected_version: u64,
+    ) -> Result<CardWrite, String> {
+        self.send_request(
+            OperationType::Medium,
+            || format!("PutCard {}", scope.key()),
+            |response_tx| StorageMessage::PutCard {
+                scope,
+                text,
+                author,
+                expected_version,
+                response_tx,
+            },
+        )
+        .await
+    }
+
+    /// Up to `limit` versions of the card of `scope`, newest first.
+    pub async fn card_history(&self, scope: CardScope, limit: usize) -> Result<Vec<Card>, String> {
+        self.send_request(
+            OperationType::Fast,
+            || format!("CardHistory {}", scope.key()),
+            |response_tx| StorageMessage::CardHistory {
+                scope,
+                limit,
+                response_tx,
+            },
+        )
+        .await
+    }
+
     /// Register a source reference for freshness tracking.
     pub async fn register_source(
         &self,
@@ -1110,6 +1187,40 @@ impl ActorContext {
                 let result = self
                     .storage
                     .delete_messages_before(cutoff)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = response_tx.send(result);
+            }
+            StorageMessage::GetCard { scope, response_tx } => {
+                let result = self
+                    .storage
+                    .get_card(scope)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = response_tx.send(result);
+            }
+            StorageMessage::PutCard {
+                scope,
+                text,
+                author,
+                expected_version,
+                response_tx,
+            } => {
+                let result = self
+                    .storage
+                    .put_card(scope, text, author, expected_version)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = response_tx.send(result);
+            }
+            StorageMessage::CardHistory {
+                scope,
+                limit,
+                response_tx,
+            } => {
+                let result = self
+                    .storage
+                    .card_history(scope, limit)
                     .await
                     .map_err(|e| e.to_string());
                 let _ = response_tx.send(result);

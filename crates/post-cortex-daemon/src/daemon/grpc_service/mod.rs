@@ -30,6 +30,7 @@ use uuid::Uuid;
 // `src/storage/` now imports from `post_cortex_proto::pb` directly.
 pub use post_cortex_proto::pb;
 
+mod capture;
 mod freshness;
 mod helpers;
 
@@ -86,6 +87,33 @@ impl PcxGrpcService {
 
 #[tonic::async_trait]
 impl PostCortex for PcxGrpcService {
+    async fn append_messages(
+        &self,
+        request: Request<AppendMessagesRequest>,
+    ) -> Result<Response<AppendMessagesResponse>, Status> {
+        capture::append_messages(&self.service, request.into_inner())
+            .await
+            .map(Response::new)
+    }
+
+    async fn get_card(
+        &self,
+        request: Request<GetCardRequest>,
+    ) -> Result<Response<GetCardResponse>, Status> {
+        capture::get_card(&self.service, request.into_inner())
+            .await
+            .map(Response::new)
+    }
+
+    async fn update_card(
+        &self,
+        request: Request<UpdateCardRequest>,
+    ) -> Result<Response<UpdateCardResponse>, Status> {
+        capture::update_card(&self.service, request.into_inner())
+            .await
+            .map(Response::new)
+    }
+
     async fn health(
         &self,
         _request: Request<HealthRequest>,
@@ -955,7 +983,7 @@ impl PostCortex for PcxGrpcService {
             .map_err(Status::invalid_argument)?;
 
         // Resolve scope: workspace_id takes precedence over session_id
-        let (updates, graph, sessions) = if req
+        let (updates, graph, sessions, workspaces) = if req
             .workspace_id
             .as_deref()
             .map(|s| !s.is_empty())
@@ -991,7 +1019,7 @@ impl PostCortex for PcxGrpcService {
             }
 
             let merged = assembly_scope::WORKSPACE_GRAPHS.merged(workspace_id, graphs);
-            (all_updates, merged, sessions)
+            (all_updates, merged, sessions, vec![workspace_id])
         } else {
             // Single-session: borrow the session's graph instead of cloning it
             let session_id = parse_uuid(&req.session_id)?;
@@ -1003,7 +1031,12 @@ impl PostCortex for PcxGrpcService {
             let session = session_arc.load();
             let mut updates = Vec::new();
             assembly_scope::session_updates(&session, &mut updates);
-            (updates, Arc::clone(&session.entity_graph), vec![session_id])
+            (
+                updates,
+                Arc::clone(&session.entity_graph),
+                vec![session_id],
+                assembly_scope::workspaces_of(&self.memory, session_id),
+            )
         };
 
         let assembled = assembly_scope::assemble(
@@ -1012,6 +1045,7 @@ impl PostCortex for PcxGrpcService {
             &graph,
             &updates,
             &sessions,
+            &workspaces,
             token_budget,
             corpus,
         )
@@ -1059,6 +1093,7 @@ impl PostCortex for PcxGrpcService {
                     "relation_type": format!("{:?}", i.relation_type),
                     "context": i.context,
                 })).collect::<Vec<_>>(),
+                "cards": assembled.cards,
                 "total_tokens": assembled.total_tokens,
                 "formatted_text": &formatted_text,
             });
@@ -1095,6 +1130,7 @@ impl PostCortex for PcxGrpcService {
                 total_tokens: assembled.total_tokens as u32,
                 formatted_text: String::new(),
                 selected_json,
+                cards: Vec::new(),
             }));
         }
 
@@ -1179,6 +1215,7 @@ impl PostCortex for PcxGrpcService {
             total_tokens: assembled.total_tokens as u32,
             formatted_text,
             selected_json: String::new(),
+            cards: assembled.cards.iter().map(capture::card_info).collect(),
         }))
     }
 

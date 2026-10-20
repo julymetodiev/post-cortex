@@ -909,9 +909,14 @@ impl Storage for SurrealDBStorage {
         self.db
             .query(
                 "DELETE type::record('workspace', $workspace_id); \
-                 DELETE workspace_session WHERE workspace_id = $workspace_id;",
+                 DELETE workspace_session WHERE workspace_id = $workspace_id; \
+                 DELETE card WHERE scope = $card_scope;",
             )
             .bind(("workspace_id", workspace_id.to_string()))
+            .bind((
+                "card_scope",
+                post_cortex_core::core::card::CardScope::Workspace(workspace_id).key(),
+            ))
             .await?
             .check()?;
 

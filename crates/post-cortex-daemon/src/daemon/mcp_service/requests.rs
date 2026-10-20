@@ -688,6 +688,13 @@ Valid values:
 - delete: Delete a workspace (requires workspace_id)
 - add_session: Add a session to workspace (requires workspace_id, session_id, optional role)
 - remove_session: Remove a session from workspace (requires workspace_id, session_id)
+- get_card: Read the project card (workspace_id) or the user card (card: "user"); optional history
+- update_card: Write the next version of a card (content, expected_version; workspace_id or card: "user")
+
+Cards are short markdown notes (max 2 KB) put in front of every session: the project card holds the
+stack, conventions and current goals; the user card holds preferences. update_card needs the version
+you read (0 for a new card); if someone changed it since, nothing is written and the latest version
+comes back so you can merge and retry.
 
 Examples:
 ✅ {"action": "create", "name": "Auth Feature", "description": "OAuth2 work"}
@@ -766,4 +773,29 @@ Examples:
 Note: Only used when action='add_session'. Defaults to 'related' if omitted."#
     )]
     pub role: Option<String>,
+    /// Which card `get_card`/`update_card` act on: `workspace` or `user`.
+    #[schemars(
+        description = r#"Which card get_card/update_card act on (default: workspace).
+
+- workspace: the project card of workspace_id
+- user: the user's global card (no workspace_id needed)"#
+    )]
+    pub card: Option<String>,
+    /// New card text (used by `update_card`).
+    #[schemars(
+        description = r#"New card text, markdown, at most 2 KB (for update_card). Replaces the whole card;
+suggested sections: Stack, Conventions, Preferences, Current goals."#
+    )]
+    pub content: Option<String>,
+    /// Version the new text was edited from (used by `update_card`).
+    #[schemars(
+        description = r#"Version of the card your content was edited from (for update_card; 0 when there is no card yet).
+Read it with get_card first."#
+    )]
+    pub expected_version: Option<u64>,
+    /// Older versions to return (used by `get_card`).
+    #[schemars(
+        description = r#"Older versions of the card to return as well (for get_card; default 0)."#
+    )]
+    pub history: Option<u32>,
 }

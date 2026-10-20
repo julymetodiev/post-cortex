@@ -27,6 +27,7 @@ use std::sync::Arc;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 
+mod cards;
 mod core;
 mod freshness;
 mod graph;

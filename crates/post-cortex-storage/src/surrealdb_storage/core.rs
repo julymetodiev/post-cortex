@@ -307,6 +307,16 @@ impl SurrealDBStorage {
             -- Next position of each stream, keyed by session id.
             DEFINE TABLE IF NOT EXISTS message_next SCHEMALESS;
 
+            -- Project and user cards (ROADMAP Phase 2 item 3), one row per
+            -- version, keyed `{scope}_{version}`.
+            DEFINE TABLE IF NOT EXISTS card SCHEMAFULL;
+            DEFINE FIELD IF NOT EXISTS scope ON card TYPE string;
+            DEFINE FIELD IF NOT EXISTS version ON card TYPE int;
+            DEFINE FIELD IF NOT EXISTS text ON card TYPE string;
+            DEFINE FIELD IF NOT EXISTS updated_at ON card TYPE string;
+            DEFINE FIELD IF NOT EXISTS author ON card TYPE option<string>;
+            DEFINE INDEX IF NOT EXISTS idx_card_scope_version ON card FIELDS scope, version UNIQUE;
+
             -- Workspaces table
             DEFINE TABLE IF NOT EXISTS workspace SCHEMAFULL;
             DEFINE FIELD IF NOT EXISTS workspace_id ON workspace TYPE string;

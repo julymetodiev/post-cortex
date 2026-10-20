@@ -214,6 +214,8 @@ pub fn validate_workspace_action(action: &str) -> Result<(), CoercionError> {
         "delete",
         "add_session",
         "remove_session",
+        "get_card",
+        "update_card",
     ];
 
     if VALID_ACTIONS.contains(&action.to_lowercase().as_str()) {

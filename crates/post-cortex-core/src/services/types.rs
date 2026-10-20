@@ -123,6 +123,48 @@ pub struct AppendMessagesResponse {
     pub vectorized: usize,
 }
 
+/// Read a project or user card ([`crate::core::card`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetCardRequest {
+    /// Whose card.
+    pub scope: crate::core::card::CardScope,
+    /// Older versions to return as well (0: the latest only).
+    pub history: usize,
+}
+
+/// A card and, if asked for, its older versions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetCardResponse {
+    /// The latest version, if the card exists.
+    pub card: Option<crate::core::card::Card>,
+    /// Older versions, newest first.
+    pub history: Vec<crate::core::card::Card>,
+}
+
+/// Write the next version of a card.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateCardRequest {
+    /// Whose card.
+    pub scope: crate::core::card::CardScope,
+    /// The new markdown text (at most `MAX_CARD_BYTES`; empty clears it).
+    pub text: String,
+    /// The version the text was edited from (0: no card yet). The write
+    /// fails if the card has changed since.
+    pub expected_version: u64,
+    /// Who writes it.
+    pub author: Option<String>,
+}
+
+/// Outcome of a card write.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateCardResponse {
+    /// Whether the text was stored. False: the card changed since
+    /// `expected_version`; `card` is then its latest version, to merge with.
+    pub written: bool,
+    /// The new version, or the latest one on a conflict (`None`: no card).
+    pub card: Option<crate::core::card::Card>,
+}
+
 // ---------------------------------------------------------------------------
 // Read path
 // ---------------------------------------------------------------------------

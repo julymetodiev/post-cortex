@@ -29,7 +29,7 @@ Nine tools. IDs are UUID strings. Optional fields can be omitted.
 
 ## manage_workspace
 
-`action` (required): `create` | `list` | `get` | `delete` | `add_session` | `remove_session`
+`action` (required): `create` | `list` | `get` | `delete` | `add_session` | `remove_session` | `get_card` | `update_card`
 
 | Action | Fields |
 |---|---|
@@ -39,6 +39,10 @@ Nine tools. IDs are UUID strings. Optional fields can be omitted.
 | `delete` | `workspace_id` (sessions are kept) |
 | `add_session` | `workspace_id`, `session_id`, `role`: `primary` \| `related` \| `dependency` \| `shared` |
 | `remove_session` | `workspace_id`, `session_id` |
+| `get_card` | `workspace_id` (project card) or `card: "user"`; optional `history` (older versions) |
+| `update_card` | `workspace_id` or `card: "user"`, `content` (whole new text, ≤ 2 KB), `expected_version` (the version you read; 0 for a new card) |
+
+Cards: one markdown note per project (stack, conventions, current goals) and one for the user (preferences), put in front of every session by the SessionStart hook and at the top of `assemble_context`. Every update is a new version. If the card changed since `expected_version`, nothing is written and the reply carries the latest version: merge and retry.
 
 ## semantic_search
 

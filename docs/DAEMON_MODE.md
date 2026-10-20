@@ -333,6 +333,31 @@ embedding failed when they were captured.
 message_retention_days = 90   # older turns are deleted daily with their vectors; 0 = keep forever
 ```
 
+## Project and user cards
+
+A card is a short markdown note (at most 2 KB) put in front of every session:
+the project card (one per workspace: stack, conventions, current goals) and the
+user card (preferences that apply everywhere). Every change is a new version;
+the history is kept, and a write names the version it was edited from, so two
+writers cannot overwrite each other (the second gets the latest back).
+
+- Agents read and write them with `manage_workspace` `get_card` / `update_card`
+  (gRPC: `GetCard` / `UpdateCard`).
+- `pcx setup` installs a SessionStart hook, `.claude/hooks/pcx-card.py`, that
+  prints both cards at the start of every Claude Code session and after
+  compaction (`--daemon-url` points it at a remote daemon).
+- `assemble_context` puts them at the top of its result.
+- `pcx card show` / `pcx card edit` (`$EDITOR`; `--user`, `--workspace`,
+  `--url`).
+
+```bash
+curl http://127.0.0.1:3737/api/cards?workspace_id=<uuid>   # {"user": ..., "workspace": ...}
+curl -X PUT http://127.0.0.1:3737/api/cards/workspace/<uuid> \
+  -H "Content-Type: application/json" \
+  -d '{"content": "## Stack\nRust, SurrealDB", "expected_version": 0}'
+# 200 with the new version, 409 with the latest one if it changed meanwhile
+```
+
 ## Troubleshooting
 
 **Port already in use:**

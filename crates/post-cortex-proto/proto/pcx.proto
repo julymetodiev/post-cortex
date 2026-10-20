@@ -63,6 +63,11 @@ service PostCortex {
   // (entries that were marked stale by invalidate_source but never re-registered).
   rpc GetStaleEntriesBySource(GetStaleEntriesBySourceRequest) returns (GetStaleEntriesBySourceResponse);
 
+  // --- Conversation capture and cards (ROADMAP Phase 2) ---
+  rpc AppendMessages(AppendMessagesRequest) returns (AppendMessagesResponse);
+  rpc GetCard(GetCardRequest) returns (GetCardResponse);
+  rpc UpdateCard(UpdateCardRequest) returns (UpdateCardResponse);
+
   // --- Health ---
   rpc Health(HealthRequest) returns (HealthResponse);
 }
@@ -420,6 +425,8 @@ message AssembleContextResponse {
   // When a select filter was requested, contains the JSONPath-filtered result
   // as a JSON string. Empty when no select was requested.
   string selected_json = 6;
+  // The user card and the project cards, in front of the context.
+  repeated CardInfo cards = 7;
 }
 
 // ============ Workspace Management ============
@@ -625,6 +632,66 @@ message StaleEntryInfo {
 
 message GetStaleEntriesBySourceResponse {
   repeated StaleEntryInfo entries = 1;
+}
+
+// ============ Conversation capture ============
+
+// A captured conversation turn (POST /api/messages over gRPC).
+message CapturedMessage {
+  string turn_id = 1;                 // the client's id for the turn; appends are idempotent on it
+  string role = 2;                    // "user" or "assistant"
+  optional string author = 3;
+  optional string source_session = 4; // the client's own conversation id
+  optional int64 timestamp_unix_ms = 5; // unset = time of the request
+  string text = 6;
+  repeated string tools = 7;
+  repeated string files = 8;
+}
+
+message AppendMessagesRequest {
+  string session_id = 1;
+  repeated CapturedMessage messages = 2;
+}
+
+message AppendMessagesResponse {
+  repeated uint64 appended = 1; // positions of the turns stored by this call
+  uint32 skipped = 2;           // already captured, repeated or empty
+  uint32 vectorized = 3;
+}
+
+// ============ Project and user cards ============
+
+message CardInfo {
+  string scope = 1;            // "workspace:<uuid>" or "user"
+  uint64 version = 2;
+  string text = 3;
+  int64 updated_at_unix = 4;
+  optional string author = 5;
+}
+
+// Either workspace_id (project card) or user = true (user card).
+message GetCardRequest {
+  optional string workspace_id = 1;
+  bool user = 2;
+  uint32 history = 3;          // older versions to return as well
+}
+
+message GetCardResponse {
+  optional CardInfo card = 1;  // unset: no card yet
+  repeated CardInfo history = 2;
+}
+
+message UpdateCardRequest {
+  optional string workspace_id = 1;
+  bool user = 2;
+  string content = 3;          // whole new text, at most 2 KB
+  uint64 expected_version = 4; // version the content was edited from; 0 = no card yet
+  optional string author = 5;
+}
+
+message UpdateCardResponse {
+  bool written = 1;            // false: the card changed since expected_version
+  optional CardInfo card = 2;  // the new version, or the latest one when not written
 }
 
 // ============ Health ============

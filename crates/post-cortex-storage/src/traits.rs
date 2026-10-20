@@ -27,6 +27,7 @@ use crate::rocksdb_storage::{SessionCheckpoint, StoredWorkspace};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use post_cortex_core::core::card::{Card, CardScope};
 use post_cortex_core::core::context_update::{
     ContextUpdate, EntityData, EntityRelationship, RelationType,
 };
@@ -101,7 +102,7 @@ impl SessionSummary {
 ///
 /// Implementations must be Send + Sync for concurrent access.
 #[async_trait]
-pub trait Storage: FreshnessStorage + MessageStorage + Send + Sync {
+pub trait Storage: FreshnessStorage + MessageStorage + CardStorage + Send + Sync {
     // ===== Session Operations =====
 
     /// Save a session to storage
@@ -206,7 +207,7 @@ pub trait Storage: FreshnessStorage + MessageStorage + Send + Sync {
         session_ids: &[Uuid],
     ) -> Result<()>;
 
-    /// Delete a workspace
+    /// Delete a workspace, its memberships and its card
     async fn delete_workspace(&self, workspace_id: Uuid) -> Result<()>;
 
     /// List all workspaces
@@ -421,6 +422,37 @@ pub trait MessageStorage: Send + Sync {
     /// `cutoff` (retention). Returns `(session_id, seq)` of each deleted
     /// message so the caller can drop its vectors.
     async fn delete_messages_before(&self, cutoff: DateTime<Utc>) -> Result<Vec<(Uuid, u64)>>;
+}
+
+/// Outcome of [`CardStorage::put_card`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CardWrite {
+    /// The text was stored as this new version.
+    Written(Card),
+    /// The latest stored version was not the expected one; nothing was
+    /// written. Carries the latest version (`None`: no card yet).
+    Conflict(Option<Card>),
+}
+
+/// Storage for project and user cards (see
+/// [`post_cortex_core::core::card`]). Every write is a new version.
+#[async_trait]
+pub trait CardStorage: Send + Sync {
+    /// The latest version of the card of `scope`, if it has one.
+    async fn get_card(&self, scope: CardScope) -> Result<Option<Card>>;
+
+    /// Store `text` as the next version of the card of `scope`, if its
+    /// latest version is `expected_version` (0: no card yet).
+    async fn put_card(
+        &self,
+        scope: CardScope,
+        text: String,
+        author: Option<String>,
+        expected_version: u64,
+    ) -> Result<CardWrite>;
+
+    /// Up to `limit` versions of the card of `scope`, newest first.
+    async fn card_history(&self, scope: CardScope, limit: usize) -> Result<Vec<Card>>;
 }
 
 /// Storage trait for source freshness tracking.
@@ -1089,6 +1121,48 @@ impl MessageStorage for StorageBackend {
             StorageBackend::RocksDB(storage) => storage.delete_messages_before(cutoff).await,
             #[cfg(feature = "surrealdb-storage")]
             StorageBackend::SurrealDB(storage) => storage.delete_messages_before(cutoff).await,
+        }
+    }
+}
+
+// Implement CardStorage trait for StorageBackend via delegation
+#[async_trait]
+impl CardStorage for StorageBackend {
+    async fn get_card(&self, scope: CardScope) -> Result<Option<Card>> {
+        match self {
+            StorageBackend::RocksDB(storage) => storage.get_card(scope).await,
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => storage.get_card(scope).await,
+        }
+    }
+
+    async fn put_card(
+        &self,
+        scope: CardScope,
+        text: String,
+        author: Option<String>,
+        expected_version: u64,
+    ) -> Result<CardWrite> {
+        match self {
+            StorageBackend::RocksDB(storage) => {
+                storage
+                    .put_card(scope, text, author, expected_version)
+                    .await
+            }
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => {
+                storage
+                    .put_card(scope, text, author, expected_version)
+                    .await
+            }
+        }
+    }
+
+    async fn card_history(&self, scope: CardScope, limit: usize) -> Result<Vec<Card>> {
+        match self {
+            StorageBackend::RocksDB(storage) => storage.card_history(scope, limit).await,
+            #[cfg(feature = "surrealdb-storage")]
+            StorageBackend::SurrealDB(storage) => storage.card_history(scope, limit).await,
         }
     }
 }

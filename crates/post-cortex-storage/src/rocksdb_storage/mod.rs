@@ -20,6 +20,7 @@ use rocksdb::DB;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+mod cards;
 mod core;
 mod freshness;
 mod graph;

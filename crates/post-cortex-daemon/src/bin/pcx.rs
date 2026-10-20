@@ -25,6 +25,8 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 // declaration carries an explicit #[path].
 #[path = "pcx/admin.rs"]
 mod admin;
+#[path = "pcx/card.rs"]
+mod card;
 #[path = "pcx/cli.rs"]
 mod cli;
 #[path = "pcx/daemon_client.rs"]
@@ -140,10 +142,17 @@ async fn main() -> Result<(), String> {
             name,
             non_interactive,
             capture,
+            daemon_url,
             capture_url,
         }) => {
             init_logging(false, false);
-            setup::handle_setup(name, non_interactive, capture, capture_url).await
+            setup::handle_setup(
+                name,
+                non_interactive,
+                capture || capture_url.is_some(),
+                capture_url.or(daemon_url),
+            )
+            .await
         }
 
         Some(Commands::VectorizeAll) => {
@@ -154,6 +163,11 @@ async fn main() -> Result<(), String> {
         Some(Commands::Workspace { action }) => {
             init_logging(false, false);
             workspace::handle_workspace_action(action).await
+        }
+
+        Some(Commands::Card { action }) => {
+            init_logging(false, false);
+            card::handle_card_action(action).await
         }
 
         Some(Commands::Session { action }) => {

@@ -9,14 +9,16 @@ use crate::daemon::host_allowlist::{HostPolicy, require_allowed_host};
 use crate::daemon::{DaemonConfig, PostCortexService};
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
+use post_cortex_core::core::card::{Card, CardScope};
 use post_cortex_core::core::error::SystemError;
 use post_cortex_core::core::message::{MessageRole, NewMessage};
 use post_cortex_core::services::{
-    AppendMessagesRequest, AppendMessagesResponse, PostCortexService as _,
+    AppendMessagesRequest, AppendMessagesResponse, GetCardRequest, PostCortexService as _,
+    UpdateCardRequest, UpdateCardResponse,
 };
 use post_cortex_memory::ConversationMemorySystem;
 use post_cortex_memory::services::MemoryServiceImpl;
@@ -309,6 +311,9 @@ pub fn build_router(
             post(api_attach_session),
         )
         .route("/api/messages", post(api_append_messages))
+        .route("/api/cards", get(api_get_cards))
+        .route("/api/cards/user", put(api_put_user_card))
+        .route("/api/cards/workspace/{id}", put(api_put_workspace_card))
         .with_state(api_state)
         .layer(axum::middleware::from_fn_with_state(
             Arc::new(host_policy.clone()),
@@ -458,6 +463,102 @@ async fn api_health() -> Json<serde_json::Value> {
         "status": "ok",
         "service": "post-cortex"
     }))
+}
+
+/// Query of `GET /api/cards`.
+#[derive(Deserialize)]
+struct CardsQuery {
+    /// The project whose card to return with the user card.
+    workspace_id: Option<Uuid>,
+}
+
+/// Body of `GET /api/cards`: the cards a session starts with.
+#[derive(Serialize)]
+struct CardsBody {
+    user: Option<Card>,
+    workspace: Option<Card>,
+}
+
+/// Body of `PUT /api/cards/...`.
+#[derive(Deserialize)]
+struct PutCardBody {
+    content: String,
+    /// Version the content was edited from (0: no card yet).
+    expected_version: u64,
+    #[serde(default)]
+    author: Option<String>,
+}
+
+/// The user card and, with `workspace_id`, the project card (ROADMAP
+/// Phase 2 item 3); read by the SessionStart hook and `pcx card`.
+async fn api_get_cards(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<CardsQuery>,
+) -> Result<Json<CardsBody>, (StatusCode, String)> {
+    let card = |scope| {
+        let service = Arc::clone(&state.service);
+        async move {
+            service
+                .get_card(GetCardRequest { scope, history: 0 })
+                .await
+                .map(|r| r.card)
+                .map_err(card_error)
+        }
+    };
+    let user = card(CardScope::User).await?;
+    let workspace = match query.workspace_id {
+        Some(id) => card(CardScope::Workspace(id)).await?,
+        None => None,
+    };
+    Ok(Json(CardsBody { user, workspace }))
+}
+
+async fn api_put_user_card(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<PutCardBody>,
+) -> Result<(StatusCode, Json<UpdateCardResponse>), (StatusCode, String)> {
+    put_card(&state, CardScope::User, body).await
+}
+
+async fn api_put_workspace_card(
+    State(state): State<Arc<ApiState>>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<PutCardBody>,
+) -> Result<(StatusCode, Json<UpdateCardResponse>), (StatusCode, String)> {
+    put_card(&state, CardScope::Workspace(id), body).await
+}
+
+/// 200 with the new version, or 409 with the latest one when the card
+/// changed since `expected_version`.
+async fn put_card(
+    state: &ApiState,
+    scope: CardScope,
+    body: PutCardBody,
+) -> Result<(StatusCode, Json<UpdateCardResponse>), (StatusCode, String)> {
+    let response = state
+        .service
+        .update_card(UpdateCardRequest {
+            scope,
+            text: body.content,
+            expected_version: body.expected_version,
+            author: body.author,
+        })
+        .await
+        .map_err(card_error)?;
+    let status = if response.written {
+        StatusCode::OK
+    } else {
+        StatusCode::CONFLICT
+    };
+    Ok((status, Json(response)))
+}
+
+fn card_error(e: SystemError) -> (StatusCode, String) {
+    match e {
+        SystemError::WorkspaceNotFound(_) => (StatusCode::NOT_FOUND, e.to_string()),
+        SystemError::InvalidArgument(_) => (StatusCode::BAD_REQUEST, e.to_string()),
+        e => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 /// Append captured turns to a session's message stream (ROADMAP Phase 2
@@ -869,6 +970,83 @@ mod tests {
         )
         .await;
         assert!(status.is_client_error(), "{status}");
+        ct.cancel();
+    }
+
+    fn put_json(path: &str, body: serde_json::Value) -> Request<Body> {
+        Request::put(path)
+            .header(header::HOST, "localhost:3737")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    /// Cards over REST: versions, 409 with the latest on a stale write, 404
+    /// for an unknown workspace, and GET returning both cards.
+    #[tokio::test]
+    async fn api_cards_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let memory = Arc::new(
+            ConversationMemorySystem::new(post_cortex_memory::SystemConfig {
+                data_directory: dir.path().to_str().unwrap().to_string(),
+                enable_embeddings: false,
+                ..Default::default()
+            })
+            .await
+            .unwrap(),
+        );
+        let ct = CancellationToken::new();
+        let router = build_router(
+            memory.clone(),
+            Arc::new(MemoryServiceImpl::new(memory.clone())),
+            &policy("127.0.0.1", &[]),
+            None,
+            &ct,
+        );
+        let ws = memory
+            .workspace_manager
+            .create_workspace("cards".to_string(), String::new());
+        let put = |path: String, content: &str, expected_version: u64| {
+            put_json(
+                &path,
+                serde_json::json!({"content": content, "expected_version": expected_version}),
+            )
+        };
+        let json = |text: &str| serde_json::from_str::<serde_json::Value>(text).unwrap();
+
+        let (status, _) = status_and_body(
+            &router,
+            put(format!("/api/cards/workspace/{}", Uuid::new_v4()), "x", 0),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let path = format!("/api/cards/workspace/{ws}");
+        let (status, text) = status_and_body(&router, put(path.clone(), "## Stack\nrust", 0)).await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        assert_eq!(json(&text)["card"]["version"], 1);
+
+        let (status, text) = status_and_body(&router, put(path.clone(), "stale", 0)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(json(&text)["card"]["text"], "## Stack\nrust");
+
+        let (status, _) =
+            status_and_body(&router, put("/api/cards/user".to_string(), "be brief", 0)).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, text) = status_and_body(
+            &router,
+            get(&format!("/api/cards?workspace_id={ws}"), "localhost:3737"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        let cards = json(&text);
+        assert_eq!(cards["user"]["text"], "be brief");
+        assert_eq!(cards["workspace"]["version"], 1);
+        assert_eq!(cards["workspace"]["scope"]["workspace"], ws.to_string());
+
+        let (_, text) = status_and_body(&router, get("/api/cards", "localhost:3737")).await;
+        assert!(json(&text)["workspace"].is_null());
         ct.cancel();
     }
 

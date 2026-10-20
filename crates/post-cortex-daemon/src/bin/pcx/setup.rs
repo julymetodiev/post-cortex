@@ -22,10 +22,10 @@ pub async fn handle_setup(
     name: Option<String>,
     non_interactive: bool,
     capture: bool,
-    capture_url: Option<String>,
+    daemon_url_flag: Option<String>,
 ) -> Result<(), String> {
-    let capture_url = capture_url
-        .map(|url| validate_capture_url(&url))
+    let daemon_url_arg = daemon_url_flag
+        .map(|url| validate_daemon_url(&url))
         .transpose()?;
     let config = DaemonConfig::load();
     let use_daemon = is_daemon_running(&config.host, config.port).await;
@@ -228,7 +228,6 @@ pub async fn handle_setup(
 
     // Conversation capture is opt-in: it stores prompts and replies.
     let capture = capture
-        || capture_url.is_some()
         || (!non_interactive
             && Confirm::new()
                 .with_prompt(format!(
@@ -239,7 +238,8 @@ pub async fn handle_setup(
                 .default(false)
                 .interact()
                 .map_err(|e| format!("Input error: {}", e))?);
-    let capture_url = capture.then(|| capture_url.unwrap_or_else(|| daemon_url(&config)));
+    // The daemon the hooks talk to (cards always, capture when on).
+    let hooks_url = daemon_url_arg.unwrap_or_else(|| daemon_url(&config));
 
     // 5. Generate files
     let cwd = env::current_dir().map_err(|e| format!("Cannot get cwd: {}", e))?;
@@ -279,7 +279,7 @@ pub async fn handle_setup(
     std::fs::create_dir_all(&claude_dir)
         .map_err(|e| format!("Failed to create .claude/: {}", e))?;
     let settings_path = claude_dir.join("settings.json");
-    let pcx_settings = generate_settings_json(&session_id, capture_url.as_deref());
+    let pcx_settings = generate_settings_json(&session_id, &workspace_id, &hooks_url, capture);
     if settings_path.exists() {
         let existing =
             std::fs::read_to_string(&settings_path).map_err(|e| format!("Read error: {}", e))?;
@@ -345,6 +345,23 @@ pub async fn handle_setup(
                 .map_err(|e| format!("Failed to set permissions: {}", e))?;
         }
         println!("  Created: .claude/hooks/pcx-stop-check.py");
+    }
+
+    // .claude/hooks/pcx-card.py (SessionStart hook printing the user and
+    // project cards)
+    let card_path = hooks_dir.join("pcx-card.py");
+    if card_path.exists() {
+        println!("  .claude/hooks/pcx-card.py already exists, skipping");
+    } else {
+        std::fs::write(&card_path, include_str!("../templates/pcx-card.py"))
+            .map_err(|e| format!("Failed to write hook script: {}", e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&card_path, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| format!("Failed to set permissions: {}", e))?;
+        }
+        println!("  Created: .claude/hooks/pcx-card.py");
     }
 
     // .claude/hooks/pcx-capture.py (Stop hook posting turns to the daemon)
@@ -437,12 +454,13 @@ pub async fn handle_setup(
     println!();
     println!("  Session ID:   {}", session_id);
     println!("  Workspace ID: {}", workspace_id);
-    if let Some(url) = &capture_url {
-        println!("  Capture:      on (posts turns to {})", url);
-        println!(
-            "                if the daemon has an auth_token, export PC_AUTH_TOKEN for Claude Code"
-        );
+    println!("  Daemon:       {} (cards on session start)", hooks_url);
+    if capture {
+        println!("  Capture:      on (posts turns to the daemon)");
     }
+    println!(
+        "                if the daemon has an auth_token, export PC_AUTH_TOKEN for Claude Code"
+    );
     println!();
     println!("Start coding with: claude");
 
@@ -524,16 +542,30 @@ fn generate_claude_md(session_id: &str, workspace_id: &str) -> String {
         .replace("<WORKSPACE_ID>", workspace_id)
 }
 
-/// The PCX hooks for `.claude/settings.json`; with `capture_url`, also the
-/// Stop hook that posts conversation turns to the daemon there.
-fn generate_settings_json(session_id: &str, capture_url: Option<&str>) -> serde_json::Value {
+/// The PCX hooks for `.claude/settings.json`: the template's, the
+/// SessionStart hook that prints the cards from the daemon at `url`, and
+/// with `capture` the Stop hook that posts conversation turns there.
+fn generate_settings_json(
+    session_id: &str,
+    workspace_id: &str,
+    url: &str,
+    capture: bool,
+) -> serde_json::Value {
     let mut settings: serde_json::Value = serde_json::from_str(
         &include_str!("../templates/settings.json").replace("<SESSION_ID>", session_id),
     )
     .expect("templates/settings.json is valid JSON");
-    if let Some(url) = capture_url
-        && let Some(stop) = settings["hooks"]["Stop"].as_array_mut()
-    {
+    if let Some(start) = settings["hooks"]["SessionStart"].as_array_mut() {
+        start.push(serde_json::json!({
+            "hooks": [{
+                "type": "command",
+                "command": format!(
+                    "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pcx-card.py {workspace_id} {url}"
+                ),
+            }]
+        }));
+    }
+    if capture && let Some(stop) = settings["hooks"]["Stop"].as_array_mut() {
         stop.push(serde_json::json!({
             "hooks": [{
                 "type": "command",
@@ -606,9 +638,9 @@ fn merge_hooks(
     Ok(added)
 }
 
-/// A `--capture-url`: an http(s) base URL, without a trailing slash. It
+/// A `--daemon-url`: an http(s) base URL, without a trailing slash. It
 /// goes into a shell command, so anything but URL characters is refused.
-fn validate_capture_url(url: &str) -> Result<String, String> {
+fn validate_daemon_url(url: &str) -> Result<String, String> {
     let url = url.trim().trim_end_matches('/');
     let ok = (url.starts_with("http://") || url.starts_with("https://"))
         && url.len() > "https://".len()
@@ -619,14 +651,14 @@ fn validate_capture_url(url: &str) -> Result<String, String> {
         Ok(url.to_string())
     } else {
         Err(format!(
-            "--capture-url must be an http(s) URL such as http://host:3737, got '{url}'"
+            "--daemon-url must be an http(s) URL such as http://host:3737, got '{url}'"
         ))
     }
 }
 
 /// Base URL hooks use to reach the daemon (a wildcard bind is reached on
 /// loopback).
-fn daemon_url(config: &DaemonConfig) -> String {
+pub(crate) fn daemon_url(config: &DaemonConfig) -> String {
     let host = match config.host.as_str() {
         "0.0.0.0" | "::" | "" => "127.0.0.1",
         host => host,
@@ -646,18 +678,18 @@ fn generate_compact_reinject_script(session_id: &str, workspace_id: &str) -> Str
 
 #[cfg(test)]
 mod tests {
-    use super::{SKILL_FILES, generate_settings_json, merge_hooks, validate_capture_url};
+    use super::{SKILL_FILES, generate_settings_json, merge_hooks, validate_daemon_url};
 
     #[test]
-    fn capture_url_must_be_a_plain_http_url() {
+    fn daemon_url_must_be_a_plain_http_url() {
         assert_eq!(
-            validate_capture_url("http://ml.example.ts.net:3737/").unwrap(),
+            validate_daemon_url("http://ml.example.ts.net:3737/").unwrap(),
             "http://ml.example.ts.net:3737"
         );
-        assert!(validate_capture_url("https://[::1]:3737").is_ok());
-        assert!(validate_capture_url("ml:3737").is_err());
-        assert!(validate_capture_url("http://x; rm -rf ~").is_err());
-        assert!(validate_capture_url("http://x$(id)").is_err());
+        assert!(validate_daemon_url("https://[::1]:3737").is_ok());
+        assert!(validate_daemon_url("ml:3737").is_err());
+        assert!(validate_daemon_url("http://x; rm -rf ~").is_err());
+        assert!(validate_daemon_url("http://x$(id)").is_err());
     }
     use std::path::Path;
 
@@ -691,11 +723,21 @@ mod tests {
             .collect()
     }
 
+    const URL: &str = "http://127.0.0.1:3737";
+
     #[test]
-    fn capture_adds_a_stop_hook_with_session_and_url() {
-        let plain = generate_settings_json("S1", None);
+    fn card_hook_always_capture_hook_when_on() {
+        let plain = generate_settings_json("S1", "W1", URL, false);
         assert_eq!(commands(&plain, "Stop").len(), 1);
-        let with = generate_settings_json("S1", Some("http://127.0.0.1:3737"));
+        let start = commands(&plain, "SessionStart");
+        assert_eq!(start.len(), 2, "compaction re-inject and cards");
+        assert!(
+            start[1].ends_with("pcx-card.py W1 http://127.0.0.1:3737"),
+            "{}",
+            start[1]
+        );
+
+        let with = generate_settings_json("S1", "W1", URL, true);
         let stop = commands(&with, "Stop");
         assert_eq!(stop.len(), 2);
         assert!(
@@ -710,14 +752,14 @@ mod tests {
     /// hook of its own that must stay.
     #[test]
     fn merge_adds_missing_hooks_only() {
-        let mut settings = generate_settings_json("OLD", None);
+        let mut settings = generate_settings_json("OLD", "W", URL, false);
         settings["hooks"]["Stop"]
             .as_array_mut()
             .unwrap()
             .push(serde_json::json!({"hooks": [{"type": "command", "command": "my-own-hook"}]}));
         settings["permissions"] = serde_json::json!({"allow": ["Bash(ls)"]});
 
-        let pcx = generate_settings_json("NEW", Some("http://127.0.0.1:3737"));
+        let pcx = generate_settings_json("NEW", "W", URL, true);
         assert_eq!(merge_hooks(&mut settings, &pcx["hooks"]).unwrap(), 1);
         let stop = commands(&settings, "Stop");
         assert_eq!(stop.len(), 3, "{stop:?}");
@@ -730,6 +772,6 @@ mod tests {
         assert_eq!(merge_hooks(&mut settings, &pcx["hooks"]).unwrap(), 0);
 
         let mut empty = serde_json::json!({});
-        assert_eq!(merge_hooks(&mut empty, &pcx["hooks"]).unwrap(), 4);
+        assert_eq!(merge_hooks(&mut empty, &pcx["hooks"]).unwrap(), 5);
     }
 }

@@ -90,14 +90,20 @@ Do not log chit-chat, things obvious from the code or git history, or secrets. p
 - Several records at once: pass `updates: [ {interaction_type, content, entities, relations}, ... ]` instead of the single fields. Unsure about the shape? `dry_run: true` validates without writing.
 - A success reply is just "Context updated successfully" (bulk: a count). It does not return the new entry's ID; if you later need it (to correct or delete the entry), find it with `semantic_search` — its `content_id` is the `entry_id`.
 
-## 4. Housekeeping
+## 4. Keep the project card current
+
+The project card is a short markdown note (≤ 2 KB) that every session starts with: the stack, the conventions, the user's preferences for this project and the current goals. The user card holds preferences that apply everywhere. Both arrive at session start (the SessionStart hook prints them) and at the top of `assemble_context`.
+
+When you learn something that belongs there — a convention the user insists on, a goal that changed, a stack decision — update it: `manage_workspace` `action: "get_card"` with the `workspace_id`, edit the text, then `action: "update_card"` with the whole new `content` and the `expected_version` you read (0 if there was none). If the reply says the card changed meanwhile, merge into the version it returns and retry. Keep it short and current: replace stale goals instead of appending; details belong in records, not the card. Use `card: "user"` for the user card, and only for preferences the user stated.
+
+## 5. Housekeeping
 
 - Wrong or outdated entry: `manage_entity` `action: "delete_update"` with its `entry_id` (the `content_id` from search), then write the corrected version. `action: "delete"` with `entity_name` removes an entity and its edges.
 - Rename / re-describe a session: `session` `action: "update_metadata"`.
 - Search returns nothing for content you know exists: `admin` `action: "vectorize_session"` (then `vectorize_stats`). `admin` `action: "health"` checks the daemon.
 - Deletes (`session` `delete`, `manage_workspace` `delete`, `manage_entity`) are permanent — confirm with the user before running them.
 
-## 5. When things fail
+## 6. When things fail
 
 | Symptom | Likely cause → fix |
 |---|---|

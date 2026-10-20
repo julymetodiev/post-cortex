@@ -13,6 +13,10 @@
 /// Generic LRU cache primitives used across the workspace.
 pub mod cache;
 
+/// Project and user cards: small versioned markdown documents put in front
+/// of every session.
+pub mod card;
+
 /// Context-update data model — `ContextUpdate`, `EntityData`,
 /// `EntityRelationship`, `UpdateType`, and supporting types.
 pub mod context_update;

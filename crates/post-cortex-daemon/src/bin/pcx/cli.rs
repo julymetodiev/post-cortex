@@ -71,10 +71,14 @@ pub enum Commands {
         #[arg(long)]
         capture: bool,
 
-        /// Daemon URL the capture hook posts to (implies --capture); default
-        /// the local daemon from daemon.toml. Use it when Claude Code talks to
-        /// a remote daemon, e.g. http://ml.example.ts.net:3737
+        /// Daemon URL the hooks talk to (cards on session start, capture);
+        /// default the local daemon from daemon.toml. Use it when Claude Code
+        /// talks to a remote daemon, e.g. http://ml.example.ts.net:3737
         #[arg(long, value_name = "URL")]
+        daemon_url: Option<String>,
+
+        /// Shorthand for --capture --daemon-url <URL>
+        #[arg(long, value_name = "URL", conflicts_with = "daemon_url")]
         capture_url: Option<String>,
     },
 
@@ -85,6 +89,23 @@ pub enum Commands {
     Workspace {
         #[command(subcommand)]
         action: WorkspaceAction,
+    },
+
+    /// Show or edit the project card or the user card
+    #[command(
+        long_about = "Show or edit a card: a short markdown note put in front of every \
+        session. The project card (stack, conventions, current goals) belongs to a workspace; \
+        the user card (preferences) to you. Without --workspace or --user the workspace in \
+        ./CLAUDE.md is used. Talks to the daemon in daemon.toml unless --url is given; set \
+        PC_AUTH_TOKEN for a daemon with an auth token.\n\n\
+        EXAMPLES:\n\n\
+        $ pcx card show\n\
+        $ pcx card edit --user\n\
+        $ pcx card edit --url http://ml.example.ts.net:3737"
+    )]
+    Card {
+        #[command(subcommand)]
+        action: CardAction,
     },
 
     /// Manage sessions
@@ -233,6 +254,34 @@ pub enum Commands {
         /// Dry run - show what would be migrated without actually migrating
         #[arg(long)]
         dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CardAction {
+    /// Print the latest version of a card
+    Show {
+        /// Workspace whose project card to show (default: from ./CLAUDE.md)
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Show the user card instead
+        #[arg(long)]
+        user: bool,
+        /// Daemon URL (default: the daemon in daemon.toml)
+        #[arg(long, value_name = "URL")]
+        url: Option<String>,
+    },
+    /// Edit a card in $EDITOR and save it as a new version
+    Edit {
+        /// Workspace whose project card to edit (default: from ./CLAUDE.md)
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Edit the user card instead
+        #[arg(long)]
+        user: bool,
+        /// Daemon URL (default: the daemon in daemon.toml)
+        #[arg(long, value_name = "URL")]
+        url: Option<String>,
     },
 }
 
