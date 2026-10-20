@@ -242,7 +242,7 @@ impl PostCortexService {
     }
 
     #[tool(
-        description = "Graph-aware context assembly (no embeddings): finds graph entities named in the query, expands them one hop through the entity graph, runs impact analysis, and ranks recent session updates by entity matches and recency. For embedding-based similarity use semantic_search. Returns ranked items, entity neighbourhood, dependency impact, and an LLM-ready formatted block. Scope: session or workspace.",
+        description = "Graph-aware context assembly: finds graph entities named in the query, expands them one hop through the entity graph, runs impact analysis, and ranks recent session updates by entity matches and recency (no embeddings). With sources=messages or all, also adds captured conversation turns matching the query (semantic search) as excerpts. For embedding-based similarity over records use semantic_search. Returns ranked items, entity neighbourhood, dependency impact, and an LLM-ready formatted block. Scope: session or workspace.",
         input_schema = tool_input_schema::<AssembleContextRequest>()
     )]
     async fn assemble_context(

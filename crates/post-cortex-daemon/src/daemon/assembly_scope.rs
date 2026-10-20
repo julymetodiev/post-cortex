@@ -39,9 +39,10 @@ const EXCERPT_MATCHES: usize = 5;
 
 /// Assemble context for `query` from `corpus`: records (`updates` and
 /// `graph`), conversation excerpts of `sessions`, or both. With both, the
-/// records get half of `token_budget` and the excerpts what is left; with
-/// messages only, the records are left out (entity context and impact
-/// analysis stay). If the excerpt search fails the records stand alone.
+/// excerpts take at most half of `token_budget` and the records the rest
+/// (all of it when no turn matches); with messages only, the records are
+/// left out (entity context and impact analysis stay). If the excerpt
+/// search fails the records stand alone.
 pub(crate) async fn assemble(
     memory: &ConversationMemorySystem,
     query: &str,
@@ -51,25 +52,54 @@ pub(crate) async fn assemble(
     token_budget: usize,
     corpus: Corpus,
 ) -> AssembledContext {
-    let (updates, record_budget) = match corpus {
-        Corpus::Records => (updates, token_budget),
-        Corpus::All => (updates, token_budget / 2),
-        Corpus::Messages => (&[][..], token_budget),
+    let excerpts = match corpus {
+        Corpus::Records => Vec::new(),
+        _ => conversation_excerpts(memory, sessions, query).await,
     };
-    let mut ctx = context_assembly::assemble_context(query, graph, updates, record_budget);
-    #[cfg(feature = "embeddings")]
-    if corpus != Corpus::Records {
-        match memory
-            .conversation_excerpts(sessions, query, EXCERPT_MATCHES)
-            .await
-        {
-            Ok(excerpts) => context_assembly::add_excerpts(&mut ctx, excerpts, token_budget),
-            Err(e) => tracing::warn!("Conversation excerpts left out of assembled context: {e}"),
-        }
-    }
-    #[cfg(not(feature = "embeddings"))]
-    let _ = (memory, sessions);
+    let (updates, excerpt_budget) = match corpus {
+        Corpus::Messages => (&[][..], token_budget),
+        _ => (updates, token_budget / 2),
+    };
+    // The excerpts that fit their share, in conversation order.
+    let mut excerpt_tokens = 0;
+    let excerpts: Vec<_> = excerpts
+        .into_iter()
+        .filter(|item| {
+            let fits = excerpt_tokens + item.token_estimate <= excerpt_budget;
+            if fits {
+                excerpt_tokens += item.token_estimate;
+            }
+            fits
+        })
+        .collect();
+    let mut ctx =
+        context_assembly::assemble_context(query, graph, updates, token_budget - excerpt_tokens);
+    context_assembly::add_excerpts(&mut ctx, excerpts, token_budget);
     ctx
+}
+
+#[cfg(feature = "embeddings")]
+async fn conversation_excerpts(
+    memory: &ConversationMemorySystem,
+    sessions: &[Uuid],
+    query: &str,
+) -> Vec<context_assembly::ContextItem> {
+    memory
+        .conversation_excerpts(sessions, query, EXCERPT_MATCHES)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("Conversation excerpts left out of assembled context: {e}");
+            Vec::new()
+        })
+}
+
+#[cfg(not(feature = "embeddings"))]
+async fn conversation_excerpts(
+    _memory: &ConversationMemorySystem,
+    _sessions: &[Uuid],
+    _query: &str,
+) -> Vec<context_assembly::ContextItem> {
+    Vec::new()
 }
 
 struct CachedMerge {
@@ -176,5 +206,89 @@ mod tests {
         let first = cache.merged(ws, vec![(Uuid::new_v4(), g1.clone())]);
         let second = cache.merged(ws, vec![(Uuid::new_v4(), g1)]);
         assert!(!Arc::ptr_eq(&first, &second));
+    }
+
+    /// With records and messages, the excerpts take at most half the budget
+    /// and the records the rest; with no matching turn the records get all
+    /// of it (they used to get half regardless).
+    #[cfg(feature = "embeddings")]
+    #[tokio::test]
+    async fn all_sources_share_the_budget() {
+        use post_cortex_core::core::message::{MessageRole, NewMessage};
+        use post_cortex_memory::context_assembly::ContextSource;
+
+        let dir = tempfile::tempdir().unwrap();
+        let memory = ConversationMemorySystem::new(post_cortex_memory::SystemConfig {
+            data_directory: dir.path().to_str().unwrap().to_string(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let sid = memory.create_session(None, None).await.unwrap();
+        for i in 0..6 {
+            let text = format!("zebracorn rollout note {i}: {}", "details ".repeat(60));
+            memory
+                .add_incremental_update(sid, text, None)
+                .await
+                .unwrap();
+        }
+        let assemble_now = |corpus| {
+            let memory = &memory;
+            async move {
+                let session = memory.get_session(sid).await.unwrap().load_full();
+                let mut updates = Vec::new();
+                session_updates(&session, &mut updates);
+                assemble(
+                    memory,
+                    "zebracorn rollout",
+                    &session.entity_graph,
+                    &updates,
+                    &[sid],
+                    600,
+                    corpus,
+                )
+                .await
+            }
+        };
+        let count = |ctx: &AssembledContext, conversation: bool| {
+            ctx.items
+                .iter()
+                .filter(|i| (i.source == ContextSource::Conversation) == conversation)
+                .count()
+        };
+
+        let records = assemble_now(Corpus::Records).await;
+        let all_without_turns = assemble_now(Corpus::All).await;
+        assert!(count(&records, false) >= 2, "{records:?}");
+        assert_eq!(count(&all_without_turns, false), count(&records, false));
+
+        let turn = |id: &str, text: &str| NewMessage {
+            turn_id: id.to_string(),
+            role: MessageRole::User,
+            author: None,
+            source_session: None,
+            timestamp: chrono::Utc::now(),
+            text: text.to_string(),
+            tools: Vec::new(),
+            files: Vec::new(),
+        };
+        memory
+            .append_messages(
+                sid,
+                vec![
+                    turn("t1", "when does the zebracorn rollout start?"),
+                    turn("t2", "the zebracorn rollout starts on monday"),
+                ],
+            )
+            .await
+            .unwrap();
+        let all = assemble_now(Corpus::All).await;
+        assert!(count(&all, true) >= 1, "{all:?}");
+        assert!(count(&all, false) >= 1, "records keep the rest: {all:?}");
+        assert!(all.total_tokens <= 600, "{}", all.total_tokens);
+
+        let messages = assemble_now(Corpus::Messages).await;
+        assert_eq!(count(&messages, false), 0);
+        assert!(count(&messages, true) >= 1);
     }
 }
