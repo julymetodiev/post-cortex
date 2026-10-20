@@ -482,10 +482,12 @@ fn build_entity_description(
         description_parts.push(format!("Related to: {}", related.join(", ")));
     }
 
-    if entity_data.mention_count > 0 {
-        description_parts.push(format!("Mentioned {} times", entity_data.mention_count));
+    if !entity_data.aliases.is_empty() {
+        description_parts.push(format!("Also: {}", entity_data.aliases.join(", ")));
     }
 
+    // No mention count: it changes with every write, so the vector would be
+    // re-embedded (and rewritten, racing concurrent writes) on each one.
     description_parts.join(". ")
 }
 
@@ -667,7 +669,30 @@ pub(crate) const fn determine_content_type(update: &ContextUpdate) -> ContentTyp
 
 #[cfg(test)]
 mod tests {
-    use super::chunk_text;
+    use super::{build_entity_description, chunk_text};
+
+    /// Another mention leaves an entity's description, and so its vector,
+    /// as it was; a new alias changes it.
+    #[test]
+    fn entity_description_ignores_mention_counts() {
+        use post_cortex_core::core::context_update::EntityType;
+        use post_cortex_core::session::active_session::ActiveSession;
+
+        let mut session = ActiveSession::new(uuid::Uuid::new_v4(), None, None);
+        let now = chrono::Utc::now();
+        let graph = std::sync::Arc::make_mut(&mut session.entity_graph);
+        graph.add_or_update_entity("SurrealDB".into(), EntityType::Technology, now, "");
+        let describe = |s: &ActiveSession| {
+            build_entity_description(s, "SurrealDB", &s.entity_graph.entities["SurrealDB"])
+        };
+        let before = describe(&session);
+        let graph = std::sync::Arc::make_mut(&mut session.entity_graph);
+        graph.add_or_update_entity("SurrealDB".into(), EntityType::Technology, now, "");
+        assert_eq!(describe(&session), before);
+        let graph = std::sync::Arc::make_mut(&mut session.entity_graph);
+        graph.add_or_update_entity("surreal-db".into(), EntityType::Technology, now, "");
+        assert!(describe(&session).contains("Also: surreal-db"));
+    }
 
     #[test]
     fn short_text_is_one_chunk() {
