@@ -180,7 +180,7 @@ message UpdateContextRequest {
   repeated RelationInfo relations = 6;
   // Who writes it (agent name, user or teammate). Unset = unknown.
   optional string author = 7;
-  // Captured messages of the session it was drawn from ("message:<seq>").
+  // Captured messages of the session it was drawn from (`message:<seq>`).
   repeated string derived_from = 8;
 }
 
@@ -216,7 +216,7 @@ message ContextUpdateItem {
   ContextContent content = 2;
   repeated EntityInfo entities = 3;
   repeated RelationInfo relations = 4;
-  // Captured messages of the session it was drawn from ("message:<seq>").
+  // Captured messages of the session it was drawn from (`message:<seq>`).
   repeated string derived_from = 5;
 }
 
@@ -674,7 +674,7 @@ message AppendMessagesResponse {
 // ============ Project and user cards ============
 
 message CardInfo {
-  string scope = 1;            // "workspace:<uuid>" or "user"
+  string scope = 1;            // `workspace:<uuid>` or `user`
   uint64 version = 2;
   string text = 3;
   int64 updated_at_unix = 4;

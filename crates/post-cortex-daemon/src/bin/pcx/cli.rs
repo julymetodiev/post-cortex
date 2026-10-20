@@ -73,11 +73,11 @@ pub enum Commands {
 
         /// Daemon URL the hooks talk to (cards on session start, capture);
         /// default the local daemon from daemon.toml. Use it when Claude Code
-        /// talks to a remote daemon, e.g. http://ml.example.ts.net:3737
+        /// talks to a remote daemon, e.g. `http://ml.example.ts.net:3737`
         #[arg(long, value_name = "URL")]
         daemon_url: Option<String>,
 
-        /// Shorthand for --capture --daemon-url <URL>
+        /// Shorthand for `--capture --daemon-url URL`
         #[arg(long, value_name = "URL", conflicts_with = "daemon_url")]
         capture_url: Option<String>,
     },

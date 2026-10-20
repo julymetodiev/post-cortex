@@ -624,7 +624,7 @@ impl ConversationMemorySystem {
     }
 
     /// Semantic search across all sessions. `options.limit` defaults to
-    /// [`DEFAULT_SEARCH_LIMIT`].
+    /// `DEFAULT_SEARCH_LIMIT`.
     #[cfg(feature = "embeddings")]
     pub async fn semantic_search_global(
         &self,
@@ -645,7 +645,7 @@ impl ConversationMemorySystem {
     }
 
     /// Semantic search within a specific session. `options.limit` defaults
-    /// to [`DEFAULT_SEARCH_LIMIT`].
+    /// to `DEFAULT_SEARCH_LIMIT`.
     #[cfg(feature = "embeddings")]
     pub async fn semantic_search_session(
         &self,
@@ -801,7 +801,7 @@ impl ConversationMemorySystem {
     }
 
     /// Semantic search across `session_ids`. `options.limit` defaults to
-    /// [`DEFAULT_SEARCH_LIMIT`].
+    /// `DEFAULT_SEARCH_LIMIT`.
     #[cfg(feature = "embeddings")]
     pub async fn semantic_search_multisession(
         &self,

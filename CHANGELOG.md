@@ -7,8 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-20 — Retrieval pipeline, conversation capture, cards and authorship
+
 ### Added
 
+- **Measured retrieval pipeline** (ROADMAP Phase 1). On LoCoMo (1535
+  questions, all@50 with ±1 neighbours, through the daemon): Model2Vec only
+  0.704, `fast` 0.793, `local` 0.878, `accurate` 0.936; end to end with
+  GLM-5.3 68.2% → 85.0%; BEAM 0.720 → 0.756.
+  - BM25 next to vector search: a SurrealDB `FULLTEXT` index on
+    `embedding.text`, in-memory postings on RocksDB. Very common query words
+    are dropped by document frequency instead of a stopword list. Vector and
+    lexical rankings are fused with RRF.
+  - Rerankers: a local int8 cross-encoder on ONNX Runtime (feature `rerank`,
+    default `cross-encoder/ms-marco-MiniLM-L4-v2`) and Voyage
+    `rerank-3-lite` (feature `rerank-voyage`) with the local one as fallback.
+  - Search modes `fast` / `local` / `accurate`: `mode` on `semantic_search`
+    (MCP and gRPC), `search_mode` as the default.
+  - Single-session searches add candidates from a retrieval graph
+    (personalised PageRank over terms and entities).
+  - Hits come with the records right before and after them in their session
+    (`neighbour_radius`, `neighbour_of`). Descriptions are kept up to 64 KiB
+    (was 1800 bytes); updates over 1000 characters are embedded as chunks
+    and returned whole.
+- **Conversation capture** (ROADMAP Phase 2). Raw turns are kept in a
+  per-session, append-only message stream next to the records; they never
+  enter the structured summary, the entity graph or importance scores.
+  - `POST /api/messages` and gRPC `AppendMessages`: idempotent on `turn_id`,
+    redacted, embedded as `message:<seq>` vectors.
+  - `pcx setup --capture` (or `--capture-url <url>` for a remote daemon)
+    installs a Claude Code `Stop` hook that posts prompts, final replies,
+    tool names and touched file paths. Tool output is never sent.
+  - `sources` (`records` | `messages` | `all`) on `semantic_search` and
+    `assemble_context`; message hits return the whole turn with the turns
+    around it, and `assemble_context` adds them as conversation excerpts.
+  - `message_retention_days` (default 90, 0 = forever) expires old turns
+    and their vectors daily.
+- **Project and user cards**: a short markdown note (at most 2 KB) per
+  workspace and one for the user, versioned with compare-and-set so
+  concurrent writers cannot overwrite each other. MCP `manage_workspace`
+  `get_card` / `update_card`, REST `/api/cards`, gRPC `GetCard` /
+  `UpdateCard`, `pcx card show | edit`. `assemble_context` puts the cards
+  first, and `pcx setup` installs a `SessionStart` hook that prints them.
+- **Authorship**: records and messages carry `author` (an agent such as
+  `claude-code` or `hermes:<profile>`, the user, a teammate). MCP
+  `update_conversation_context` takes `author` and otherwise uses the MCP
+  client's name; gRPC fields 7 / 3. Search results show it; `author` on
+  `semantic_search` keeps one author's results, `prefer_author` ranks them
+  a little higher (+0.05) and keeps everyone else's.
+- **`derived_from`**: a record can name the captured messages it was drawn
+  from (`message:<n>`). Each id must exist in the session; search hits on
+  the record show the links. MCP and gRPC (fields 8 / 5).
 - **`post-cortex-memory` skill** (`skills/post-cortex-memory/`): teaches an agent
   when and how to use the nine MCP tools — find or create the session, search
   before answering (session → workspace → global), use `assemble_context` for
@@ -34,6 +83,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pcx setup` no longer writes the outdated `SKILL.md` (six tools, subagent
   routing) and `error-handling.md` into `~/.claude/agents/post-cortex-agents/`;
   the skill above replaces both.
+- `pcx setup` adds the PCX hooks a project's `settings.json` lacks instead of
+  skipping any file that already has hooks, so rerunning it turns capture and
+  cards on for an existing project. `--daemon-url` points the hooks at a
+  remote daemon.
+- Logging: per-request lines (writes, vectorization, assembly, MCP tool
+  calls, rmcp connection lifecycle) moved from `info` to `debug`; the default
+  filter is `info,rmcp=warn`. Update titles and descriptions are no longer
+  logged at `info`. A full write-pipeline queue is reported once a minute
+  with a count. `pcx setup`, `card`, `workspace` and `session` print no
+  library info lines.
+- `ConversationMemorySystem` search methods take `SearchOptions`.
+
+### Fixed
+
+- Search with a sparse filter (records among many messages, a narrow date
+  range, one author) on a vector DB past the exact-search threshold could
+  return fewer than `limit` results or none; it now falls back to an exact
+  filtered scan.
+- Entities a write creates, references or relates are embedded right after
+  the graph merge, so search finds them without `vectorize_session`.
+- `assemble_context` reserves the measured size of the entity and impact
+  sections instead of 50 tokens per entity, and splits the budget between
+  records and excerpts after that reserve.
+- SurrealDB startup no longer rebuilds the HNSW index every time;
+  `embedding.metadata` is `FLEXIBLE` (the schemafull object rejected every
+  key).
+- gRPC workspace search is one multisession search instead of per-session
+  searches truncated after merging.
+
+### Migration
+
+- **RocksDB**: existing update rows and checkpoints keep loading (bincode
+  falls back layout by layout; checkpoints are written with a version
+  marker). Nothing to run.
+- **SurrealDB**: the schema (full-text index, message and card tables) is
+  created on start.
+- New `daemon.toml` keys: `reranker_model`, `voyage_api_key` (or
+  `VOYAGE_API_KEY`), `voyage_model`, `search_mode` (default: the best mode
+  the configured rerankers allow), `neighbour_radius` (default 1),
+  `message_retention_days` (default 90).
+- On Linux the local reranker needs ONNX Runtime 1.31 and `ORT_DYLIB_PATH`
+  pointing at `libonnxruntime.so`; without it the daemon logs an error and
+  searches without the local reranker.
 
 ## [0.4.0] - 2026-10-18 — Auth, redaction, row-backed storage and performance
 

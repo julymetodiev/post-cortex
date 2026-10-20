@@ -12,13 +12,17 @@ Post-Cortex is an MCP server that gives AI assistants long-term memory. It store
 
 - **Persistent Memory** — conversations survive across sessions
 - **Semantic Search** — `potion-multilingual-128M` (Model2Vec) by default. ~50 MB on disk, ms-per-text inference, multilingual (Latin / Cyrillic / CJK / Greek / Arabic) out of the box. Heavier BERT models stay available behind the `bert` feature.
+- **Measured retrieval** — vector + BM25 search fused with RRF, an optional local cross-encoder or Voyage reranker (`mode`: `fast` / `local` / `accurate`), and each hit returned with its neighbouring records. LoCoMo all@50: 0.793 / 0.878 / 0.936
 - **Graph-RAG** — search results enriched with entity-graph traversal and relationship paths
+- **Conversation capture** (opt-in) — a Claude Code hook keeps the raw turns in a per-session message stream, searchable apart from the records (`sources`: `records` / `messages` / `all`); records can link to the turns they came from (`derived_from`)
+- **Cards** — a short, versioned project card per workspace and a user card, put in front of every session
+- **Authorship** — records and messages carry who wrote them; search can filter by author or prefer one
 - **Knowledge Graph** — every write carries typed `entities` + `relations` (MCP contract since 0.3.0); the graph stays in sync with the prose
 - **Single-entrypoint architecture** — every transport (gRPC, MCP, future REST) routes through the same canonical `MemoryServiceImpl::update_context`; no parallel codepaths to drift between
 - **Durable, non-blocking writes** — a write returns once the storage backend has acknowledged it (`durable` in the response); embeddings + entity-graph merge + summary refresh land on a bounded background pipeline. Persists are coalesced and ordered per session.
 - **Redaction** — credentials, e-mail addresses, phone numbers and public IPv4 addresses become `[REDACTED:<kind>]` before storage, on every transport (on by default; `PC_REDACT=0` disables)
 - **Auth + Host allowlist** — optional bearer token (`PC_AUTH_TOKEN`) on HTTP and gRPC; `/mcp` and `/api/*` reject unknown `Host` headers (DNS-rebinding protection, `PC_ALLOWED_HOSTS`)
-- **Privacy-first** — all processing runs locally, no external API calls (the embedding model is downloaded from Hugging Face once, on first use)
+- **Privacy-first** — all processing runs locally (the embedding and reranker models are downloaded from Hugging Face once, on first use); the only external API is the opt-in Voyage reranker
 - **Lock-free Rust core** — ArcSwap session state, atomic CAS write path; vector search is an exact top-k scan up to 10 000 vectors and HNSW above that, with per-session indexes
 - **Flexible storage** — RocksDB (embedded, default) or SurrealDB (local / remote, distributed)
 
@@ -78,7 +82,7 @@ chmod +x /usr/local/bin/pcx
 ```toml
 [dependencies]
 # Everything in one dep — pulls the full stack including the daemon.
-post-cortex = "0.4"
+post-cortex = "0.5"
 
 # Or pick the leanest crate for your use case:
 # - post-cortex-core           — types + traits only (no I/O, no ML)
@@ -107,7 +111,7 @@ This registers Post-Cortex for all projects on your machine.
 pcx setup
 ```
 
-This creates a session, workspace, `CLAUDE.md` with memory rules, hooks for enforcement, and installs agent definitions. See **[Usage Guide](docs/USAGE_GUIDE.md)** for details.
+This creates a session, workspace, `CLAUDE.md` with memory rules, hooks (a log check on `Stop`, the cards on `SessionStart`) and the `post-cortex-memory` skill. `pcx setup --capture` also installs the conversation capture hook; `--daemon-url` / `--capture-url` point the hooks at a daemon on another host. See **[Usage Guide](docs/USAGE_GUIDE.md)** for details.
 
 ### 3. Start Coding
 
@@ -125,11 +129,11 @@ Nine tools:
 |------|---------|
 | `session` | Create / list / load / search / update_metadata / delete sessions |
 | `update_conversation_context` | Store knowledge (qa, decisions, problems, code changes); pass an `updates` array for bulk mode. Requires typed `entities` + `relations` arrays (`minItems: 1`, since 0.3.0) so the entity graph is never silently empty |
-| `semantic_search` | Embedding search across a session, a workspace, or globally; recency-bias tunable. Every scope returns the same result fields (0.4.0) |
+| `semantic_search` | Hybrid (vector + BM25, optionally reranked) search across a session, a workspace, or globally; `mode`, `sources`, `author` / `prefer_author`, recency bias. Every scope returns the same result fields |
 | `get_structured_summary` | Get session overview (decisions, insights, entities) |
 | `query_conversation_context` | Structured queries — entity relationships, keyword search, importance scoring |
-| `assemble_context` | Graph-aware retrieval without embeddings — entities named in the query, one-hop graph expansion, impact analysis and recency, merged into one payload |
-| `manage_workspace` | Organize sessions into workspaces |
+| `assemble_context` | Graph-aware retrieval — the cards, entities named in the query, one-hop graph expansion, impact analysis, recency and (with `sources`) conversation excerpts, packed into one token budget |
+| `manage_workspace` | Organize sessions into workspaces; read and edit the project and user cards (`get_card` / `update_card`) |
 | `manage_entity` | Delete entity / single update; cascades typed edges |
 | `admin` | Health, vectorize-session, vectorize-stats, create-checkpoint |
 
@@ -222,20 +226,23 @@ CI enforces all four on every push to `main`.
 
 ## Release notes
 
-The current release is `0.4.0` — bearer-token auth, write-path redaction
-and a `Host` allowlist on the HTTP endpoints (RUSTSEC-2026-0189);
-row-backed session storage; write-path, vector-search and read-path
-performance work. BERT is now opt-in (`--features bert`).
+The current release is `0.5.0` — the measured retrieval pipeline (BM25,
+rerankers, search modes, neighbours), conversation capture, project and
+user cards, and authorship on records and messages.
 
 Before upgrading:
 
-- **Binding to `0.0.0.0` / `::`:** set `allowed_hosts` (or
-  `PC_ALLOWED_HOSTS`) to the names and IPs clients put in their URL, e.g.
-  `allowed_hosts = ["my-mac.tailnet.ts.net", "100.64.0.7"]`, or remote MCP
-  and REST calls get `403`.
-- **SurrealDB:** back up the database first — the schema change is
-  forward-only and an older daemon will not start against it afterwards.
-- **RocksDB:** data written by 0.4.0 is not readable by older binaries.
+- **SurrealDB:** back up the database first; the daemon adds the full-text
+  index and the message and card tables on start.
+- **RocksDB:** older data loads as is; data written by 0.5.0 is not
+  readable by older binaries.
+- **Local reranker on Linux:** install ONNX Runtime 1.31 and set
+  `ORT_DYLIB_PATH` to `libonnxruntime.so`. With `reranker_model` set and no
+  `search_mode`, searches default to `local` (~1 s); set
+  `search_mode = "fast"` to keep the old latency and ask for `local` per call.
+
+Upgrading from 0.3? See the 0.4.0 notes in the changelog (`allowed_hosts`
+for wildcard binds, the forward-only SurrealDB schema).
 
 See [CHANGELOG.md](CHANGELOG.md) for the full diff and migration notes.
 

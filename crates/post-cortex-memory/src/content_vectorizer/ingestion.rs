@@ -155,7 +155,7 @@ impl ContentVectorizer {
     }
 
     /// Vectorize turns of a session's message stream (see
-    /// [`message_vectors`]); turns too short to embed and turns that already
+    /// `message_vectors`); turns too short to embed and turns that already
     /// have vectors are skipped. Returns how many vectors were added.
     ///
     /// # Errors
