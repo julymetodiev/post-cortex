@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use pcx_host::Host;
 use pcx_module_api::{MemoryWrite, Scope};
 use post_cortex_memory::Memory;
-use post_cortex_memory::capabilities::Written;
+use post_cortex_memory::capabilities::{MemoryWrites, Written};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use uuid::Uuid;
@@ -21,9 +21,19 @@ use uuid::Uuid;
 const FEED_DEADLINE: Duration = Duration::from_secs(30);
 
 /// Feed `memory`'s writes to `host`'s modules until `stop` or the memory
-/// instance goes away.
-pub async fn feed_memory_writes(host: Arc<Host>, memory: Arc<Memory>, stop: CancellationToken) {
-    let mut writes = memory.changes.memory_writes();
+/// instance goes away. The feed follows the writes made from this call on,
+/// not from when its future first runs: a write made between the two is
+/// fed too.
+pub fn feed_memory_writes(
+    host: Arc<Host>,
+    memory: Arc<Memory>,
+    stop: CancellationToken,
+) -> impl Future<Output = ()> + Send + use<> {
+    feed(host, memory.changes.memory_writes(), stop)
+}
+
+/// Feed `writes` to `host`'s modules until `stop` or their end.
+async fn feed(host: Arc<Host>, mut writes: MemoryWrites, stop: CancellationToken) {
     loop {
         let next = tokio::select! {
             () = stop.cancelled() => return,

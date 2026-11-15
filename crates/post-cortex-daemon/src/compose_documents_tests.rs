@@ -143,12 +143,14 @@ async fn a_module_keeps_its_documents_in_memory() {
             .await
             .unwrap(),
     );
+    // The feed follows the writes from here on: the task below is written
+    // before the feed first runs, and is heard.
     let stop = CancellationToken::new();
-    let feed = tokio::spawn(crate::compose::feed_memory_writes(
+    let following = crate::compose::feed_memory_writes(
         Arc::clone(&host),
         Arc::clone(&memory),
         stop.clone(),
-    ));
+    );
 
     let board = call(
         &host,
@@ -163,6 +165,7 @@ async fn a_module_keeps_its_documents_in_memory() {
     )
     .await;
     let id = task["id"].as_str().unwrap().to_string();
+    let feed = tokio::spawn(following);
 
     // The watcher hears of the new task.
     let deadline = Instant::now() + Duration::from_secs(10);

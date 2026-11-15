@@ -24,6 +24,7 @@ use crate::error::{Error, Result};
 use hf_hub::Cache;
 use hf_hub::api::sync::ApiBuilder;
 use model2vec_rs::model::StaticModel;
+use parking_lot::Mutex;
 use tracing::{debug, info};
 
 use crate::embeddings::backend::EmbeddingBackend;
@@ -79,10 +80,17 @@ fn fetch_snapshot(cache: Cache, model_id: &str, refresh: bool) -> Result<PathBuf
     snapshot.ok_or_else(|| load_error("no snapshot directory".to_string()))
 }
 
+/// One fetch at a time in this process. The Hub's client gives up on a file
+/// another fetch holds after five seconds ("Lock acquisition failed"), so
+/// of two engines started together on a machine without the model the
+/// second failed.
+static FETCHING: Mutex<()> = Mutex::new(());
+
 /// Load the Model2Vec model `model_id` from the Hugging Face cache
 /// (`HF_HOME`, else `~/.cache/huggingface`), fetching it into that cache
 /// first when it is not there; a cached snapshot that does not load is
-/// fetched again.
+/// fetched again. A load that waited for another's fetch finds the model
+/// in the cache.
 fn load_static_model(model_id: &str) -> Result<StaticModel> {
     let cache = Cache::from_env();
     let load = |dir: PathBuf| {
@@ -91,14 +99,20 @@ fn load_static_model(model_id: &str) -> Result<StaticModel> {
             reason: format!("{e:#}"),
         })
     };
-    match cached_snapshot(&cache, model_id) {
-        Some(dir) => {
-            debug!("Model2Vec {model_id}: loading the cached snapshot {dir:?}");
-            load(dir).or_else(|e| {
-                debug!("Model2Vec {model_id}: the cached snapshot does not load ({e}), fetching it again");
-                load(fetch_snapshot(cache, model_id, true)?)
-            })
+    if let Some(dir) = cached_snapshot(&cache, model_id) {
+        debug!("Model2Vec {model_id}: loading the cached snapshot {dir:?}");
+        match load(dir) {
+            Ok(model) => return Ok(model),
+            Err(e) => debug!(
+                "Model2Vec {model_id}: the cached snapshot does not load ({e}), fetching it again"
+            ),
         }
+        let _fetching = FETCHING.lock();
+        return load(fetch_snapshot(cache, model_id, true)?);
+    }
+    let _fetching = FETCHING.lock();
+    match cached_snapshot(&cache, model_id) {
+        Some(dir) => load(dir),
         None => load(fetch_snapshot(cache, model_id, false)?),
     }
 }

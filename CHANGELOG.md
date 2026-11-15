@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   row; the adapter read the first error, so the write failed as unavailable where the port
   promises a conflict with the latest version. The adapter now reads the cause; an event
   appended in the same race takes the next position.
+- **Two engines started together on a machine without the embedding model: both load it**
+  (found 2026-11-15 by the public CI). The second gave up after five seconds on the file the
+  first was fetching ("Lock acquisition failed") and answered unavailable. One fetch runs at a
+  time in a process; the one that waited finds the model in the cache.
+- **The memory-write feed follows writes from when it is made**, not from when its task first
+  runs: a write made between the two was never fed to the modules that follow memory.
 
 ### Security
 
