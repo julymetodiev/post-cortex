@@ -1,0 +1,31 @@
+{
+  "description": "Project key test vectors (hybrid contract section 2). Asserted by pcx (crates/post-cortex-daemon/src/bin/pcx/project.rs), the Python hooks (templates/pcx_resolve.py) and every native plugin. remotes: git origin URL -> key and name; key null means the URL is not a remote with a host, so the project falls back to its local key. local: absolute root path -> local key (sha256 of the UTF-8 path, first 16 hex).",
+  "remotes": [
+    { "url": "https://github.com/julymetodiev/post-cortex.git", "key": "github.com/julymetodiev/post-cortex", "name": "post-cortex" },
+    { "url": "https://github.com/julymetodiev/post-cortex", "key": "github.com/julymetodiev/post-cortex", "name": "post-cortex" },
+    { "url": "git@github.com:julymetodiev/post-cortex.git", "key": "github.com/julymetodiev/post-cortex", "name": "post-cortex" },
+    { "url": "ssh://git@github.com/julymetodiev/post-cortex.git", "key": "github.com/julymetodiev/post-cortex", "name": "post-cortex" },
+    { "url": "ssh://git@github.com:22/julymetodiev/post-cortex.git", "key": "github.com/julymetodiev/post-cortex", "name": "post-cortex" },
+    { "url": "https://user:secret@GitHub.COM/julymetodiev/post-cortex.git/", "key": "github.com/julymetodiev/post-cortex", "name": "post-cortex" },
+    { "url": "git://github.com/julymetodiev/post-cortex", "key": "github.com/julymetodiev/post-cortex", "name": "post-cortex" },
+    { "url": "  https://github.com/Julymetodiev/Post-Cortex.git\n", "key": "github.com/Julymetodiev/Post-Cortex", "name": "Post-Cortex" },
+    { "url": "github.com:julymetodiev/post-cortex.git", "key": "github.com/julymetodiev/post-cortex", "name": "post-cortex" },
+    { "url": "git+ssh://git@gitlab.example.com/group/sub/repo.git", "key": "gitlab.example.com/group/sub/repo", "name": "repo" },
+    { "url": "https://gitea.example.ts.net:3000/team/app.git", "key": "gitea.example.ts.net/team/app", "name": "app" },
+    { "url": "gitea@gitea.example.ts.net:team/app.git", "key": "gitea.example.ts.net/team/app", "name": "app" },
+    { "url": "https://dev.azure.com/org/proj/_git/repo", "key": "dev.azure.com/org/proj/_git/repo", "name": "repo" },
+    { "url": "", "key": null, "name": null },
+    { "url": "/srv/git/repo.git", "key": null, "name": null },
+    { "url": "file:///srv/git/repo.git", "key": null, "name": null },
+    { "url": "../other", "key": null, "name": null },
+    { "url": "C:/repos/x", "key": null, "name": null },
+    { "url": "C:\\repos\\x", "key": null, "name": null },
+    { "url": "https://github.com/", "key": null, "name": null },
+    { "url": "https:///a/b", "key": null, "name": null }
+  ],
+  "local": [
+    { "root": "/home/a/proj", "key": "local:4bd27bda97cc490a" },
+    { "root": "/Users/alex/dev/my project", "key": "local:780819f3ef6414dd" },
+    { "root": "/srv/x", "key": "local:c0fdb79966bef2dd" }
+  ]
+}

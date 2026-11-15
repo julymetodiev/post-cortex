@@ -1,0 +1,27 @@
+[package]
+name = "pcx-provider-anthropic"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The Anthropic model provider of pcx: Claude models over the Messages API."
+keywords = ["pcx", "llm", "anthropic", "claude"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-provider-anthropic"
+
+[dependencies]
+pcx-module-api.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+serde_json.workspace = true
+# Its answers' streams.
+tokio.workspace = true
+
+[dev-dependencies]
+tokio-util.workspace = true
+
+[lints]
+workspace = true

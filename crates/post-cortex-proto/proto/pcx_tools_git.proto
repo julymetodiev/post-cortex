@@ -1,0 +1,333 @@
+syntax = "proto3";
+package pcx.tools.git.v1;
+
+import "pcx_module.proto";
+
+// Git in the repositories under the module's roots: status, diffs, the
+// log and branches, branching, switching and committing.
+service Git {
+  // The working tree's changes.
+  rpc Status(StatusRequest) returns (StatusResponse);
+  // The patch of the unstaged (or staged) changes.
+  rpc Diff(DiffRequest) returns (DiffResponse);
+  // The commits of a revision, newest first.
+  rpc Log(LogRequest) returns (Commits);
+  // The local branches.
+  rpc Branches(BranchesRequest) returns (BranchList);
+  // Create a branch, and check it out unless told not to.
+  rpc CreateBranch(CreateBranchRequest) returns (CreateBranchResponse);
+  // Check out a branch.
+  rpc Switch(SwitchRequest) returns (SwitchResponse);
+  // Commit the changes (of some paths), with a message.
+  rpc Commit(CommitRequest) returns (CommitResponse);
+  // The commits on a branch that its base lacks, newest first.
+  rpc BranchCommits(BranchCommitsRequest) returns (Commits);
+  // A worktree of the repository on a branch (W32): made, or the one there
+  // already; the branch made from `from` when it does not exist.
+  rpc AddWorktree(AddWorktreeRequest) returns (Worktree);
+  // Push a branch to the configured remote, as itself (no force): only a
+  // branch the configuration allows (`push.branches`), with the ssh-agent it
+  // names; refused without `push`.
+  rpc Push(PushRequest) returns (Pushed);
+}
+
+// A branch to push.
+message PushRequest {
+  // The repository.
+  Repo at = 1;
+  // The local branch, pushed to the branch of the same name.
+  string branch = 2;
+}
+
+// A branch pushed.
+message Pushed {
+  // The remote it went to.
+  string remote = 1;
+  // The branch.
+  string branch = 2;
+  // The commit the remote branch is at now.
+  string sha = 3;
+}
+
+// A worktree to add.
+message AddWorktreeRequest {
+  // The repository.
+  Repo at = 1;
+  // Its directory, relative to the repository (e.g. .worktrees/<task>).
+  string path = 2;
+  // Its branch.
+  string branch = 3;
+  // Where a new branch starts; empty: HEAD.
+  string from = 4;
+}
+
+// A worktree.
+message Worktree {
+  // Its directory, absolute.
+  string path = 1;
+  // Its branch.
+  string branch = 2;
+  // Whether it was there already.
+  bool existing = 3;
+}
+
+// Where a call works: a repository under one of the module's roots.
+message Repo {
+  // The repository's directory, relative to the root or absolute under a
+  // root; empty: the root.
+  string repo = 1;
+  // The root repo is relative to (one of the module's roots); empty: the
+  // first root.
+  string root = 2;
+}
+
+// The state of a path in the index or the working tree (git status X or
+// Y).
+enum FileState {
+  // Unchanged.
+  FILE_STATE_UNMODIFIED = 0;
+  // Modified (M).
+  FILE_STATE_MODIFIED = 1;
+  // Its type changed (T).
+  FILE_STATE_TYPE_CHANGED = 2;
+  // Added (A).
+  FILE_STATE_ADDED = 3;
+  // Deleted (D).
+  FILE_STATE_DELETED = 4;
+  // Renamed (R).
+  FILE_STATE_RENAMED = 5;
+  // Copied (C).
+  FILE_STATE_COPIED = 6;
+  // Updated but unmerged (U).
+  FILE_STATE_UNMERGED = 7;
+  // Untracked (?).
+  FILE_STATE_UNTRACKED = 8;
+  // Ignored (!).
+  FILE_STATE_IGNORED = 9;
+}
+
+// What a change is, from its two states.
+enum ChangeKind {
+  // Not read.
+  CHANGE_KIND_UNSPECIFIED = 0;
+  // A path git does not track.
+  CHANGE_KIND_UNTRACKED = 1;
+  // A merge conflict.
+  CHANGE_KIND_CONFLICT = 2;
+  // A new file, staged.
+  CHANGE_KIND_STAGED_NEW = 3;
+  // Renamed.
+  CHANGE_KIND_RENAMED = 4;
+  // A deletion, staged.
+  CHANGE_KIND_STAGED_DELETED = 5;
+  // Deleted in the working tree.
+  CHANGE_KIND_DELETED = 6;
+  // Staged, and modified again since.
+  CHANGE_KIND_STAGED_MODIFIED = 7;
+  // Staged.
+  CHANGE_KIND_STAGED = 8;
+  // Modified in the working tree.
+  CHANGE_KIND_MODIFIED = 9;
+}
+
+// A path the working tree or the index changes.
+message Change {
+  // The path (the new one of a rename).
+  string path = 1;
+  // The path it was renamed from; unset: not a rename.
+  optional string from = 2;
+  // Its state in the index.
+  FileState index = 3;
+  // Its state in the working tree.
+  FileState worktree = 4;
+  // What the change is.
+  ChangeKind kind = 5;
+}
+
+// A commit.
+message Commit {
+  // Its id.
+  string sha = 1;
+  // Its author.
+  string author = 2;
+  // Its date (ISO 8601, as git gives it).
+  string date = 3;
+  // Its subject line.
+  string subject = 4;
+}
+
+// A local branch.
+message Branch {
+  // Its name.
+  string name = 1;
+  // Whether it is checked out.
+  bool current = 2;
+  // The branch it tracks; unset: none.
+  optional string upstream = 3;
+}
+
+// A commit message read as a Conventional Commit.
+message Conventional {
+  // Its type (feat, fix, ...).
+  string kind = 1;
+  // Its scope; unset: none.
+  optional string scope = 2;
+  // Whether it breaks something.
+  bool breaking = 3;
+  // Its description.
+  string description = 4;
+}
+
+// The working tree's changes.
+message StatusRequest {
+  // Where.
+  Repo at = 1;
+}
+
+// The changes; none: the working tree is clean.
+message StatusResponse {
+  // The changes.
+  repeated Change changes = 1;
+}
+
+// A patch.
+message DiffRequest {
+  // Where.
+  Repo at = 1;
+  // The staged changes; false: the unstaged ones.
+  bool staged = 2;
+  // Only this path; empty: every path.
+  string path = 3;
+}
+
+// A patch, its head when it is long.
+message DiffResponse {
+  // The patch (its first lines when truncated); empty: no changes.
+  string patch = 1;
+  // Its lines in all.
+  uint64 lines = 2;
+  // Lines of it in patch.
+  uint64 shown = 3;
+  // Whether patch is only its head.
+  bool truncated = 4;
+}
+
+// The commits of a revision.
+message LogRequest {
+  // Where.
+  Repo at = 1;
+  // Commits, 1 to 500; 0: 20.
+  uint32 limit = 2;
+  // The revision; empty: HEAD.
+  string rev = 3;
+}
+
+// Commits, newest first.
+message Commits {
+  // The commits.
+  repeated Commit commits = 1;
+}
+
+// The local branches.
+message BranchesRequest {
+  // Where.
+  Repo at = 1;
+}
+
+// Branches.
+message BranchList {
+  // The branches.
+  repeated Branch branches = 1;
+}
+
+// Create a branch.
+message CreateBranchRequest {
+  // Where.
+  Repo at = 1;
+  // The new branch.
+  string name = 2;
+  // Where it starts; empty: HEAD.
+  string from = 3;
+  // Check it out; unset: true.
+  optional bool switch = 4;
+}
+
+// A branch created.
+message CreateBranchResponse {
+  // Its name.
+  string name = 1;
+  // Whether it is checked out now.
+  bool switched = 2;
+}
+
+// Check out a branch.
+message SwitchRequest {
+  // Where.
+  Repo at = 1;
+  // The branch.
+  string name = 2;
+}
+
+// A branch checked out.
+message SwitchResponse {
+  // Its name.
+  string name = 1;
+}
+
+// Commit.
+message CommitRequest {
+  // Where.
+  Repo at = 1;
+  // The commit message.
+  string message = 2;
+  // Paths to commit; empty: every change.
+  repeated string paths = 3;
+}
+
+// A commit made.
+message CommitResponse {
+  // Its id.
+  string sha = 1;
+  // Its message as a Conventional Commit; unset: it is not one.
+  Conventional conventional = 2;
+}
+
+// The commits of a branch.
+message BranchCommitsRequest {
+  // Where.
+  Repo at = 1;
+  // The branch.
+  string branch = 2;
+  // What it is compared with; empty: HEAD.
+  string base = 3;
+}
+
+// The git tools' settings.
+message GitConfig {
+  // PATH of git; empty: the standard system directories.
+  string path = 1 [(pcx.module.v1.setting) = { title: "PATH" }];
+  // The name its commits are authored by; set with the email, or neither.
+  string author_name = 2 [(pcx.module.v1.setting) = { title: "Author name" }];
+  // The email its commits are authored by; set with the name, or neither.
+  string author_email = 3 [(pcx.module.v1.setting) = { title: "Author email", pattern: "[^@\\s<>,;]+@[^@\\s<>,;]+", example: "agent@example.com" }];
+  // Pushing branches (docs/connect.md section 7); unset: never.
+  GitPush push = 4 [(pcx.module.v1.setting) = { title: "Push" }];
+}
+
+// How `tools-git` pushes: to which remote, which branches, with which
+// ssh-agent. The key stays in the agent: a process uses it through the
+// agent's socket and never reads it.
+message GitPush {
+  // The remote; empty: origin.
+  string remote = 1 [(pcx.module.v1.setting) = { title: "Remote" }];
+  // The branches it may push (globs of a branch name, `*` within a part);
+  // empty: task/*.
+  repeated string branches = 2 [(pcx.module.v1.setting) = { title: "Branches" }];
+  // The socket of the ssh-agent that holds the key (the person's own
+  // SSH_AUTH_SOCK, or an agent the operator runs); its directory is one of
+  // the module's roots.
+  string ssh_auth_sock = 3 [(pcx.module.v1.setting) = { title: "ssh-agent socket" }];
+  // A known_hosts file under a root the remote's key is checked against;
+  // empty: the key is accepted the first time and checked after.
+  string known_hosts = 4 [(pcx.module.v1.setting) = { title: "known_hosts" }];
+}

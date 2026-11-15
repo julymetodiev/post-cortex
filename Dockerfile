@@ -14,7 +14,7 @@ RUN mkdir src && \
     echo "fn main() {}" > src/bin/pcx.rs
 
 # Build dependencies
-RUN cargo build --release --features embeddings
+RUN cargo build --release
 
 # Copy source code
 COPY . .
@@ -23,7 +23,7 @@ COPY . .
 RUN touch src/main.rs src/lib.rs src/bin/*.rs
 
 # Build the actual application
-RUN cargo build --release --bin pcx --features embeddings
+RUN cargo build --release --bin pcx
 
 # Runtime stage
 FROM debian:bookworm-slim

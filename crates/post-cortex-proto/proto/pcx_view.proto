@@ -1,0 +1,371 @@
+// pcx.view.v1: a module's views as data (ARCHITECTURE section 7, Module UI
+// level 2), versioned on their own. A view is a tree of components whose
+// data comes from the module's own RPCs and whose actions call them (W23):
+// the app builds each request from the module's descriptors and reads the
+// response's fields by path; it renders the tree with its own components,
+// so no module code runs in the app. A view may instead name an HTML
+// resource (level 3). A field a component names (of a row, a point, a node,
+// a form's values, a `{{row.<field>}}` or `{{form.<field>}}`) is a path of
+// proto field names joined by `.` (`skill.name`), and a form's fields
+// nest as the request's messages do.
+syntax = "proto3";
+package pcx.view.v1;
+
+import "google/protobuf/struct.proto";
+
+// One view of a module.
+message View {
+  // Unique within the module.
+  string id = 1;
+  // What the app shows as its name.
+  string title = 2;
+  // What it is for.
+  string description = 3;
+  // Exactly one is set.
+  oneof body {
+    // The tree (level 2).
+    Component root = 4;
+    // A `ui://<module id>/<path>` HTML resource the module serves (level 3;
+    // the module needs CAPABILITY_UI_HTML).
+    string resource_uri = 5;
+  }
+}
+
+// One node of the tree.
+message Component {
+  // Exactly one is set.
+  oneof kind {
+    // Children in a column or a row.
+    Stack stack = 1;
+    // Rows with a title and a line under it.
+    List list = 2;
+    // Rows in columns.
+    Table table = 3;
+    // Fields to fill, then one action.
+    Form form = 4;
+    // One figure.
+    Stat stat = 5;
+    // Points over an axis.
+    Chart chart = 6;
+    // Text.
+    Markdown markdown = 7;
+    // Nodes and edges.
+    Graph graph = 8;
+    // Rows grouped into lanes by a field (W16).
+    Lanes lanes = 9;
+    // An object field by field (W22).
+    Fields fields = 10;
+    // Images to see and add (W24).
+    Images images = 11;
+    // A chat with an agent (W25).
+    Chat chat = 12;
+  }
+}
+
+// How a stack lays its children out.
+enum Direction {
+  // Not set; refused.
+  DIRECTION_UNSPECIFIED = 0;
+  // One under another.
+  DIRECTION_COLUMN = 1;
+  // Side by side.
+  DIRECTION_ROW = 2;
+}
+
+// Children in a column or a row.
+message Stack {
+  // How they are laid out.
+  Direction direction = 1;
+  // In order.
+  repeated Component children = 2;
+}
+
+// Where a component's data comes from: one of the module's own RPCs.
+message Source {
+  // Its gRPC path, as the manifest names it (`/pcx.chief.v1.Chief/ListTalks`).
+  string rpc = 1;
+  // The request, in the proto JSON mapping of its message (proto field
+  // names); none: the empty request. Inside a `detail`, a string value
+  // that is exactly `{{row.<field>}}` is the picked row's (W16).
+  google.protobuf.Struct request = 2;
+  // A JSON Pointer (RFC 6901) into the response in the proto JSON mapping
+  // (proto field names, every field present); empty: all of it.
+  string pointer = 3;
+}
+
+// What a person can do: call one of the module's own RPCs.
+message Action {
+  // The button's text.
+  string label = 1;
+  // Its gRPC path, as the manifest names it.
+  string rpc = 2;
+  // The request, as a source's. A string value that is exactly `{{row.<field>}}` (a row
+  // action, or anything inside a `detail`: the picked row, the innermost
+  // when details nest) or `{{form.<field>}}` (a form's submit) is replaced
+  // by that value, with its type; nothing else is substituted.
+  google.protobuf.Struct request = 3;
+  // Whether it changes state; the app asks `confirm` first.
+  bool changes = 4;
+  // The question the app asks before an action that changes state.
+  string confirm = 5;
+  // Fields the app asks for first, in a dialog (an object schema of the
+  // settings subset, as a form's); in a row action each starts from the
+  // row's field of the same name. Its request then takes `{{form.<field>}}`
+  // too. Not on a form's submit. None: it runs at once.
+  google.protobuf.Struct form = 6;
+  // When set, it calls no RPC: the app opens the module's settings form
+  // (its `config_schema`), whose change is a person's `ConfigureModule`.
+  // It then has a label only; not on a form's submit.
+  bool settings = 7;
+}
+
+// How a value is shown.
+enum Format {
+  // Not set; refused.
+  FORMAT_UNSPECIFIED = 0;
+  // As it is.
+  FORMAT_TEXT = 1;
+  // A number, grouped.
+  FORMAT_NUMBER = 2;
+  // An RFC 3339 time, as a date and time.
+  FORMAT_TIME = 3;
+  // Milliseconds, as a duration.
+  FORMAT_DURATION_MS = 4;
+  // Bytes, as a size.
+  FORMAT_BYTES = 5;
+  // A boolean, as yes or no (W22).
+  FORMAT_YES_NO = 6;
+  // An object on one line, field by field (W22).
+  FORMAT_FIELDS = 7;
+}
+
+// Rows with a title and a line under it; the source is an array of
+// objects.
+message List {
+  // The rows.
+  Source source = 1;
+  // The field of a row shown as its title.
+  string title_field = 2;
+  // The field shown under it; empty: none.
+  string subtitle_field = 3;
+  // What each row offers.
+  repeated Action row_actions = 4;
+  // What is shown when there are no rows.
+  string empty = 5;
+  // What is shown for the row a person picks; inside it `{{row.<field>}}`
+  // is that row's (W16). None: rows are not picked.
+  Component detail = 6;
+  // Whether a row's title is Markdown (a thread's comments): the app
+  // renders it, its links among it; else plain text.
+  bool markdown = 7;
+}
+
+// One column of a table.
+message Column {
+  // The field of a row it shows.
+  string field = 1;
+  // Its heading.
+  string label = 2;
+  // How its values are shown.
+  Format format = 3;
+}
+
+// Rows in columns; the source is an array of objects.
+message Table {
+  // The rows.
+  Source source = 1;
+  // At least one.
+  repeated Column columns = 2;
+  // What each row offers.
+  repeated Action row_actions = 3;
+  // What is shown when there are no rows.
+  string empty = 4;
+  // What is shown for the row a person picks, as a list's (W16).
+  Component detail = 5;
+}
+
+// Rows grouped into lanes by a field, the lanes in the order a second
+// source gives (a board's columns), each lane a list (W16). The rows'
+// source is an array of objects; a row whose lane is not among the lanes
+// is not shown.
+message Lanes {
+  // The rows.
+  Source source = 1;
+  // The field of a row naming its lane.
+  string lane_field = 2;
+  // The lanes, in order: an array of strings.
+  Source lanes = 3;
+  // The field of a row shown as its title.
+  string title_field = 4;
+  // The field shown under it; empty: none.
+  string subtitle_field = 5;
+  // What each row offers.
+  repeated Action row_actions = 6;
+  // What a lane shows when it has no rows.
+  string empty = 7;
+  // What is shown for the row a person picks, as a list's.
+  Component detail = 8;
+  // How a row is drawn as a card; none: its title and the line under it
+  // (W24).
+  Card card = 9;
+  // The field of a row naming its group (a board's plan); empty: no
+  // groups.
+  string group_field = 10;
+  // The groups, in order: an array of objects with `id`, `title` and,
+  // when it has them, `done` and `total` (its progress). The app draws one
+  // lane, or one per group (with the rows of no group last), gives a
+  // group its color by its order, and filters by group. Needed with
+  // `group_field`.
+  Source groups = 11;
+  // The field of a row naming a person (an assignee): the app filters by
+  // it; empty: no such filter.
+  string filter_field = 12;
+  // What a drop of a row does; none: rows are not dragged. Its request
+  // takes `{{row.<field>}}` (the row dropped), `{{drop.lane}}` (the lane it
+  // is dropped in), `{{drop.before}}` (the id, by the card's `id_field`, of
+  // the row it is dropped before) and `{{drop.group}}` (the group of the
+  // lane it is dropped in when lanes are by group; empty: the rows of no
+  // group). A value that is exactly a `{{drop.<x>}}` with nothing to stand
+  // for (dropped at the end; lanes not by group) is left out of the
+  // request. A refused move is shown, and the row stays. Needs a card with
+  // an `id_field`.
+  Action move = 13;
+}
+
+// How a row is drawn as a card (W24): each a field of the row; empty: not
+// shown.
+message Card {
+  // Its id, which `waits_field` and `waited_by_field` name.
+  string id_field = 1;
+  // Its labels: an array of strings.
+  string labels_field = 2;
+  // Its priority.
+  string priority_field = 3;
+  // What holds it (a decision that waits): a banner when set.
+  string alert_field = 4;
+  // Its images: an array of `pcx.v1.Attachment`; the first is its cover.
+  string cover_field = 5;
+  // A link: its pull request or branch.
+  string link_field = 6;
+  // Its person (an assignee).
+  string person_field = 7;
+  // A count (its comments).
+  string count_field = 8;
+  // The ids of the rows it waits on.
+  string waits_field = 9;
+  // The ids of the rows that wait on it. Pointing at a card marks both.
+  string waited_by_field = 10;
+}
+
+// Images to see and add (W24). The source is an array of
+// `pcx.v1.Attachment` (blobs of the workspace the view is shown in), each
+// shown through a blob link.
+message Images {
+  // The images.
+  Source source = 1;
+  // What adding images does: the app puts each image dropped, pasted or
+  // chosen into memory (`POST /v1/blobs`), then runs it with `{{images}}`
+  // standing for the images it had and the new ones. None: the images are
+  // only shown.
+  Action attach = 2;
+}
+
+// A chat with an agent (W25): the app draws its own chat (ARCHITECTURE
+// section 7, the app's chat) over `pcx.agent.v1.Agent`, its conversations
+// those the agent spoke in.
+message Chat {
+  // Whose turns: empty, the agent of the host; else the module itself,
+  // whose manifest declares `turns`.
+  string agent = 1;
+  // The module's member whose turns they are (`RunTurnRequest.member`):
+  // a name, or `{{row.<field>}}` inside a detail; empty: the module's own.
+  string member = 2;
+  // The text of a button that opens the chat beside the view; empty: the
+  // chat in place.
+  string open = 3;
+}
+
+// Fields to fill, then one action.
+message Form {
+  // Its fields: an object schema in the subset of a module's
+  // `config_schema` (ARCHITECTURE section 7, Module UI, settings).
+  google.protobuf.Struct schema = 1;
+  // Its first values (an object); none: each field's `default`.
+  Source values = 2;
+  // What submitting does; its request takes `{{form.<field>}}`.
+  Action submit = 3;
+  // When set, the form is a button with this text that opens it in a
+  // dialog, which submitting closes; empty: the form is shown in place.
+  string open = 4;
+}
+
+// An object shown field by field (W22): each field's name for a person and
+// its value, a list or an object as nested lines, never as JSON; the source
+// is an object.
+message Fields {
+  // The object.
+  Source source = 1;
+  // Buttons under it.
+  repeated Action actions = 2;
+}
+
+// One figure; the source is a number or a string.
+message Stat {
+  // What it is.
+  string label = 1;
+  // The figure.
+  Source source = 2;
+  // How it is shown.
+  Format format = 3;
+}
+
+// How a chart draws its points.
+enum ChartKind {
+  // Not set; refused.
+  CHART_KIND_UNSPECIFIED = 0;
+  // Lines through the points.
+  CHART_KIND_LINE = 1;
+  // A bar per point.
+  CHART_KIND_BAR = 2;
+}
+
+// Points over an axis; the source is an array of objects.
+message Chart {
+  // Lines or bars.
+  ChartKind kind = 1;
+  // The points.
+  Source source = 2;
+  // The field of a point on the horizontal axis.
+  string x_field = 3;
+  // The fields drawn, one series each; at least one.
+  repeated string y_fields = 4;
+}
+
+// Text in Markdown.
+message Markdown {
+  // Exactly one is set.
+  oneof content {
+    // Fixed text.
+    string text = 1;
+    // A string from an RPC.
+    Source source = 2;
+  }
+}
+
+// Nodes and edges; the source is an object holding both arrays.
+message Graph {
+  // The object.
+  Source source = 1;
+  // The field of the object holding the nodes.
+  string nodes_field = 2;
+  // The field holding the edges.
+  string edges_field = 3;
+  // The field of a node naming it (what an edge's ends refer to).
+  string id_field = 4;
+  // The field of a node shown as its label.
+  string label_field = 5;
+  // The field of an edge naming where it starts.
+  string from_field = 6;
+  // The field of an edge naming where it ends.
+  string to_field = 7;
+}

@@ -1,0 +1,38 @@
+{
+  "name": "post-cortex",
+  "displayName": "post-cortex",
+  "version": "0.6.0",
+  "description": "Long-term project memory for Claude Code: the post-cortex MCP server (cloud by default, or your own daemon), the post-cortex-memory skill, and hooks that keep the memory in front of every session.",
+  "author": {
+    "name": "Julius ML",
+    "url": "https://github.com/julymetodiev"
+  },
+  "homepage": "https://post-cortex.com",
+  "privacyPolicyUrl": "https://post-cortex.com/privacy",
+  "repository": "https://github.com/julymetodiev/post-cortex",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "mcp",
+    "knowledge-graph",
+    "semantic-search",
+    "context",
+    "post-cortex"
+  ],
+  "userConfig": {
+    "url": {
+      "type": "string",
+      "title": "post-cortex URL",
+      "description": "Base URL of the post-cortex server, without a trailing slash. Keep the default for post-cortex cloud; for a self-hosted daemon use e.g. http://127.0.0.1:3737.",
+      "default": "https://api.pcx.is",
+      "required": true
+    },
+    "api_key": {
+      "type": "string",
+      "title": "post-cortex API key",
+      "description": "Bearer token for the server: your post-cortex cloud API key, or the auth_token of your own daemon. Leave empty for a local daemon without auth_token.",
+      "sensitive": true
+    }
+  },
+  "icon": ".claude-plugin/icon.png"
+}

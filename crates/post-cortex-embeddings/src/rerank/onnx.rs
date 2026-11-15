@@ -6,11 +6,18 @@
 //! document [SEP]` sequence and the model outputs one relevance logit. The
 //! `cross-encoder/ms-marco-*` repositories ship dynamically quantised
 //! exports under `onnx/`, one per instruction set.
+//!
+//! The encoder owns a small pool of sessions: [`SESSIONS`] scores run at
+//! once on the blocking pool, each on its share of the physical cores, and
+//! one that waits and runs longer than [`TIMEOUT`] fails (the search then
+//! keeps its fused order).
 
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
-use anyhow::{Result, anyhow};
+use crate::blocking::{self, Abandoned};
+use crate::error::{Error, Result};
 use async_trait::async_trait;
 use hf_hub::api::tokio::Api;
 use ort::environment::Environment;
@@ -19,16 +26,24 @@ use ort::session::builder::{AutoDevicePolicy, GraphOptimizationLevel};
 use ort::value::Tensor;
 use parking_lot::Mutex;
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams, TruncationStrategy};
+use tokio::sync::Semaphore;
 use tracing::info;
 
-use super::Reranker;
+use post_cortex_ports::{PortError, Reranker};
 
 /// Pairs per run. ONNX Runtime parallelises inside one run, so one batch
 /// per call would do; batches bound the padding to the longest pair in each.
 const BATCH_SIZE: usize = 64;
 
+/// Sessions of one encoder: scores that run at once.
+const SESSIONS: usize = 2;
+
+/// Longest one score may wait for a session and run.
+const TIMEOUT: Duration = Duration::from_secs(5);
+
 struct Model {
-    session: Mutex<Session>,
+    /// The sessions not running a score now.
+    idle: Mutex<Vec<Session>>,
     tokenizer: Tokenizer,
     /// Whether the graph takes `token_type_ids` (BERT does, some exports not).
     token_types: bool,
@@ -37,32 +52,37 @@ struct Model {
 /// Local int8 cross-encoder reranker on ONNX Runtime.
 pub struct OnnxCrossEncoder {
     model: Arc<Model>,
+    /// One permit per idle session.
+    slots: Arc<Semaphore>,
 }
 
 /// ONNX Runtime allows one environment per process; every session shares it.
-fn environment() -> Result<&'static Environment> {
+/// The first load sets it up, from its `runtime` library path.
+fn environment(runtime: Option<&str>) -> Result<&'static Environment> {
     static ENV: OnceLock<Result<Environment, String>> = OnceLock::new();
-    ENV.get_or_init(|| init().map_err(|e| format!("{e:#}")))
+    ENV.get_or_init(|| init(runtime).map_err(|e| format!("{e:#}")))
         .as_ref()
-        .map_err(|e| anyhow!("ONNX Runtime init failed: {e}"))
+        .map_err(|e| runtime_error(format!("ONNX Runtime init failed: {e}")))
 }
 
-/// Load `libonnxruntime.so` from `ORT_DYLIB_PATH` (default: the library
-/// search path). Done explicitly so a missing library is an error, not the
-/// panic `ort` raises when it loads the library implicitly.
+/// Load `libonnxruntime.so` from `runtime` (the daemon passes
+/// `ORT_DYLIB_PATH`; default: the library search path). Done explicitly so a
+/// missing library is an error, not the panic `ort` raises when it loads the
+/// library implicitly.
 #[cfg(target_os = "linux")]
-fn init() -> Result<Environment> {
-    let path = std::env::var("ORT_DYLIB_PATH")
-        .ok()
+fn init(runtime: Option<&str>) -> Result<Environment> {
+    let path = runtime
         .filter(|p| !p.is_empty())
-        .unwrap_or_else(|| "libonnxruntime.so".to_string());
-    let builder = ort::init_from(&path).map_err(|e| anyhow!("loading {path}: {e}"))?;
-    builder.build().map_err(|e| anyhow!("{e}"))
+        .unwrap_or("libonnxruntime.so");
+    let builder =
+        ort::init_from(&path).map_err(|e| runtime_error(format!("loading {path}: {e}")))?;
+    builder.build().map_err(runtime_error)
 }
 
+/// Elsewhere ONNX Runtime is linked statically; `runtime` is not used.
 #[cfg(not(target_os = "linux"))]
-fn init() -> Result<Environment> {
-    ort::init().build().map_err(|e| anyhow!("{e}"))
+fn init(_runtime: Option<&str>) -> Result<Environment> {
+    ort::init().build().map_err(runtime_error)
 }
 
 /// The int8 export in the model repository that fits this CPU.
@@ -90,69 +110,94 @@ fn quantized_file() -> &'static str {
 impl OnnxCrossEncoder {
     /// Download (if needed) the int8 export for this CPU and the tokenizer
     /// from the HuggingFace Hub. Each pair is truncated to `max_length`
-    /// tokens, document side first.
-    pub async fn load(model_id: &str, max_length: usize) -> Result<Self> {
+    /// tokens, document side first. `runtime` is the path of
+    /// `libonnxruntime.so` on Linux (`None`: the library search path).
+    pub async fn load(model_id: &str, max_length: usize, runtime: Option<&str>) -> Result<Self> {
         let file = quantized_file();
         info!("Loading ONNX cross-encoder {model_id} ({file}, max_length {max_length})");
-        let repo = Api::new()?.model(model_id.to_string());
-        let weights = repo.get(file).await?;
-        let tokenizer = repo.get("tokenizer.json").await?;
-        Self::from_files(&weights, &tokenizer, max_length)
+        let load = |e: hf_hub::api::tokio::ApiError| Error::ModelLoad {
+            model: model_id.to_string(),
+            reason: e.to_string(),
+        };
+        let repo = Api::new().map_err(load)?.model(model_id.to_string());
+        let weights = repo.get(file).await.map_err(load)?;
+        let tokenizer = repo.get("tokenizer.json").await.map_err(load)?;
+        Self::from_files(&weights, &tokenizer, max_length, runtime)
     }
 
-    /// Load from a local `.onnx` graph and `tokenizer.json`.
-    pub fn from_files(weights: &Path, tokenizer: &Path, max_length: usize) -> Result<Self> {
-        let mut tokenizer = Tokenizer::from_file(tokenizer).map_err(|e| anyhow!(e))?;
+    /// Load from a local `.onnx` graph and `tokenizer.json`, with ONNX
+    /// Runtime from `runtime` (see [`Self::load`]).
+    pub fn from_files(
+        weights: &Path,
+        tokenizer: &Path,
+        max_length: usize,
+        runtime: Option<&str>,
+    ) -> Result<Self> {
+        let mut tokenizer =
+            Tokenizer::from_file(tokenizer).map_err(|e| Error::Tokenization(e.to_string()))?;
         tokenizer
             .with_truncation(Some(TruncationParams {
                 max_length,
                 strategy: TruncationStrategy::OnlySecond,
                 ..Default::default()
             }))
-            .map_err(|e| anyhow!(e))?;
+            .map_err(|e| Error::Tokenization(e.to_string()))?;
         tokenizer.with_padding(Some(PaddingParams {
             strategy: PaddingStrategy::BatchLongest,
             ..Default::default()
         }));
 
-        // `ort` defaults sessions to the MaxEfficiency device policy, which
-        // ran this model ~5x slower than ONNX Runtime's own defaults (2.1 s
-        // vs 0.43 s for 300 pairs on an M1 Pro); ask for the CPU at full speed.
-        let session = Session::builder(environment()?)
-            .map_err(|e| anyhow!("{e}"))?
-            .with_auto_device(AutoDevicePolicy::PreferCPU)
-            .map_err(|e| anyhow!("{e}"))?
-            .with_optimization_level(GraphOptimizationLevel::Level3)
-            .map_err(|e| anyhow!("{e}"))?
-            .with_intra_threads(num_cpus::get_physical())
-            .map_err(|e| anyhow!("{e}"))?
-            .commit_from_file(weights)
-            .map_err(|e| anyhow!("{e}"))?;
-        let token_types = session
-            .inputs()
-            .iter()
-            .any(|i| i.name() == "token_type_ids");
+        let threads = (num_cpus::get_physical() / SESSIONS).max(1);
+        let idle = (0..SESSIONS)
+            .map(|_| session(environment(runtime)?, weights, threads))
+            .collect::<Result<Vec<Session>>>()?;
+        let token_types = idle.first().is_some_and(|session| {
+            session
+                .inputs()
+                .iter()
+                .any(|i| i.name() == "token_type_ids")
+        });
 
         Ok(Self {
             model: Arc::new(Model {
-                session: Mutex::new(session),
+                idle: Mutex::new(idle),
                 tokenizer,
                 token_types,
             }),
+            slots: Arc::new(Semaphore::new(SESSIONS)),
         })
     }
 }
 
+/// A session of the graph `weights` running on `threads` threads.
+fn session(environment: &Environment, weights: &Path, threads: usize) -> Result<Session> {
+    // `ort` defaults sessions to the MaxEfficiency device policy, which
+    // ran this model ~5x slower than ONNX Runtime's own defaults (2.1 s
+    // vs 0.43 s for 300 pairs on an M1 Pro); ask for the CPU at full speed.
+    Session::builder(environment)
+        .map_err(runtime_error)?
+        .with_auto_device(AutoDevicePolicy::PreferCPU)
+        .map_err(runtime_error)?
+        .with_optimization_level(GraphOptimizationLevel::Level3)
+        .map_err(runtime_error)?
+        .with_intra_threads(threads)
+        .map_err(runtime_error)?
+        .commit_from_file(weights)
+        .map_err(runtime_error)
+}
+
 impl Model {
-    fn score_batch(&self, query: &str, documents: &[String]) -> Result<Vec<f32>> {
-        let pairs: Vec<(String, String)> = documents
-            .iter()
-            .map(|d| (query.to_string(), d.clone()))
-            .collect();
+    fn score_batch(
+        &self,
+        session: &mut Session,
+        query: &str,
+        documents: &[Arc<str>],
+    ) -> Result<Vec<f32>> {
+        let pairs: Vec<(&str, &str)> = documents.iter().map(|d| (query, &**d)).collect();
         let encodings = self
             .tokenizer
             .encode_batch(pairs, true)
-            .map_err(|e| anyhow!(e))?;
+            .map_err(|e| Error::Tokenization(e.to_string()))?;
         let rows = encodings.len();
         let cols = encodings.first().map_or(0, |e| e.len());
 
@@ -179,7 +224,6 @@ impl Model {
             ));
         }
 
-        let mut session = self.session.lock();
         let outputs = session.run(inputs)?;
         let (_, logits) = outputs[0].try_extract_tensor::<f32>()?;
         // Relevance in [0, 1]: the sigmoid of the logit.
@@ -187,10 +231,36 @@ impl Model {
         Ok(logits.iter().map(|&l| 1.0 / (1.0 + (-l).exp())).collect())
     }
 
-    fn score(&self, query: &str, documents: &[String]) -> Result<Vec<f32>> {
+    /// The scores of `documents` on an idle session (there is one for
+    /// every permit of the encoder's slots), which goes back to the pool
+    /// afterwards.
+    fn score(
+        &self,
+        query: &str,
+        documents: &[Arc<str>],
+        abandoned: &Abandoned,
+    ) -> Result<Vec<f32>> {
+        let mut session = self
+            .idle
+            .lock()
+            .pop()
+            .ok_or_else(|| Error::Inference("no idle reranker session".to_string()))?;
+        let scores = self.score_all(&mut session, query, documents, abandoned);
+        self.idle.lock().push(session);
+        scores
+    }
+
+    fn score_all(
+        &self,
+        session: &mut Session,
+        query: &str,
+        documents: &[Arc<str>],
+        abandoned: &Abandoned,
+    ) -> Result<Vec<f32>> {
         let mut scores = Vec::with_capacity(documents.len());
         for chunk in documents.chunks(BATCH_SIZE) {
-            scores.extend(self.score_batch(query, chunk)?);
+            abandoned.check()?;
+            scores.extend(self.score_batch(session, query, chunk)?);
         }
         Ok(scores)
     }
@@ -198,14 +268,41 @@ impl Model {
 
 #[async_trait]
 impl Reranker for OnnxCrossEncoder {
-    async fn score(&self, query: &str, documents: &[String]) -> Result<Vec<f32>> {
+    async fn score(
+        &self,
+        query: &str,
+        documents: &[Arc<str>],
+    ) -> post_cortex_ports::error::Result<Vec<f32>> {
+        self.rerank(query, documents).await.map_err(PortError::from)
+    }
+}
+
+impl OnnxCrossEncoder {
+    /// One relevance per document, in input order.
+    ///
+    /// # Errors
+    /// `Timeout` past [`TIMEOUT`]; the session's error.
+    async fn rerank(&self, query: &str, documents: &[Arc<str>]) -> Result<Vec<f32>> {
         if documents.is_empty() {
             return Ok(Vec::new());
         }
         let model = Arc::clone(&self.model);
         let query = query.to_string();
         let documents = documents.to_vec();
-        tokio::task::spawn_blocking(move || model.score(&query, &documents)).await?
+        let run = blocking::run(&self.slots, move |abandoned| {
+            model.score(&query, &documents, abandoned)
+        });
+        tokio::time::timeout(TIMEOUT, run)
+            .await
+            .map_err(|_| Error::Timeout(TIMEOUT.as_secs()))?
+    }
+}
+
+/// [`Error::ModelLoad`] for an ONNX Runtime or session set-up failure.
+fn runtime_error(e: impl std::fmt::Display) -> Error {
+    Error::ModelLoad {
+        model: "onnx runtime".to_string(),
+        reason: e.to_string(),
     }
 }
 
@@ -217,14 +314,31 @@ mod tests {
 
     const MODEL: &str = "cross-encoder/ms-marco-MiniLM-L4-v2";
 
+    /// The smallest cross-encoder (~25 MB, cached by the HuggingFace Hub
+    /// client and in CI), on the ONNX Runtime `ORT_DYLIB_PATH` names (Linux).
+    pub async fn model() -> OnnxCrossEncoder {
+        let runtime = std::env::var("ORT_DYLIB_PATH").ok();
+        OnnxCrossEncoder::load(MODEL, 256, runtime.as_deref())
+            .await
+            .unwrap()
+    }
+
+    /// The model, for the port's conformance suite.
+    pub async fn loaded() -> (Arc<dyn Reranker>, ()) {
+        (Arc::new(model().await), ())
+    }
+
+    mod conformance {
+        post_cortex_ports::rerank_conformance_suite!(crate::rerank::onnx::tests::loaded());
+    }
+
     #[tokio::test]
-    #[ignore = "requires network + HF Hub download (~25MB)"]
     async fn ranks_the_answer_first() {
-        let ce = OnnxCrossEncoder::load(MODEL, 256).await.unwrap();
-        let docs = vec![
-            "Melanie: I went camping with the kids last weekend.".to_string(),
-            "Caroline: I researched adoption agencies yesterday.".to_string(),
-            "Melanie: The weather has been great lately.".to_string(),
+        let ce = model().await;
+        let docs: Vec<Arc<str>> = vec![
+            "Melanie: I went camping with the kids last weekend.".into(),
+            "Caroline: I researched adoption agencies yesterday.".into(),
+            "Melanie: The weather has been great lately.".into(),
         ];
         let scores = ce
             .score("What did Caroline research?", &docs)
@@ -239,13 +353,13 @@ mod tests {
     #[tokio::test]
     #[ignore = "benchmark; requires network + HF Hub download"]
     async fn onnx_pool_latency() {
-        let ce = OnnxCrossEncoder::load(MODEL, 256).await.unwrap();
-        let docs: Vec<String> = (0..300)
+        let ce = model().await;
+        let docs: Vec<Arc<str>> = (0..300)
             .map(|i| {
-                format!(
+                Arc::from(format!(
                     "8 May 2023 · Melanie Melanie: turn {i}, we talked about painting a lake \
                      sunrise and the pottery class I signed up for with the kids last week."
-                )
+                ))
             })
             .collect();
         let query = "When did Melanie paint a sunrise?";

@@ -1,0 +1,48 @@
+[package]
+name = "pcx-sandbox"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The pcx sandbox: a module's files beneath its roots (cap-std) and its processes under the OS sandbox (Seatbelt on macOS, Landlock and seccomp on Linux, a jail on FreeBSD)."
+keywords = ["pcx", "sandbox", "seatbelt", "landlock", "jail"]
+categories = ["os"]
+documentation = "https://docs.rs/pcx-sandbox"
+
+[dependencies]
+pcx-module-api.workspace = true
+async-trait.workspace = true
+cap-std.workspace = true
+globset.workspace = true
+nix = { workspace = true, features = ["fs"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { workspace = true, features = ["fs", "mount", "resource", "sched", "user"] }
+landlock.workspace = true
+seccompiler.workspace = true
+libc.workspace = true
+
+[target.'cfg(target_os = "freebsd")'.dependencies]
+nix = { workspace = true, features = ["fs", "mount", "process", "user"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
+
+[[test]]
+name = "linux_helper"
+harness = false
+
+[[test]]
+name = "freebsd_helper"
+harness = false

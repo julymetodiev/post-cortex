@@ -1,0 +1,415 @@
+syntax = "proto3";
+package pcx.http.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "pcx_module.proto";
+import "pcx_workflow.proto";
+
+// Calls of outside HTTP APIs with the organisation's own credentials, kept
+// as connections (docs/modules/http.md): under the network rules, each
+// call kept in a log without its headers, query and bodies.
+service Http {
+  // A GET or a HEAD, without a body. Answers the response; a status outside
+  // `ok` fails.
+  rpc Get(HttpRequest) returns (HttpResponse);
+  // A request of any method. Answers the response; a status outside `ok`
+  // fails.
+  rpc Request(HttpRequest) returns (HttpResponse);
+  // The connections, without their secrets.
+  rpc ListConnections(ListConnectionsRequest) returns (ConnectionList);
+  // A GET of a connection's test path with the current settings.
+  rpc TestConnection(TestConnectionRequest) returns (Tested);
+  // The presets, built in and the organisation's, by service and name.
+  rpc ListPresets(ListPresetsRequest) returns (PresetList);
+  // One preset, by name.
+  rpc GetPreset(GetPresetRequest) returns (PresetRecord);
+  // Add a preset, or change one from the version read, once it checks.
+  rpc SavePreset(SavePresetRequest) returns (PresetRecord);
+  // Remove one of the organisation's presets, from the version read.
+  rpc DeletePreset(DeletePresetRequest) returns (Deleted);
+  // The log, the newest first, a page at a time.
+  rpc ListLog(ListLogRequest) returns (LogPage);
+}
+
+// ------------------------------------------------------------- settings
+
+// The http module's settings.
+message HttpConfig {
+  // The workspace its presets and its log are kept in.
+  string workspace_id = 1 [(pcx.module.v1.setting) = { title: "Workspace", required: true, workspace: true }];
+  // The outside services it calls, each with its credentials.
+  repeated Connection connections = 2 [(pcx.module.v1.setting) = { title: "Connections" }];
+  // The hosts a request without a connection may reach, each a host or
+  // `*.domain`; empty: none.
+  repeated string allow = 3 [(pcx.module.v1.setting) = { title: "Allowed hosts" }];
+  // Whether private, loopback and link-local addresses may be reached (a
+  // daemon calling services of its own network); refused in the cloud.
+  bool private_networks = 4 [(pcx.module.v1.setting) = { title: "Private networks" }];
+  // Requests a day (UTC), at most 100,000; 0: 5,000.
+  uint32 daily_limit = 5 [(pcx.module.v1.setting) = { title: "Requests a day" }];
+}
+
+// An outside service: where it is and how the module signs in to it.
+message Connection {
+  // Its name, which a request gives: 1 to 64 of a-z, 0-9, '-'.
+  string name = 1 [(pcx.module.v1.setting) = { title: "Name", required: true, key: true }];
+  // What it is.
+  string description = 2 [(pcx.module.v1.setting) = { title: "Description" }];
+  // `https://` with a host and an optional path prefix; `http://` only to
+  // a loopback host with private networks.
+  string base_url = 3 [(pcx.module.v1.setting) = { title: "Base URL", required: true, pattern: "https?://\\S+", example: "https://api.github.com" }];
+  // How it signs in.
+  Auth auth = 4 [(pcx.module.v1.setting) = { title: "Authentication" }];
+  // The header (`AUTH_HEADER`) or the query parameter (`AUTH_QUERY`) the
+  // secret goes in.
+  string auth_name = 5 [(pcx.module.v1.setting) = { title: "Header or parameter" }];
+  // The user of `AUTH_BASIC`.
+  string user = 6 [(pcx.module.v1.setting) = { title: "User" }];
+  // The token, the password or the key's value.
+  string secret = 7 [(pcx.module.v1.setting) = { title: "Secret", secret: true }];
+  // Headers sent with each request.
+  repeated Pair headers = 8 [(pcx.module.v1.setting) = { title: "Headers" }];
+  // The header that carries a workflow's idempotency key (Stripe:
+  // `Idempotency-Key`); empty: none is sent.
+  string idempotency_header = 9 [(pcx.module.v1.setting) = { title: "Idempotency header" }];
+  // A request's time limit in seconds, at most 300; 0: 30.
+  uint32 timeout_seconds = 10 [(pcx.module.v1.setting) = { title: "Timeout (s)" }];
+  // What the test request calls (a GET); empty: `/`.
+  string test_path = 11 [(pcx.module.v1.setting) = { title: "Test path" }];
+}
+
+// How a connection signs in.
+enum Auth {
+  // None.
+  AUTH_UNSPECIFIED = 0;
+  // `Authorization: Bearer <secret>`.
+  AUTH_BEARER = 1;
+  // `Authorization: Basic` of the user and the secret.
+  AUTH_BASIC = 2;
+  // The secret in the header `auth_name`.
+  AUTH_HEADER = 3;
+  // The secret in the query parameter `auth_name`.
+  AUTH_QUERY = 4;
+}
+
+// A name and a value: a header, a query parameter.
+message Pair {
+  // The name.
+  string name = 1 [(pcx.module.v1.setting) = { title: "Name", required: true }];
+  // The value.
+  string value = 2 [(pcx.module.v1.setting) = { title: "Value" }];
+}
+
+// ------------------------------------------------------------- requests
+
+// A request: through a connection (a path under its base URL) or to an
+// allowed host (an absolute URL).
+message HttpRequest {
+  // The connection's name; empty: none, and `url` is given.
+  string connection = 1;
+  // GET, HEAD, POST, PUT, PATCH or DELETE.
+  string method = 2;
+  // With a connection: a path under its base URL, beginning with `/`, its
+  // `{name}` places filled from `path_params`.
+  string path = 3;
+  // Without a connection: an absolute `https://` URL whose host `allow`
+  // names.
+  string url = 4;
+  // The values of the path's places, each one path segment, by name (a
+  // list, not a map, so a template fills each with its own slot; the same
+  // encoding as the map it was).
+  repeated Pair path_params = 5;
+  // The query's parameters.
+  repeated Pair query = 6;
+  // Headers; the module sets the authentication and the host.
+  repeated Pair headers = 7;
+  // The body, at most 1 MiB; none: no body.
+  oneof body {
+    // JSON.
+    google.protobuf.Value json = 8;
+    // Text, of `content_type` (empty: text/plain; charset=utf-8).
+    string text = 9;
+    // Bytes, of `content_type` (empty: application/octet-stream).
+    bytes raw = 10;
+  }
+  // The body's media type.
+  string content_type = 11;
+  // Its time limit, at most 5 min; none: the connection's, else 30 s.
+  google.protobuf.Duration timeout = 12;
+  // The statuses that answer instead of failing; empty: 2xx.
+  repeated uint32 ok = 13;
+  // The fields the JSON body must have (each object's, with `expect_list`);
+  // none: any body.
+  pcx.workflow.v1.Schema expect = 14;
+  // Whether the body is a list of objects `expect` describes.
+  bool expect_list = 15;
+}
+
+// A response.
+message HttpResponse {
+  // Its status.
+  uint32 status = 1;
+  // Its headers, names in lower case, without `set-cookie`.
+  repeated Pair headers = 2;
+  // Its body, read by its media type.
+  oneof body {
+    // A JSON body. A number is a double: above 2^53 it loses precision.
+    google.protobuf.Value json = 3;
+    // A textual body.
+    string text = 4;
+    // Any other body.
+    bytes raw = 5;
+  }
+  // Its media type.
+  string content_type = 6;
+  // The final URL, without its query.
+  string url = 7;
+  // The redirects followed.
+  uint32 redirects = 8;
+  // How long it took.
+  google.protobuf.Duration duration = 9;
+}
+
+// ---------------------------------------------------------- connections
+
+// Every connection.
+message ListConnectionsRequest {}
+
+// The connections.
+message ConnectionList {
+  // Each, by name.
+  repeated ConnectionInfo connections = 1;
+}
+
+// A connection without its secret.
+message ConnectionInfo {
+  // Its name.
+  string name = 1;
+  // What it is.
+  string description = 2;
+  // Its base URL.
+  string base_url = 3;
+  // How it signs in.
+  Auth auth = 4;
+  // Whether its secret is set.
+  bool secret_set = 5;
+}
+
+// A connection to test.
+message TestConnectionRequest {
+  // Its name.
+  string connection = 1;
+}
+
+// A test's answer.
+message Tested {
+  // The status.
+  uint32 status = 1;
+  // How long it took.
+  google.protobuf.Duration duration = 2;
+}
+
+// -------------------------------------------------------------- presets
+
+// A ready-made call: an API block of the editor's palette.
+message Preset {
+  // Its name: 1 to 64 of a-z, 0-9, '-'.
+  string name = 1;
+  // What it does.
+  string description = 2;
+  // What the palette groups it by: github, slack, stripe, rest.
+  string service = 3;
+  // The connection it expects by default.
+  string connection = 4;
+  // The base URL of that connection, which "add a connection" fills.
+  string base_url = 5;
+  // How that connection signs in.
+  Auth auth = 6;
+  // The header or query parameter of its secret.
+  string auth_name = 7;
+  // The headers that connection sends.
+  repeated Pair headers = 8;
+  // The header of its idempotency key.
+  string idempotency_header = 9;
+  // Its method: GET or HEAD is a `Get`, any other a `Request`.
+  string method = 10;
+  // Its path, with `{name}` places: its `path` parameters.
+  string path = 11;
+  // What the person or the agent fills.
+  repeated Param params = 12;
+  // The fields of its response's JSON body, the request's `expect`.
+  pcx.workflow.v1.Schema response = 13;
+  // Whether its body is a list of them.
+  bool response_list = 14;
+}
+
+// A preset's parameter.
+message Param {
+  // Its name: a lowercase letter or '_', then letters, digits and '_' (a
+  // body field's), or a path's place, a query parameter's or a header's
+  // name.
+  string name = 1;
+  // Where it goes.
+  Place in = 2;
+  // Its type as CEL writes it: string, int, double, bool, list<T>,
+  // map<string, T>.
+  string type = 3;
+  // What it is.
+  string description = 4;
+  // A value of it.
+  pcx.workflow.v1.Value example = 5;
+  // Whether it must be given.
+  bool required = 6;
+}
+
+// Where a parameter goes.
+enum Place {
+  // Not set: refused.
+  PLACE_UNSPECIFIED = 0;
+  // A `{name}` place of the path.
+  PLACE_PATH = 1;
+  // A query parameter.
+  PLACE_QUERY = 2;
+  // A header.
+  PLACE_HEADER = 3;
+  // A field of the JSON body.
+  PLACE_BODY = 4;
+}
+
+// A preset as kept.
+message PresetRecord {
+  // Its document; empty for a built-in one.
+  string id = 1;
+  // The version read; 0 for a built-in one.
+  uint64 version = 2;
+  // The preset.
+  Preset preset = 3;
+  // Whether it ships with the module (it cannot be changed).
+  bool built_in = 4;
+}
+
+// The presets, of one service when it names one.
+message ListPresetsRequest {
+  // The service; empty: all.
+  string service = 1;
+}
+
+// Presets, by service and name.
+message PresetList {
+  // Each.
+  repeated PresetRecord presets = 1;
+}
+
+// One preset.
+message GetPresetRequest {
+  // Its name.
+  string name = 1;
+}
+
+// A preset to keep.
+message SavePresetRequest {
+  // The preset.
+  Preset preset = 1;
+  // The version read; 0: a new one.
+  uint64 version = 2;
+}
+
+// A preset to remove.
+message DeletePresetRequest {
+  // Its name.
+  string name = 1;
+  // The version read.
+  uint64 version = 2;
+}
+
+// A preset removed.
+message Deleted {
+  // Its name.
+  string name = 1;
+}
+
+// The built-in presets as their file holds them.
+message BuiltIn {
+  // Each.
+  repeated Preset presets = 1;
+}
+
+// ------------------------------------------------------------------ log
+
+// A page of the log.
+message ListLogRequest {
+  // How many; 0: 50, at most 200.
+  uint32 limit = 1;
+  // After this entry; empty: from the newest.
+  string before = 2;
+  // Of this connection; empty: any.
+  string connection = 3;
+  // To this host; empty: any.
+  string host = 4;
+  // With this outcome; unset: any.
+  Outcome outcome = 5;
+}
+
+// The log's entries, the newest first.
+message LogPage {
+  // Each.
+  repeated CallRecord entries = 1;
+  // Whether there are older ones.
+  bool more = 2;
+}
+
+// An entry as kept.
+message CallRecord {
+  // Its document.
+  string id = 1;
+  // The call.
+  Call call = 2;
+}
+
+// A call, kept in the log without its headers, query and bodies.
+message Call {
+  // Its method and host, as the document's title.
+  string title = 1;
+  // When.
+  google.protobuf.Timestamp at = 2;
+  // Its day (UTC), `YYYY-MM-DD`, which the daily limit counts.
+  string day = 3;
+  // Who called: a person, an agent, `workflow:<name>`.
+  string author = 4;
+  // The connection; empty: none.
+  string connection = 5;
+  // The method.
+  string method = 6;
+  // The host.
+  string host = 7;
+  // The path, without its query.
+  string path = 8;
+  // The status; 0: none came.
+  uint32 status = 9;
+  // How it ended.
+  Outcome outcome = 10;
+  // The failure's kind; empty: none.
+  string failure = 11;
+  // How long it took.
+  google.protobuf.Duration duration = 12;
+  // The request body's size in bytes.
+  uint64 sent = 13;
+  // The response body's size in bytes.
+  uint64 received = 14;
+  // The idempotency key it carried; empty: none.
+  string idempotency_key = 15;
+}
+
+// How a call ended.
+enum Outcome {
+  // Not set: any, in a filter.
+  OUTCOME_UNSPECIFIED = 0;
+  // A response within `ok`.
+  OUTCOME_OK = 1;
+  // A response outside `ok`, or none.
+  OUTCOME_FAILED = 2;
+  // The module refused it before sending.
+  OUTCOME_REFUSED = 3;
+}

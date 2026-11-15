@@ -1,0 +1,14 @@
+{
+  "name": "post-cortex",
+  "owner": { "name": "Julius ML" },
+  "metadata": {
+    "description": "post-cortex: long-term, searchable project memory for coding agents"
+  },
+  "plugins": [
+    {
+      "name": "post-cortex",
+      "source": "./integrations/cursor",
+      "description": "post-cortex MCP server, rule, skill and memory hooks"
+    }
+  ]
+}

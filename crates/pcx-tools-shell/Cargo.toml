@@ -1,0 +1,35 @@
+[package]
+name = "pcx-tools-shell"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The pcx tools-shell module: bash commands and tmux sessions through a module's sandbox."
+keywords = ["pcx", "tools", "shell", "sandbox"]
+categories = ["command-line-utilities"]
+documentation = "https://docs.rs/pcx-tools-shell"
+
+[dependencies]
+pcx-module-api.workspace = true
+# Its package, pcx.tools.shell.v1 (W23).
+post-cortex-proto.workspace = true
+tonic.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
+# The name of its configuration message (prost::Name).
+prost.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+pcx-host.workspace = true
+pcx-sandbox.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

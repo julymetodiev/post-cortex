@@ -25,7 +25,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Daemon configuration loaded from file and environment
 ///
@@ -41,14 +41,14 @@ pub struct DaemonConfig {
     pub port: u16,
 
     /// gRPC port (default: 3738, 0 = disabled)
-    #[serde(default = "default_grpc_port")]
+    #[serde(default = "defaults::grpc_port")]
     pub grpc_port: u16,
 
     /// Data directory for RocksDB (default: ~/.post-cortex/data)
-    pub data_directory: String,
+    pub data_directory: PathBuf,
 
     /// Storage backend: "rocksdb" or "surrealdb" (default: rocksdb)
-    #[serde(default = "default_storage_backend")]
+    #[serde(default = "defaults::storage_backend")]
     pub storage_backend: String,
 
     /// SurrealDB endpoint (required if storage_backend = "surrealdb")
@@ -65,11 +65,11 @@ pub struct DaemonConfig {
     pub surrealdb_password: Option<String>,
 
     /// SurrealDB namespace (default: "post_cortex")
-    #[serde(default = "default_surrealdb_namespace")]
+    #[serde(default = "defaults::surrealdb_namespace")]
     pub surrealdb_namespace: String,
 
     /// SurrealDB database (default: "main")
-    #[serde(default = "default_surrealdb_database")]
+    #[serde(default = "defaults::surrealdb_database")]
     pub surrealdb_database: String,
 
     /// Bearer token required on every HTTP (except `/health`) and gRPC call.
@@ -77,8 +77,21 @@ pub struct DaemonConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<String>,
 
+    /// Hook scripts the module host runs (`[[hooks]]`), each pinned by the
+    /// SHA-256 of its file (default: none).
+    pub hooks: Vec<pcx_host::ScriptSpec>,
+
+    /// Modules in their own processes (`[[modules]]`), each pinned by the
+    /// SHA-256 of its executable (default: none).
+    pub modules: Vec<pcx_host::ProcessSpec>,
+
+    /// Built-in tool modules (`[[builtins]]`: `tools-fs`, `tools-shell`,
+    /// `tools-git`) with what each may do and where (default: none; each is
+    /// off until named).
+    pub builtins: Vec<crate::compose::BuiltinSpec>,
+
     /// Redact secrets and personal data on every write (default: true)
-    #[serde(default = "default_redact")]
+    #[serde(default = "defaults::redact")]
     pub redact: bool,
 
     /// Extra redaction regexes; matches become `[REDACTED:custom]`
@@ -99,6 +112,12 @@ pub struct DaemonConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reranker_model: Option<String>,
 
+    /// Path of the ONNX Runtime library the local reranker loads on Linux,
+    /// from `ORT_DYLIB_PATH` (not a `daemon.toml` key; default: the library
+    /// search path).
+    #[serde(skip)]
+    pub onnx_runtime: Option<String>,
+
     /// Voyage AI API key (or `VOYAGE_API_KEY`). When set, Voyage reranks
     /// search results, with `reranker_model` as fallback. Candidate text is
     /// sent to Voyage. Needs a build with the `rerank-voyage` feature.
@@ -106,8 +125,13 @@ pub struct DaemonConfig {
     pub voyage_api_key: Option<String>,
 
     /// Voyage rerank model (default: `rerank-3-lite`).
-    #[serde(default = "default_voyage_model")]
+    #[serde(default = "defaults::voyage_model")]
     pub voyage_model: String,
+
+    /// Voyage rerank API (default: Voyage's own; a proxy or another region
+    /// otherwise).
+    #[serde(default = "defaults::voyage_endpoint")]
+    pub voyage_endpoint: String,
 
     /// Search mode when a call does not name one: `fast` (no reranker),
     /// `local` (`reranker_model`) or `accurate` (Voyage). Default: the best
@@ -117,46 +141,45 @@ pub struct DaemonConfig {
 
     /// Updates returned on each side of every search hit from the same
     /// session (default: 1; 0 = hits only).
-    #[serde(default = "default_neighbour_radius")]
+    #[serde(default = "defaults::neighbour_radius")]
     pub neighbour_radius: usize,
 
     /// Days captured conversation messages are kept (`POST /api/messages`);
     /// older ones are deleted with their vectors once a day. Structured
     /// records are never expired. Default 90; 0 keeps messages forever.
-    #[serde(default = "default_message_retention_days")]
+    #[serde(default = "defaults::message_retention_days")]
     pub message_retention_days: u32,
-}
 
-fn default_neighbour_radius() -> usize {
-    1
-}
+    /// Largest archive `Import` takes, in bytes (spooled to a temporary
+    /// file as it arrives). Default 1 GiB.
+    #[serde(default = "defaults::max_import_bytes")]
+    pub max_import_bytes: u64,
 
-fn default_message_retention_days() -> u32 {
-    90
-}
+    /// Origins of web pages allowed to call (the app on the web):
+    /// `https://host[:port]` entries, or `localhost` for any local port.
+    /// Empty (the default): no browser routes (gRPC-Web, `/v1/import`,
+    /// `/v1/export`) and no CORS answers.
+    #[serde(default)]
+    pub browser_origins: Vec<String>,
 
-fn default_voyage_model() -> String {
-    "rerank-3-lite".to_string()
-}
+    /// Where memory keeps the images documents name (`[blobs]`; default:
+    /// none, and a document that names an image is refused).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blobs: Option<blobs::BlobsConfig>,
 
-fn default_redact() -> bool {
-    true
-}
+    /// What the daemon lends a hosted tenant as a runner (`[runner]`, read
+    /// at start; default: nothing, and no name is denied).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner: Option<RunnerConfig>,
 
-fn default_grpc_port() -> u16 {
-    3738
-}
+    /// How the sandbox runs processes (`[sandbox]`; default: as this
+    /// platform does, and on FreeBSD none run).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<SandboxConfig>,
 
-fn default_storage_backend() -> String {
-    "rocksdb".to_string()
-}
-
-fn default_surrealdb_namespace() -> String {
-    "post_cortex".to_string()
-}
-
-fn default_surrealdb_database() -> String {
-    "main".to_string()
+    /// Dynamic modules (`[dynamic]`; default: none run).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamic: Option<DynamicConfig>,
 }
 
 impl Default for DaemonConfig {
@@ -164,221 +187,247 @@ impl Default for DaemonConfig {
         Self {
             host: "127.0.0.1".to_string(),
             port: 3737,
-            grpc_port: default_grpc_port(),
+            grpc_port: defaults::grpc_port(),
             data_directory: default_data_dir(),
-            storage_backend: default_storage_backend(),
+            storage_backend: defaults::storage_backend(),
             surrealdb_endpoint: None,
             surrealdb_username: None,
             surrealdb_password: None,
-            surrealdb_namespace: default_surrealdb_namespace(),
-            surrealdb_database: default_surrealdb_database(),
+            surrealdb_namespace: defaults::surrealdb_namespace(),
+            surrealdb_database: defaults::surrealdb_database(),
             auth_token: None,
-            redact: default_redact(),
+            redact: defaults::redact(),
             redact_patterns: Vec::new(),
             allowed_hosts: Vec::new(),
             reranker_model: None,
+            onnx_runtime: None,
             voyage_api_key: None,
-            voyage_model: default_voyage_model(),
+            voyage_model: defaults::voyage_model(),
+            voyage_endpoint: defaults::voyage_endpoint(),
             search_mode: None,
-            neighbour_radius: default_neighbour_radius(),
-            message_retention_days: default_message_retention_days(),
+            neighbour_radius: defaults::neighbour_radius(),
+            message_retention_days: defaults::message_retention_days(),
+            max_import_bytes: defaults::max_import_bytes(),
+            browser_origins: Vec::new(),
+            blobs: None,
+            runner: None,
+            sandbox: None,
+            dynamic: None,
+            hooks: Vec::new(),
+            modules: Vec::new(),
+            builtins: Vec::new(),
         }
     }
 }
 
+/// `value` of the variable `name` as a port number.
+fn parse_port(name: &str, value: &str) -> Result<u16, ConfigError> {
+    value
+        .trim()
+        .parse()
+        .map_err(|e| ConfigError::Env(format!("{name} is not a port ({value:?}): {e}")))
+}
+
 impl DaemonConfig {
-    /// Load configuration from file with environment variable overrides
+    /// The storage the daemon and every `pcx` command that opens storage
+    /// use: the data directory, or the SurrealDB connection.
     ///
-    /// Priority order:
-    /// 1. Environment variables (PC_HOST, PC_PORT, PC_DATA_DIR)
-    /// 2. Config file (~/.post-cortex/daemon.toml)
-    /// 3. Default values
-    pub fn load() -> Self {
-        let config_path = default_config_path();
+    /// Fails when `storage_backend` names no backend of this build (a typo,
+    /// or `surrealdb` without the `surrealdb-storage` feature): the daemon
+    /// never falls back to another backend than the one configured.
+    pub fn storage_config(&self) -> Result<crate::compose::StorageConfig, String> {
+        if self.storage_backend_type()? == post_cortex_storage::StorageBackendType::RocksDB {
+            return Ok(crate::compose::StorageConfig::RocksDb {
+                data_directory: self.data_directory.clone(),
+            });
+        }
+        Ok(crate::compose::StorageConfig::SurrealDb {
+            endpoint: self
+                .surrealdb_endpoint
+                .clone()
+                .ok_or_else(|| "SurrealDB endpoint not configured".to_string())?,
+            username: self.surrealdb_username.clone(),
+            password: self.surrealdb_password.clone(),
+            namespace: Some(self.surrealdb_namespace.clone()),
+            database: Some(self.surrealdb_database.clone()),
+        })
+    }
 
-        // Start with defaults
-        let mut config = Self::default();
+    /// The configured `storage_backend`, parsed strictly.
+    pub fn storage_backend_type(&self) -> Result<post_cortex_storage::StorageBackendType, String> {
+        self.storage_backend
+            .parse()
+            .map_err(|e| format!("storage_backend: {e}"))
+    }
 
-        // Try to load config file if it exists
-        if config_path.exists() {
-            match fs::read_to_string(&config_path) {
-                Ok(contents) => match toml::from_str::<DaemonConfig>(&contents) {
-                    Ok(file_config) => {
-                        // Merge file config into defaults
-                        config = file_config;
-                        tracing::info!("Loaded configuration from {:?}", config_path);
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to parse config file {:?}: {}", config_path, e);
-                        tracing::info!("Using default configuration");
-                    }
-                },
-                Err(e) => {
-                    tracing::warn!("Failed to read config file {:?}: {}", config_path, e);
-                    tracing::info!("Using default configuration");
-                }
-            }
+    /// The models the daemon runs: the embedding model (`daemon.toml` has
+    /// no model key: the default model, PotionMultilingual) and the
+    /// rerankers.
+    pub fn model_config(&self) -> crate::compose::ModelConfig {
+        crate::compose::ModelConfig {
+            embedding_model: post_cortex_embeddings::EmbeddingModelType::default(),
+            reranker_model: self.reranker_model.clone(),
+            onnx_runtime: self.onnx_runtime.clone(),
+            voyage: self
+                .voyage_api_key
+                .clone()
+                .map(|api_key| crate::compose::VoyageConfig {
+                    endpoint: self.voyage_endpoint.clone(),
+                    api_key,
+                    model: self.voyage_model.clone(),
+                }),
+        }
+    }
+
+    /// Vector dimension of the daemon's embedding model.
+    pub fn vector_dimension(&self) -> usize {
+        self.model_config().embedding_model.embedding_dimension()
+    }
+
+    /// The daemon's embedding model as an archive records it: `pcx export`
+    /// writes it, `pcx import` refuses an archive of another model.
+    pub fn embedding_model(&self) -> post_cortex_core::archive::EmbeddingModelInfo {
+        let model = self.model_config().embedding_model;
+        post_cortex_core::archive::EmbeddingModelInfo {
+            model: model.as_str().to_string(),
+            dimension: model.embedding_dimension(),
+        }
+    }
+
+    /// Where `daemon.toml` is (`~/.post-cortex/daemon.toml`).
+    #[must_use]
+    pub fn path() -> PathBuf {
+        Self::dir().join("daemon.toml")
+    }
+
+    /// The directory of `daemon.toml` (`~/.post-cortex`), which also keeps
+    /// the pairing of `pcx connect`.
+    #[must_use]
+    pub fn dir() -> PathBuf {
+        default_config_dir()
+    }
+
+    /// The configuration: `daemon.toml` (defaults when there is none), then
+    /// the `PC_*`, `VOYAGE_API_KEY` and `ORT_DYLIB_PATH` overrides,
+    /// validated. Fails closed: a file that cannot be read or parsed, an
+    /// override that is not valid, or a result that does not validate is an
+    /// error, never a fallback to defaults.
+    ///
+    /// # Errors
+    /// See [`ConfigError`].
+    pub fn load() -> Result<Self, ConfigError> {
+        Self::load_from(&Self::path())
+    }
+
+    /// As [`DaemonConfig::load`], from the file at `config_path`.
+    ///
+    /// # Errors
+    /// See [`ConfigError`].
+    pub fn load_from(config_path: &Path) -> Result<Self, ConfigError> {
+        let config_path = config_path.to_path_buf();
+        let mut config = if config_path.exists() {
+            let contents =
+                fs::read_to_string(&config_path).map_err(|source| ConfigError::Read {
+                    path: config_path.clone(),
+                    source,
+                })?;
+            let parsed =
+                toml::from_str::<DaemonConfig>(&contents).map_err(|source| ConfigError::Parse {
+                    path: config_path.clone(),
+                    source,
+                })?;
+            tracing::info!("Loaded configuration from {:?}", config_path);
+            parsed
         } else {
             tracing::debug!("Config file {:?} not found, using defaults", config_path);
-        }
-
-        // Apply environment variable overrides (highest priority)
-        if let Ok(key) = std::env::var("VOYAGE_API_KEY")
-            && !key.is_empty()
-        {
-            config.voyage_api_key = Some(key);
-            tracing::debug!("Voyage API key taken from VOYAGE_API_KEY");
-        }
-        if let Ok(host) = std::env::var("PC_HOST") {
-            config.host = host;
-            tracing::debug!("Overriding host from PC_HOST environment variable");
-        }
-
-        if let Ok(port_str) = std::env::var("PC_PORT") {
-            if let Ok(port) = port_str.parse::<u16>() {
-                config.port = port;
-                tracing::debug!("Overriding port from PC_PORT environment variable");
-            } else {
-                tracing::warn!("Invalid PC_PORT value: {}", port_str);
-            }
-        }
-
-        if let Ok(grpc_port_str) = std::env::var("PC_GRPC_PORT")
-            && let Ok(port) = grpc_port_str.parse::<u16>()
-        {
-            config.grpc_port = port;
-            tracing::debug!("Overriding grpc_port from PC_GRPC_PORT environment variable");
-        }
-
-        if let Ok(data_dir) = std::env::var("PC_DATA_DIR") {
-            config.data_directory = data_dir;
-            tracing::debug!("Overriding data_directory from PC_DATA_DIR environment variable");
-        }
-
-        // Storage backend overrides
-        if let Ok(backend) = std::env::var("PC_STORAGE_BACKEND") {
-            config.storage_backend = backend;
-            tracing::debug!(
-                "Overriding storage_backend from PC_STORAGE_BACKEND environment variable"
-            );
-        }
-
-        if let Ok(endpoint) = std::env::var("PC_SURREALDB_ENDPOINT") {
-            config.surrealdb_endpoint = Some(endpoint);
-            tracing::debug!(
-                "Overriding surrealdb_endpoint from PC_SURREALDB_ENDPOINT environment variable"
-            );
-        }
-
-        if let Ok(username) = std::env::var("PC_SURREALDB_USER") {
-            config.surrealdb_username = Some(username);
-            tracing::debug!(
-                "Overriding surrealdb_username from PC_SURREALDB_USER environment variable"
-            );
-        }
-
-        if let Ok(password) = std::env::var("PC_SURREALDB_PASS") {
-            config.surrealdb_password = Some(password);
-            tracing::debug!(
-                "Overriding surrealdb_password from PC_SURREALDB_PASS environment variable"
-            );
-        }
-
-        if let Ok(token) = std::env::var("PC_AUTH_TOKEN") {
-            config.auth_token = (!token.is_empty()).then_some(token);
-            tracing::debug!("Overriding auth_token from PC_AUTH_TOKEN environment variable");
-        }
-
-        if let Ok(hosts) = std::env::var("PC_ALLOWED_HOSTS") {
-            config.allowed_hosts = parse_host_list(&hosts);
-            tracing::debug!("Overriding allowed_hosts from PC_ALLOWED_HOSTS environment variable");
-        }
-
-        if let Ok(redact) = std::env::var("PC_REDACT") {
-            config.redact = !matches!(redact.as_str(), "0" | "false" | "no" | "off");
-            tracing::debug!("Overriding redact from PC_REDACT environment variable");
-        }
-
-        config
+            Self::default()
+        };
+        config.apply_env()?;
+        config.validate().map_err(ConfigError::Invalid)?;
+        Ok(config)
     }
 
-    /// HTTP client for talking to the daemon: carries the bearer token when
-    /// one is configured, so CLI commands and the stdio proxy pass auth.
-    pub fn http_client(&self) -> reqwest::Client {
-        let mut headers = reqwest::header::HeaderMap::new();
-        if let Some(token) = &self.auth_token
-            && let Ok(mut value) =
-                reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
-        {
-            value.set_sensitive(true);
-            headers.insert(reqwest::header::AUTHORIZATION, value);
+    /// Apply the environment overrides (they win over the file).
+    fn apply_env(&mut self) -> Result<(), ConfigError> {
+        let var = |name: &str| post_cortex_cli::env_text(name).map_err(ConfigError::Env);
+        if let Some(key) = var("VOYAGE_API_KEY")?.filter(|k| !k.is_empty()) {
+            self.voyage_api_key = Some(key);
         }
-        // PC_AUTHOR names the caller as the author of its writes.
-        if let Ok(author) = std::env::var("PC_AUTHOR")
-            && let Ok(value) = reqwest::header::HeaderValue::from_str(author.trim())
-            && !author.trim().is_empty()
-        {
-            headers.insert(crate::daemon::mcp_service::AUTHOR_HEADER, value);
+        if let Some(path) = var("ORT_DYLIB_PATH")?.filter(|p| !p.is_empty()) {
+            self.onnx_runtime = Some(path);
         }
-        reqwest::Client::builder()
-            .default_headers(headers)
-            .build()
-            .unwrap_or_default()
+        if let Some(host) = var("PC_HOST")? {
+            self.host = host;
+        }
+        if let Some(port) = var("PC_PORT")? {
+            self.port = parse_port("PC_PORT", &port)?;
+        }
+        if let Some(port) = var("PC_GRPC_PORT")? {
+            self.grpc_port = parse_port("PC_GRPC_PORT", &port)?;
+        }
+        if let Some(data_dir) = std::env::var_os("PC_DATA_DIR") {
+            self.data_directory = data_dir.into();
+        }
+        if let Some(backend) = var("PC_STORAGE_BACKEND")? {
+            self.storage_backend = backend;
+        }
+        if let Some(endpoint) = var("PC_SURREALDB_ENDPOINT")? {
+            self.surrealdb_endpoint = Some(endpoint);
+        }
+        if let Some(username) = var("PC_SURREALDB_USER")? {
+            self.surrealdb_username = Some(username);
+        }
+        if let Some(password) = var("PC_SURREALDB_PASS")? {
+            self.surrealdb_password = Some(password);
+        }
+        if let Some(blobs) = &mut self.blobs {
+            blobs.read_keys(var)?;
+        }
+        if let Some(token) = var("PC_AUTH_TOKEN")? {
+            self.auth_token = (!token.is_empty()).then_some(token);
+        }
+        if let Some(hosts) = var("PC_ALLOWED_HOSTS")? {
+            self.allowed_hosts = parse_host_list(&hosts);
+        }
+        if let Some(redact) = var("PC_REDACT")? {
+            self.redact = match redact.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => true,
+                "0" | "false" | "no" | "off" => false,
+                other => {
+                    return Err(ConfigError::Env(format!(
+                        "PC_REDACT is {other:?}; expected on or off"
+                    )));
+                }
+            };
+        }
+        Ok(())
     }
 
-    /// Create example config file at the default location
+    /// The browser access `browser_origins` configures.
     ///
-    /// Returns path to created file or error message
-    pub fn create_example_config() -> Result<PathBuf, String> {
-        let config_path = default_config_path();
-
-        if config_path.exists() {
-            return Err(format!("Config file already exists at {:?}", config_path));
+    /// # Errors
+    /// An entry is not an origin.
+    pub fn browser_access(&self) -> Result<crate::compose::BrowserAccess, String> {
+        if self.browser_origins.is_empty() {
+            return Ok(crate::compose::BrowserAccess::Off);
         }
+        post_cortex_transport::browser::Origins::parse(&self.browser_origins)
+            .map(crate::compose::BrowserAccess::Origins)
+            .map_err(|e| e.to_string())
+    }
 
-        // Ensure parent directory exists
-        if let Some(parent) = config_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    /// The local daemon as the client commands reach it.
+    #[must_use]
+    pub fn local(&self) -> post_cortex_cli::Local {
+        post_cortex_cli::Local {
+            host: self.host.clone(),
+            port: self.port,
+            grpc_port: self.grpc_port,
+            auth_token: self.auth_token.clone(),
+            data_directory: self.data_directory.clone(),
+            config_dir: Self::dir(),
+            message_retention_days: self.message_retention_days,
         }
-
-        let example_config = DaemonConfig::default();
-        let toml_content = toml::to_string_pretty(&example_config)
-            .map_err(|e| format!("Failed to serialize config: {}", e))?;
-
-        // Add comments to explain each field
-        let commented_toml = format!(
-            "# Post-Cortex Daemon Configuration\n\
-             # \n\
-             # This file configures the HTTP daemon server for multi-client access.\n\
-             # Environment variables override these settings:\n\
-             #   PC_HOST - Override host\n\
-             #   PC_PORT - Override port\n\
-             #   PC_DATA_DIR - Override data directory\n\
-             #   PC_STORAGE_BACKEND - Storage backend: \"rocksdb\" or \"surrealdb\"\n\
-             #   PC_SURREALDB_ENDPOINT - SurrealDB WebSocket endpoint (e.g., \"ws://localhost:8000\")\n\
-             #   PC_SURREALDB_USER - SurrealDB username\n\
-             #   PC_SURREALDB_PASS - SurrealDB password\n\
-             #   PC_AUTH_TOKEN - Bearer token required by HTTP/gRPC clients\n\
-             #   PC_REDACT - \"0\" disables redaction of secrets/personal data\n\
-             #   PC_ALLOWED_HOSTS - Comma-separated extra allowed Host headers\n\
-             # \n\
-             # allowed_hosts: Host header values accepted on /mcp and /api/*\n\
-             # (DNS rebinding protection). localhost, 127.0.0.1, ::1 and a\n\
-             # non-wildcard `host` are always allowed; other requests get 403.\n\
-             # When binding to 0.0.0.0, list the names remote clients use:\n\
-             #   allowed_hosts = [\"my-mac.tailnet.ts.net\", \"100.64.0.7:3737\"]\n\
-             # Entries are host (any port) or host:port; [\"*\"] disables the check.\n\
-             # \n\
-             # Priority: Environment > Config file > Defaults\n\n\
-             {}",
-            toml_content
-        );
-
-        fs::write(&config_path, commented_toml)
-            .map_err(|e| format!("Failed to write config file: {}", e))?;
-
-        Ok(config_path)
     }
 
     /// Validate configuration values
@@ -394,11 +443,21 @@ impl DaemonConfig {
         }
 
         // Validate data directory is not empty
-        if self.data_directory.is_empty() {
+        if self.data_directory.as_os_str().is_empty() {
             return Err("Data directory cannot be empty".to_string());
         }
 
+        if self.max_import_bytes == 0 {
+            return Err("max_import_bytes cannot be 0".to_string());
+        }
+        self.browser_access()?;
+
+        self.storage_backend_type()?;
+
         crate::daemon::host_allowlist::HostPolicy::from_config(self)?;
+        if let Some(runner) = &self.runner {
+            runner.validate(&self.builtins)?;
+        }
 
         Ok(())
     }
@@ -414,131 +473,28 @@ fn parse_host_list(raw: &str) -> Vec<String> {
 }
 
 /// Get default config file path: ~/.post-cortex/daemon.toml
-fn default_config_path() -> PathBuf {
+fn default_config_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".post-cortex")
-        .join("daemon.toml")
 }
 
 /// Get default data directory: ~/.post-cortex/data
-fn default_data_dir() -> String {
+fn default_data_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".post-cortex/data")
-        .to_str()
-        .unwrap()
-        .to_string()
 }
+
+mod blobs;
+mod defaults;
+mod error;
+mod runner;
+mod sandbox;
+
+pub use error::ConfigError;
+pub use runner::RunnerConfig;
+pub use sandbox::{DynamicConfig, SandboxConfig};
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::env;
-
-    #[test]
-    fn test_default_config() {
-        let config = DaemonConfig::default();
-        assert_eq!(config.host, "127.0.0.1");
-        assert_eq!(config.port, 3737);
-        assert!(config.data_directory.contains(".post-cortex/data"));
-    }
-
-    #[test]
-    fn test_config_validation() {
-        let config = DaemonConfig::default();
-        assert!(config.validate().is_ok());
-
-        let invalid = DaemonConfig {
-            host: "".to_string(),
-            ..Default::default()
-        };
-        assert!(invalid.validate().is_err());
-
-        let invalid_port = DaemonConfig {
-            port: 0,
-            ..Default::default()
-        };
-        assert!(invalid_port.validate().is_err());
-    }
-
-    #[test]
-    fn test_env_override() {
-        // SAFETY: This test runs in isolation and only modifies env vars
-        // for the duration of the test. No other tests depend on these env vars.
-        #[allow(unsafe_code)]
-        unsafe {
-            env::set_var("PC_HOST", "0.0.0.0");
-            env::set_var("PC_PORT", "8080");
-            env::set_var("PC_DATA_DIR", "/tmp/test-data");
-        }
-
-        let config = DaemonConfig::load();
-
-        assert_eq!(config.host, "0.0.0.0");
-        assert_eq!(config.port, 8080);
-        assert_eq!(config.data_directory, "/tmp/test-data");
-
-        // SAFETY: Cleanup of env vars set above
-        #[allow(unsafe_code)]
-        unsafe {
-            env::remove_var("PC_HOST");
-            env::remove_var("PC_PORT");
-            env::remove_var("PC_DATA_DIR");
-        }
-    }
-
-    #[test]
-    fn test_host_list_parsing() {
-        assert_eq!(
-            parse_host_list(" a.example , b.example:3737,,"),
-            vec!["a.example", "b.example:3737"]
-        );
-        assert!(parse_host_list("").is_empty());
-    }
-
-    #[test]
-    fn test_allowed_hosts_toml() {
-        let parsed: DaemonConfig = toml::from_str(
-            "host = \"0.0.0.0\"\nport = 3737\ndata_directory = \"/d\"\n\
-             allowed_hosts = [\"my-mac.tailnet.ts.net\", \"100.64.0.7:3737\"]\n",
-        )
-        .unwrap();
-        assert_eq!(
-            parsed.allowed_hosts,
-            vec!["my-mac.tailnet.ts.net", "100.64.0.7:3737"]
-        );
-        assert!(parsed.validate().is_ok());
-
-        let invalid = DaemonConfig {
-            allowed_hosts: vec!["http://x".into()],
-            ..Default::default()
-        };
-        assert!(invalid.validate().is_err());
-    }
-
-    #[test]
-    fn test_partial_toml_keeps_defaults() {
-        let parsed: DaemonConfig =
-            toml::from_str("host = \"0.0.0.0\"\nallowed_hosts = [\"100.64.0.7\"]\n").unwrap();
-        let defaults = DaemonConfig::default();
-        assert_eq!(parsed.host, "0.0.0.0");
-        assert_eq!(parsed.allowed_hosts, vec!["100.64.0.7"]);
-        assert_eq!(parsed.port, defaults.port);
-        assert_eq!(parsed.grpc_port, defaults.grpc_port);
-        assert_eq!(parsed.data_directory, defaults.data_directory);
-        assert_eq!(parsed.storage_backend, defaults.storage_backend);
-        assert_eq!(parsed.redact, defaults.redact);
-    }
-
-    #[test]
-    fn test_toml_serialization() {
-        let config = DaemonConfig::default();
-        let toml_str = toml::to_string(&config).unwrap();
-        let parsed: DaemonConfig = toml::from_str(&toml_str).unwrap();
-
-        assert_eq!(config.host, parsed.host);
-        assert_eq!(config.port, parsed.port);
-        assert_eq!(config.data_directory, parsed.data_directory);
-    }
-}
+mod tests;

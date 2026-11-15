@@ -10,3 +10,8 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[env]
+# The Python binding is an extension module: CPython's symbols come from
+# the interpreter that loads it, never linked (bindings/python).
+PYO3_BUILD_EXTENSION_MODULE = "1"

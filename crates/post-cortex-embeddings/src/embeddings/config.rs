@@ -13,28 +13,16 @@
 //! Embedding-engine configuration and supported model types.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 /// Configuration for the embedding engine
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
     /// Model type for embeddings
     pub model_type: EmbeddingModelType,
-    /// Maximum batch size for processing
-    pub max_batch_size: usize,
-    /// Enable adaptive batch sizing
-    pub adaptive_batching: bool,
-    /// Memory pool size for vector reuse
-    pub memory_pool_size: usize,
-    /// Maximum concurrent operations
+    /// Batches running at once on the blocking pool (one semaphore for
+    /// every backend).
     pub max_concurrent_ops: usize,
-    /// Enable performance monitoring
-    pub enable_performance_monitoring: bool,
-    /// Model cache directory
-    pub cache_dir: PathBuf,
-    /// Enable model caching
-    pub enable_caching: bool,
-    /// Operation timeout in seconds
+    /// Longest a batch may wait for a slot and run, in seconds.
     pub operation_timeout_secs: u64,
 }
 
@@ -42,13 +30,7 @@ impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
             model_type: EmbeddingModelType::default(),
-            max_batch_size: 32,
-            adaptive_batching: true,
-            memory_pool_size: 1000,
-            max_concurrent_ops: num_cpus::get() * 2,
-            enable_performance_monitoring: true,
-            cache_dir: PathBuf::from("./models_cache"),
-            enable_caching: true,
+            max_concurrent_ops: num_cpus::get(),
             operation_timeout_secs: 30,
         }
     }
@@ -60,12 +42,8 @@ impl Default for EmbeddingConfig {
 /// on disk, ms-per-text inference, multilingual (Latin / Cyrillic / CJK / …).
 /// The BERT variants are kept for users who need transformer-grade semantic
 /// quality and are willing to pay the GPU/CPU cost.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 pub enum EmbeddingModelType {
-    /// Hash-based pseudo-embeddings — kept for backwards compatibility and
-    /// as a last-resort fallback. **Does not** produce semantically
-    /// meaningful vectors; only use when all real backends are disabled.
-    StaticSimilarityMRL,
     /// MiniLM model (balanced performance, English-only). Requires the
     /// `bert` feature.
     MiniLM,
@@ -87,6 +65,29 @@ pub enum EmbeddingModelType {
 }
 
 impl EmbeddingModelType {
+    /// Every model, in declaration order.
+    pub const ALL: [Self; 6] = [
+        Self::MiniLM,
+        Self::MultilingualMiniLM,
+        Self::TinyBERT,
+        Self::BGESmall,
+        Self::PotionMultilingual,
+        Self::PotionCode,
+    ];
+
+    /// The model's name in configuration (the variant name; also its serde
+    /// name). [`FromStr`](std::str::FromStr) inverts it.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::MiniLM => "MiniLM",
+            Self::MultilingualMiniLM => "MultilingualMiniLM",
+            Self::TinyBERT => "TinyBERT",
+            Self::BGESmall => "BGESmall",
+            Self::PotionMultilingual => "PotionMultilingual",
+            Self::PotionCode => "PotionCode",
+        }
+    }
+
     /// Get embedding dimension for this model type.
     ///
     /// The Potion dimensions are taken from each model's published
@@ -95,7 +96,6 @@ impl EmbeddingModelType {
     /// of truth for HNSW index sizing.
     pub fn embedding_dimension(&self) -> usize {
         match self {
-            Self::StaticSimilarityMRL => 1024,
             Self::MiniLM | Self::MultilingualMiniLM | Self::BGESmall => 384,
             Self::TinyBERT => 312,
             // potion-multilingual-128M outputs 256-dim vectors.
@@ -108,7 +108,7 @@ impl EmbeddingModelType {
     /// Get model ID for HuggingFace Hub.
     pub fn model_id(&self) -> &'static str {
         match self {
-            Self::StaticSimilarityMRL | Self::MiniLM => "sentence-transformers/all-MiniLM-L6-v2",
+            Self::MiniLM => "sentence-transformers/all-MiniLM-L6-v2",
             Self::MultilingualMiniLM => {
                 "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
             }
@@ -119,16 +119,51 @@ impl EmbeddingModelType {
         }
     }
 
-    /// Check if this is a BERT-based model (Candle transformer).
-    pub fn is_bert_based(&self) -> bool {
-        matches!(
-            self,
-            Self::MiniLM | Self::MultilingualMiniLM | Self::TinyBERT | Self::BGESmall
-        )
-    }
-
     /// Check if this is a Model2Vec static-embedding model.
     pub fn is_model2vec(&self) -> bool {
         matches!(self, Self::PotionMultilingual | Self::PotionCode)
+    }
+}
+
+impl std::fmt::Display for EmbeddingModelType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A name that is no embedding model.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "unknown embedding model {0:?} (expected one of MiniLM, MultilingualMiniLM, TinyBERT, BGESmall, PotionMultilingual, PotionCode)"
+)]
+pub struct UnknownModel(pub String);
+
+/// Strict inverse of [`EmbeddingModelType::as_str`]: no fallback.
+impl std::str::FromStr for EmbeddingModelType {
+    type Err = UnknownModel;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|m| m.as_str() == s)
+            .ok_or_else(|| UnknownModel(s.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_names_round_trip_and_unknown_names_fail() {
+        for model in EmbeddingModelType::ALL {
+            assert_eq!(model.as_str().parse::<EmbeddingModelType>(), Ok(model));
+            assert_eq!(
+                serde_json::to_value(model).unwrap(),
+                serde_json::Value::String(model.as_str().into())
+            );
+        }
+        assert!("potion".parse::<EmbeddingModelType>().is_err());
+        assert!("".parse::<EmbeddingModelType>().is_err());
     }
 }

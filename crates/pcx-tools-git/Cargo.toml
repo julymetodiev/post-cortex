@@ -1,0 +1,37 @@
+[package]
+name = "pcx-tools-git"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The pcx tools-git module: status, diff, log, branches and commits as the git program through a module's sandbox."
+keywords = ["pcx", "tools", "git", "sandbox"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-tools-git"
+
+[dependencies]
+pcx-module-api.workspace = true
+# Its package, pcx.tools.git.v1 (W23).
+post-cortex-proto.workspace = true
+tonic.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
+# The name of its configuration message (prost::Name).
+prost.workspace = true
+serde.workspace = true
+# The branches a push may send (push.branches).
+globset.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+pcx-host.workspace = true
+pcx-sandbox.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

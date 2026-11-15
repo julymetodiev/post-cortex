@@ -1,0 +1,27 @@
+## Post-Cortex memory
+
+Projects keep their long-term memory in post-cortex (MCP server `post-cortex`). The session and workspace of the current project are given at session start (`[PCX] Session: ... | Workspace: ...`).
+
+### Rules
+
+1. **Search before answering**: call `semantic_search` (scope `session`, then `workspace` with the workspace ID, then `global`) before answering any question about the code, the architecture or past decisions.
+2. **Log after discovery**: call `update_conversation_context` after making a decision, fixing a bug, changing code, adding a requirement or defining a concept, with that session ID.
+3. Every update needs at least one entity and one relation (both ends among the entities, no self-relations).
+4. When a new record corrects or replaces an older one (a check that turned out wrong, a reversed decision, a changed requirement, something removed), find the older record with `semantic_search` and pass its entry id (`content_id`) in `supersedes`.
+
+Interaction types: `qa`, `decision_made`, `problem_solved`, `code_change`, `requirement_added`, `concept_defined`.
+
+### Tools
+
+| Tool | When |
+|------|------|
+| `semantic_search` | Before answering: hybrid search over session / workspace / global; `mode` fast / local / accurate; `sources` records / messages / all |
+| `update_conversation_context` | After decisions, fixes, changes: typed content plus `entities` and `relations` (both required) |
+| `assemble_context` | Context for a task in one call: cards, entities named in the query, their neighbours and dependents, records |
+| `query_conversation_context` | Graph views: `entity`, `impact` (who depends on X), `lineage` (why X), `topics`, `radar`, `file` (past problems of a file) |
+| `get_structured_summary` | Catch up on a session: decisions, insights, entities, open questions |
+| `manage_workspace` | Workspaces; the project card and the user card (`get_card`, `update_card`) |
+| `manage_entity` | `merge` duplicate entities, `forget` a record that no longer holds, `purge` for erasure |
+| `session`, `admin` | Session management, health |
+
+No `[PCX] Session:` line at session start (the hooks run only where `pcx` is installed)? Get the project's session and workspace with the `session` tool, action `resolve_project` (see the `post-cortex-memory` skill), before the first search or update.

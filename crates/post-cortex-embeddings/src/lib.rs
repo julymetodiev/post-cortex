@@ -1,47 +1,39 @@
 // Copyright (c) 2025, 2026 Julius ML
 // Licensed under the MIT License. See LICENSE at the workspace root.
 
-//! Embedding engines + HNSW vector database for post-cortex.
+//! Embedding engines, rerankers and the in-memory vector index of
+//! post-cortex.
 //!
-//! This crate is self-contained: anyone needing a Candle-backed BERT
-//! embedder or an HNSW index for nearest-neighbour search can depend
-//! on it without pulling the post-cortex daemon, storage, or
-//! orchestrator. Implements [`EmbeddingBackend`] (BERT via Candle,
-//! static-hash fallback) and ships [`VectorDB`] (HNSW with optional
-//! product quantization).
+//! This crate is self-contained: anyone needing a Model2Vec or
+//! Candle-backed BERT embedder or an exact vector index can depend on it
+//! without pulling the post-cortex daemon, storage, or orchestrator.
+//! Implements [`EmbeddingBackend`] (Model2Vec, BERT via Candle) and ships
+//! [`VectorDB`] (a normalised vector arena with exact scans).
 //!
-//! Shared types — \[`post_cortex_embeddings::VectorMetadata`\]
-//! and friends — live in `post-cortex-core` so the storage trait API
-//! can reference them without depending on the ML stack.
+//! The types the vector ports speak (`VectorMetadata` and friends) and the
+//! [`Reranker`] port live in `post-cortex-ports`; this crate implements
+//! them.
 
 // SAFETY: candle's `from_mmaped_safetensors` needs an unsafe block at the
 // single call site (file mmap). The exemption is justified inline.
 #![deny(unsafe_code)]
-// VectorDB config + HNSW types have many tuning knobs — the
-// field-by-field default-then-mutate pattern in tests is intentional.
-#![allow(clippy::field_reassign_with_default)]
-// `vec!` in tests is fine for clarity vs an array literal — silenced.
-#![allow(clippy::useless_vec)]
-// HNSW core uses .iter().enumerate() to index parallel arrays; the
-// loop variable looks "unused" to the lint but is structurally needed.
-#![allow(clippy::needless_range_loop)]
-// We pin MSRV 1.85; some clippy suggestions point at stabilisations in
-// later releases (e.g. div_ceil since 1.73 / inline_const since 1.79).
-#![allow(clippy::incompatible_msrv)]
 
+mod blocking;
 pub mod embeddings;
 pub mod error;
+pub mod index;
 pub mod rerank;
-pub mod text;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 pub mod vector_db;
 
 pub use error::{Error, Result};
+pub use index::MemoryIndex;
 
-pub use rerank::Reranker;
+pub use post_cortex_ports::Reranker;
 
-pub use embeddings::{EmbeddingBackend, EmbeddingConfig, EmbeddingModelType, LocalEmbeddingEngine};
-pub use vector_db::{
-    Corpus, MESSAGE_CONTENT_TYPE, ProductQuantizationCodebook, SearchMatch, SearchMode,
-    SearchQualityPreset, StoredVector, VectorDB, VectorDbConfig, VectorDbStats,
-    VectorDbStatsSnapshot, VectorMetadata, cosine_similarity, cosine_with_norms, dot, l2_norm,
+pub use embeddings::{
+    EmbeddingBackend, EmbeddingConfig, EmbeddingModelType, LazyEmbeddingEngine,
+    LocalEmbeddingEngine,
 };
+pub use vector_db::{BulkInsert, VectorDB, cosine_similarity, dot, l2_norm, normalize_in_place};

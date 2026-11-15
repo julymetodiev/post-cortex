@@ -1,0 +1,26 @@
+{
+  "description": "Tells the Discord channel ${team_channel} each time the server's AutoMod acts: on whom, by which rule and what it did. What the member wrote is not repeated.",
+  "graph": {
+    "blocks": [
+      {
+        "id": "acted",
+        "trigger": { "event": { "name": "discord.automod_acted" } }
+      },
+      {
+        "id": "tell",
+        "retry": { "attempts": 3 },
+        "tool": {
+          "method": "/pcx.discord.v1.Discord/Post",
+          "request": {
+            "fields": {
+              "channel": { "constant": { "string": "${team_channel}" } },
+              "text": { "text": "AutoMod acted ({{ trigger.event.payload.action }}) on <@{{ trigger.event.payload.member_id }}> by rule {{ trigger.event.payload.rule_id }}{{ trigger.event.payload.channel == '' ? '' : ' in #' + trigger.event.payload.channel }}." }
+            }
+          }
+        }
+      }
+    ],
+    "edges": [{ "from": "acted", "to": "tell" }]
+  },
+  "grants": { "modules": ["discord"] }
+}

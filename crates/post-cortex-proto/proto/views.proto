@@ -1,0 +1,1027 @@
+syntax = "proto3";
+package pcx.views.v1;
+
+import "google/protobuf/timestamp.proto";
+import "pcx_blocks.proto";
+
+// The views an app shows over memory (the post-cortex app, self-hosted or
+// hosted): the knowledge graph as nodes and edges, the timeline, the record
+// browser, records in full with their validity and provenance, the
+// overview, the entity page, search with its ranking trace, topics, radar,
+// files and conversations. Agents use `pcx.v1` and MCP; this service is
+// typed for screens. Forgetting and purging records stay in `pcx.v1`.
+service Views {
+  // The most important entities of a scope and the relations between them,
+  // optionally as they stood at a point in time.
+  rpc GetGraph(GetGraphRequest) returns (Graph);
+  // Records written and ended, relations added and ended, in time order.
+  rpc GetTimeline(GetTimelineRequest) returns (Timeline);
+  // Records of the scope, newest first, filtered and paged.
+  rpc ListRecords(ListRecordsRequest) returns (RecordPage);
+  // One record with all its fields.
+  rpc GetRecord(GetRecordRequest) returns (Record);
+  // Several records by their ids, in one read; one forgotten is left out.
+  rpc GetRecords(GetRecordsRequest) returns (Records);
+  // Counts, last activity, top entities, recent decisions and what needs
+  // attention.
+  rpc GetOverview(GetOverviewRequest) returns (Overview);
+  // An entity with its relations, records, decisions, impact, lineage and
+  // files.
+  rpc GetEntity(GetEntityRequest) returns (EntityDetail);
+  // Hybrid search over records and messages, every hit with its ranking
+  // trace and its neighbours.
+  rpc Search(SearchRequest) returns (SearchResponse);
+  // Topic communities with central entities and key decisions.
+  rpc ListTopics(ListTopicsRequest) returns (Topics);
+  // Unsolved problems, decisions without rationale, open questions, stale
+  // entities and possible aliases.
+  rpc GetRadar(GetRadarRequest) returns (Radar);
+  // What the records say about a source file.
+  rpc GetFileView(GetFileViewRequest) returns (FileView);
+  // Files named by the records' code references, most recently touched
+  // first, paged.
+  rpc ListFiles(ListFilesRequest) returns (Files);
+  // Sessions of the scope with their captured message streams, most
+  // recently active first, paged.
+  rpc ListConversations(ListConversationsRequest) returns (Conversations);
+  // A page of one session's message stream, in order.
+  rpc GetConversation(GetConversationRequest) returns (Conversation);
+  // Records as they are stored: those written after `since` first, then
+  // each new one (and, with `changes`, forgets and removals), pushed from
+  // the memory instance's change log, not polled.
+  rpc WatchActivity(WatchActivityRequest) returns (stream ActivityEvent);
+}
+
+// What a view reads: one session, the sessions of a workspace with their
+// merged graph, or every session.
+message Scope {
+  // Exactly one is set.
+  oneof scope {
+    // One session.
+    string session_id = 1;
+    // The member sessions of a workspace.
+    string workspace_id = 2;
+    // Every session (must be true).
+    bool global = 3;
+  }
+}
+
+// ------------------------------------------------------------------- graph
+
+// GetGraph.
+message GetGraphRequest {
+  // What to read.
+  Scope scope = 1;
+  // Most nodes, most important first (default 100, at most 5000).
+  uint32 limit = 2;
+  // Show the graph as it stood then: entities first seen by then, relations
+  // asserted by then.
+  optional google.protobuf.Timestamp at = 3;
+}
+
+// An entity of the graph.
+message Node {
+  // Canonical name.
+  string name = 1;
+  // technology, concept, problem, solution, decision or code_component.
+  string entity_type = 2;
+  // Other names it was written under.
+  repeated string aliases = 3;
+  // What it is, when a record said so.
+  optional string description = 4;
+  // Centrality-based importance in (0, 1].
+  float importance = 5;
+  // Times records named it.
+  uint32 mention_count = 6;
+  // Records of the scope that mention it.
+  uint32 records = 7;
+  // The first record naming it.
+  google.protobuf.Timestamp first_seen = 8;
+  // The latest record naming it.
+  google.protobuf.Timestamp last_seen = 9;
+  // Topic community, if it shares one with other entities.
+  optional uint32 community = 10;
+  // Authors of the records that mention it, sorted.
+  repeated string authors = 11;
+  // Sessions holding the records that mention it, sorted.
+  repeated string session_ids = 12;
+}
+
+// A relation of the graph.
+message Edge {
+  // Source entity (canonical name).
+  string from = 1;
+  // Target entity (canonical name).
+  string to = 2;
+  // depends_on, solves, ...
+  string relation_type = 3;
+  // Why it exists (latest context written).
+  string context = 4;
+  // Strength of the relation type, in (0, 1].
+  float weight = 5;
+  // When the first record asserting it became valid.
+  optional google.protobuf.Timestamp valid_from = 6;
+  // When the last record asserting it stopped being valid; unset while one
+  // still holds.
+  optional google.protobuf.Timestamp valid_to = 7;
+  // Entry ids of the records asserting it, oldest first.
+  repeated string records = 8;
+  // Authors of the records asserting it, sorted.
+  repeated string authors = 9;
+  // Sessions holding the records asserting it, sorted.
+  repeated string session_ids = 10;
+}
+
+// The graph of a scope.
+message Graph {
+  // Most important first.
+  repeated Node nodes = 1;
+  // Relations between the nodes returned.
+  repeated Edge edges = 2;
+  // Entities in the scope (at `at`, if given).
+  uint32 total_nodes = 3;
+  // Relations in the scope (at `at`, if given).
+  uint32 total_edges = 4;
+  // The time asked for.
+  optional google.protobuf.Timestamp at = 5;
+}
+
+// ---------------------------------------------------------------- timeline
+
+// GetTimeline.
+message GetTimelineRequest {
+  // What to read.
+  Scope scope = 1;
+  // Start of the window (inclusive); unset: open.
+  optional google.protobuf.Timestamp from = 2;
+  // End of the window (inclusive); unset: open.
+  optional google.protobuf.Timestamp to = 3;
+  // Most events, the latest ones (default 100, at most 5000).
+  uint32 limit = 4;
+}
+
+// What a timeline event is.
+enum EventKind {
+  // Never sent.
+  EVENT_KIND_UNSPECIFIED = 0;
+  // A record was written.
+  RECORDED = 1;
+  // A record stopped being valid.
+  ENDED = 2;
+  // A relation was first asserted.
+  RELATION_ADDED = 3;
+  // The last record asserting a relation stopped being valid.
+  RELATION_ENDED = 4;
+}
+
+// Why a record stopped being valid.
+enum EndReason {
+  // It still holds (or the event is not an ending).
+  END_REASON_UNSPECIFIED = 0;
+  // A later record said it replaces this one.
+  SUPERSEDED = 1;
+  // A later record contradicts a relation this one asserted.
+  CONTRADICTED = 2;
+  // A later record states the same fact anew.
+  RESTATED = 3;
+  // A later record says the same thing.
+  DUPLICATE = 4;
+  // Retired with forget.
+  FORGOTTEN = 5;
+}
+
+// A relation by its ends and type.
+message RelationRef {
+  // Source entity (canonical name).
+  string from = 1;
+  // Target entity (canonical name).
+  string to = 2;
+  // depends_on, solves, ...
+  string relation_type = 3;
+}
+
+// One event of a timeline.
+message TimelineEvent {
+  // When.
+  google.protobuf.Timestamp at = 1;
+  // What.
+  EventKind kind = 2;
+  // The record written or ended, or the one asserting the relation.
+  string record = 3;
+  // Its session.
+  string session_id = 4;
+  // Its title.
+  string title = 5;
+  // decision_made, problem_solved, ...
+  string interaction_type = 6;
+  // For relation events.
+  optional RelationRef relation = 7;
+  // For ENDED and RELATION_ENDED: why.
+  EndReason reason = 8;
+}
+
+// The timeline of a scope.
+message Timeline {
+  // In time order.
+  repeated TimelineEvent events = 1;
+  // Events in the window, before the limit.
+  uint32 total = 2;
+}
+
+// ----------------------------------------------------------------- records
+
+// When a record held.
+message Validity {
+  // The writer's valid_from, else when it was written.
+  google.protobuf.Timestamp valid_from = 1;
+  // Unset while it holds.
+  optional google.protobuf.Timestamp valid_to = 2;
+  // Why it ended (unspecified while it holds).
+  EndReason reason = 3;
+  // The record that ended it (unset when forgotten or current).
+  optional string ended_by = 4;
+}
+
+// An entity a record names.
+message EntityRef {
+  // Canonical name.
+  string name = 1;
+  // Unset when the entity is not in the scope's graph.
+  optional string entity_type = 2;
+}
+
+// A relation as a record asserts it (canonical entity names).
+message RecordRelation {
+  // Source entity.
+  string from = 1;
+  // Target entity.
+  string to = 2;
+  // depends_on, solves, ...
+  string relation_type = 3;
+  // Why, as the record says.
+  string context = 4;
+}
+
+// The code a record points at.
+message CodeRef {
+  // Absolute or workspace-relative path.
+  string file_path = 1;
+  // First line (1-based); 0 for the whole file.
+  uint32 start_line = 2;
+  // Last line (inclusive); 0 for the whole file.
+  uint32 end_line = 3;
+  // Git commit, when known.
+  optional string commit = 4;
+  // Git branch, when known.
+  optional string branch = 5;
+  // What changed.
+  string change_description = 6;
+  // The code at that place.
+  string snippet = 7;
+}
+
+// One record (context update) with its provenance and validity.
+message Record {
+  // Entry id.
+  string id = 1;
+  // Its session.
+  string session_id = 2;
+  // Session display name, empty when unnamed.
+  string session_name = 3;
+  // decision_made, problem_solved, code_change, concept_defined, qa,
+  // requirement_added.
+  string interaction_type = 4;
+  // Title.
+  string title = 5;
+  // Description, whole.
+  string description = 6;
+  // Details.
+  repeated string details = 7;
+  // Examples.
+  repeated string examples = 8;
+  // Implications.
+  repeated string implications = 9;
+  // Who wrote it (agent, person); unset for records from before authorship.
+  optional string author = 10;
+  // When it was written.
+  google.protobuf.Timestamp created_at = 11;
+  // When it held.
+  Validity validity = 12;
+  // The writer's confidence in [0, 1], when stated.
+  optional float confidence = 13;
+  // Entities it names.
+  repeated EntityRef entities = 14;
+  // Relations it asserts.
+  repeated RecordRelation relations = 15;
+  // The code it points at.
+  optional CodeRef code = 16;
+  // Captured messages it was drawn from (message:<seq>).
+  repeated string derived_from = 17;
+  // Records the writer said it replaces.
+  repeated string supersedes = 18;
+  // Records whose validity it ended (the other direction of ended_by).
+  repeated string ended = 19;
+  // Marked important by the user.
+  bool important = 20;
+}
+
+// Records by whether they still hold.
+enum ValidityFilter {
+  // Both.
+  VALIDITY_ANY = 0;
+  // Only records that still hold.
+  VALIDITY_CURRENT = 1;
+  // Only records that ended.
+  VALIDITY_ENDED = 2;
+}
+
+// ListRecords.
+message ListRecordsRequest {
+  // What to read.
+  Scope scope = 1;
+  // Only these interaction types (none: all); an unknown one is refused.
+  repeated string interaction_types = 2;
+  // Only by this author.
+  optional string author = 3;
+  // Only records mentioning this entity (name or alias).
+  optional string entity = 4;
+  // Case-insensitive text in the title, description or details.
+  string text = 5;
+  // Current, ended or both.
+  ValidityFilter validity = 6;
+  // Written at or after this.
+  optional google.protobuf.Timestamp from = 7;
+  // Written at or before this.
+  optional google.protobuf.Timestamp to = 8;
+  // Page size (default 100, at most 5000).
+  uint32 limit = 9;
+  // next_cursor of the previous page; empty for the first.
+  string cursor = 10;
+  // Only this session of a workspace or global scope.
+  optional string session_id = 11;
+}
+
+// A page of records.
+message RecordPage {
+  // Newest first.
+  repeated Record records = 1;
+  // Records matching the filter, over all pages.
+  uint32 total = 2;
+  // Empty on the last page.
+  string next_cursor = 3;
+}
+
+// GetRecord.
+message GetRecordRequest {
+  // Where to look.
+  Scope scope = 1;
+  // Entry id.
+  string id = 2;
+}
+
+// GetRecords.
+message GetRecordsRequest {
+  // Where to look.
+  Scope scope = 1;
+  // Entry ids.
+  repeated string ids = 2;
+}
+
+// The records asked for, in the order asked.
+message Records {
+  // The records.
+  repeated Record records = 1;
+}
+
+// ---------------------------------------------------------------- overview
+
+// GetOverview.
+message GetOverviewRequest {
+  // What to read.
+  Scope scope = 1;
+  // Most important entities to return (default 30).
+  uint32 top_entities = 2;
+  // Recent records and decisions to return (default 10).
+  uint32 recent = 3;
+}
+
+// Records of one author.
+message AuthorCount {
+  // The author.
+  string author = 1;
+  // Their records.
+  uint32 records = 2;
+}
+
+// One session of a scope.
+message SessionStat {
+  // The session.
+  string session_id = 1;
+  // Its display name, empty when unnamed.
+  string name = 2;
+  // Its records.
+  uint32 records = 3;
+  // Its latest record.
+  optional google.protobuf.Timestamp last_record = 4;
+}
+
+// How many items each radar list has.
+message RadarSummary {
+  // Problems no record solves.
+  uint32 unsolved_problems = 1;
+  // Current decisions without a rationale.
+  uint32 decisions_without_rationale = 2;
+  // Questions still open.
+  uint32 open_questions = 3;
+  // Entities untouched for 90 days.
+  uint32 stale_entities = 4;
+  // Names that may be aliases of other entities.
+  uint32 alias_candidates = 5;
+}
+
+// The overview of a scope.
+message Overview {
+  // Records.
+  uint32 records = 1;
+  // Written in the last 24 hours.
+  uint32 records_day = 2;
+  // Written in the last 7 days.
+  uint32 records_week = 3;
+  // Records that still hold.
+  uint32 current_records = 4;
+  // Entities.
+  uint32 entities = 5;
+  // Relations.
+  uint32 relations = 6;
+  // Topic communities.
+  uint32 topics = 7;
+  // Captured messages over all sessions of the scope.
+  uint64 messages = 8;
+  // Sessions.
+  uint32 sessions = 9;
+  // Sessions with a record in the last 24 hours.
+  uint32 active_sessions = 10;
+  // Authors by records, most first.
+  repeated AuthorCount authors = 11;
+  // First record.
+  optional google.protobuf.Timestamp first_activity = 12;
+  // Latest record or message.
+  optional google.protobuf.Timestamp last_activity = 13;
+  // The most important entities.
+  repeated Node top_entities = 14;
+  // Current decisions, newest first.
+  repeated Record recent_decisions = 15;
+  // Newest records.
+  repeated Record recent_records = 16;
+  // How many items each radar list has.
+  RadarSummary radar = 17;
+  // Records waiting for an embedding.
+  uint32 embedding_queue = 18;
+  // Sessions, most recently written first.
+  repeated SessionStat session_stats = 19;
+}
+
+// ------------------------------------------------------------------ entity
+
+// GetEntity.
+message GetEntityRequest {
+  // Where to look.
+  Scope scope = 1;
+  // Name or alias.
+  string name = 2;
+  // Most records and decisions (default 100, at most 5000).
+  uint32 limit = 3;
+  // Hops of impact analysis (default 3, at most 10).
+  uint32 impact_depth = 4;
+  // Hops of the causal chain (default 3, at most 10).
+  uint32 lineage_depth = 5;
+}
+
+// Something that depends on an entity.
+message Dependent {
+  // The dependent entity.
+  string entity = 1;
+  // Its type, when it is in the graph.
+  optional string entity_type = 2;
+  // The entity it depends on (the previous hop).
+  string via = 3;
+  // The relation.
+  string relation_type = 4;
+  // Why, as the relation says.
+  string context = 5;
+  // Hops from the entity asked for (1 = direct).
+  uint32 depth = 6;
+}
+
+// What depends on an entity.
+message Impact {
+  // Canonical name.
+  string entity = 1;
+  // Hops followed.
+  uint32 depth = 2;
+  // Dependents, nearest first.
+  repeated Dependent dependents = 3;
+  // Current decisions, requirements and problems about it and its
+  // dependents, newest first.
+  repeated Record risks = 4;
+}
+
+// A record on an entity's causal chain.
+message LineageStep {
+  // The record.
+  Record record = 1;
+  // The causal relation the record asserts; unset for decisions about the
+  // entity itself.
+  optional RelationRef relation = 2;
+}
+
+// An entity's causal chain.
+message Lineage {
+  // Canonical name.
+  string entity = 1;
+  // Entities on the causal chain, the entity first.
+  repeated string chain = 2;
+  // In time order.
+  repeated LineageStep steps = 3;
+}
+
+// A file and the records pointing at it.
+message FileTouch {
+  // As the records name it.
+  string path = 1;
+  // Records pointing at it.
+  uint32 records = 2;
+  // Interaction type of the latest of them.
+  string last_interaction_type = 3;
+  // When the latest was written.
+  google.protobuf.Timestamp last_at = 4;
+}
+
+// An entity with everything the scope says about it.
+message EntityDetail {
+  // The entity.
+  Node entity = 1;
+  // Place by importance (1 = most important) among `ranked` entities.
+  uint32 rank = 2;
+  // Entities ranked.
+  uint32 ranked = 3;
+  // Entities in its topic (0 when it has none).
+  uint32 topic_size = 4;
+  // In and out, with validity.
+  repeated Edge relations = 5;
+  // Newest first.
+  repeated Record records = 6;
+  // Records mentioning it.
+  uint32 total_records = 7;
+  // Current first.
+  repeated Record decisions = 8;
+  // What depends on it.
+  Impact impact = 9;
+  // Its causal chain.
+  Lineage lineage = 10;
+  // Files of the records mentioning it, most recent first.
+  repeated FileTouch files = 11;
+}
+
+// ------------------------------------------------------------------ search
+
+// Ranking effort.
+enum SearchMode {
+  // The server's default.
+  SEARCH_MODE_UNSPECIFIED = 0;
+  // Vector and BM25 fused, no reranker.
+  SEARCH_MODE_FAST = 1;
+  // Plus the local cross-encoder.
+  SEARCH_MODE_LOCAL = 2;
+  // Plus the remote reranker when configured.
+  SEARCH_MODE_ACCURATE = 3;
+}
+
+// What to search.
+enum SearchSources {
+  // Records (the default).
+  SEARCH_SOURCES_UNSPECIFIED = 0;
+  // Records.
+  SEARCH_SOURCES_RECORDS = 1;
+  // Captured messages.
+  SEARCH_SOURCES_MESSAGES = 2;
+  // Both.
+  SEARCH_SOURCES_ALL = 3;
+}
+
+// Search.
+message SearchRequest {
+  // A session, a workspace, or global.
+  Scope scope = 1;
+  // What to look for.
+  string query = 2;
+  // Ranking effort.
+  SearchMode mode = 3;
+  // What to search.
+  SearchSources sources = 4;
+  // Only records and messages by this author.
+  optional string author = 5;
+  // Rank this author's records and messages a little higher.
+  optional string prefer_author = 6;
+  // Hits (default 10, at most 100).
+  uint32 limit = 7;
+  // Written at or after this.
+  optional google.protobuf.Timestamp from = 8;
+  // Written at or before this.
+  optional google.protobuf.Timestamp to = 9;
+  // Temporal decay (0 = off).
+  optional float recency_bias = 10;
+}
+
+// A record, a message or an entity description found by search.
+message SearchItem {
+  // Entry id, message:<seq>, or an entity description's id.
+  string content_id = 1;
+  // Its session.
+  string session_id = 2;
+  // DecisionPoint, ProblemSolution, Message, EntityDescription, ...
+  string content_type = 3;
+  // The text that was matched (the whole record or turn).
+  string text = 4;
+  // When it was written.
+  google.protobuf.Timestamp timestamp = 5;
+  // Who wrote it, when known.
+  optional string author = 6;
+  // What it is in full; unset for an entity description.
+  oneof source {
+    // A record.
+    Record record = 7;
+    // A captured turn.
+    Message message = 8;
+  }
+}
+
+// Why a hit ranked where it did: its place in each ranking (1 = first;
+// unset: not among that ranking's candidates) and the scores.
+message SearchTrace {
+  // Place in the vector ranking.
+  optional uint32 vector_rank = 1;
+  // Cosine similarity to the query.
+  optional float vector_similarity = 2;
+  // Place in the BM25 ranking.
+  optional uint32 bm25_rank = 3;
+  // Place in the graph ranking.
+  optional uint32 graph_rank = 4;
+  // Reciprocal rank fusion score, when more than one ranking had candidates.
+  optional float fused = 5;
+  // Reranker score, when the search was reranked.
+  optional float rerank = 6;
+}
+
+// One hit.
+message SearchHit {
+  // What was found.
+  SearchItem item = 1;
+  // Final score (similarity, importance, validity, trust, recency).
+  float score = 2;
+  // Similarity to the query.
+  float similarity = 3;
+  // Importance.
+  float importance = 4;
+  // Its place in each ranking.
+  SearchTrace trace = 5;
+  // Neighbours before it in its session or stream, in order.
+  repeated SearchItem before = 6;
+  // Neighbours after it, in order.
+  repeated SearchItem after = 7;
+  // Title of the record that ended this one, if one did.
+  optional string ended_by_title = 8;
+}
+
+// Search results.
+message SearchResponse {
+  // Best first.
+  repeated SearchHit hits = 1;
+  // Milliseconds the search took.
+  uint32 took_ms = 2;
+  // Neighbours per side the server returns.
+  uint32 neighbour_radius = 3;
+  // Whether a reranker ordered the hits: a local or accurate search is not
+  // reranked where the server has no reranker for it.
+  bool reranked = 4;
+}
+
+// ------------------------------------------------------------ topics, radar
+
+// ListTopics.
+message ListTopicsRequest {
+  // What to read.
+  Scope scope = 1;
+  // Most topics (default 100, at most 5000).
+  uint32 limit = 2;
+  // Central entities and key decisions per topic (default 5, at most 50).
+  uint32 per_topic = 3;
+}
+
+// A topic community.
+message Topic {
+  // Community id.
+  uint32 id = 1;
+  // Entities in it.
+  uint32 size = 2;
+  // Most important first.
+  repeated Node central = 3;
+  // Current decisions naming most of its entities.
+  repeated Record key_decisions = 4;
+  // Records mentioning it.
+  uint32 records = 5;
+  // First record mentioning it.
+  optional google.protobuf.Timestamp first = 6;
+  // Latest record mentioning it.
+  optional google.protobuf.Timestamp last = 7;
+}
+
+// The topics of a scope.
+message Topics {
+  // At most the limit.
+  repeated Topic topics = 1;
+  // Entities in no topic.
+  uint32 unclustered = 2;
+}
+
+// GetRadar.
+message GetRadarRequest {
+  // What to read.
+  Scope scope = 1;
+  // Most items per list (default 100, at most 5000), counted after the
+  // dismissed items are left out.
+  uint32 limit = 2;
+  // Keep the items dismissed in the workspace (`pcx.v1` DismissRadarItem);
+  // they are left out by default. Either way `Radar.dismissed` lists the
+  // dismissals that matched an item.
+  bool include_dismissed = 3;
+}
+
+// A radar item set aside (`pcx.v1` RadarDismissal).
+message RadarDismissal {
+  // unsolved_problem, decision_without_rationale, open_question,
+  // stale_entity or alias_candidate.
+  string kind = 1;
+  // Entity name, record id, question text or `<name>|<of>`.
+  string key = 2;
+  // When.
+  google.protobuf.Timestamp dismissed_at = 3;
+  // By whom, when known.
+  optional string author = 4;
+}
+
+// A name that may be another entity's alias.
+message AliasCandidate {
+  // The name.
+  string name = 1;
+  // The entity it may be.
+  string of = 2;
+  // Records naming both.
+  uint32 shared_records = 3;
+}
+
+// What needs attention.
+message Radar {
+  // Problems no record solves.
+  repeated Node unsolved_problems = 1;
+  // Current decisions without a rationale.
+  repeated Record decisions_without_rationale = 2;
+  // Questions still open.
+  repeated string open_questions = 3;
+  // Untouched for 90 days.
+  repeated Node stale_entities = 4;
+  // Names that may be aliases.
+  repeated AliasCandidate alias_candidates = 5;
+  // The dismissals that matched an item (of the workspace scoped, or of the
+  // workspaces a session scoped belongs to; none for the global scope), by
+  // kind and key.
+  repeated RadarDismissal dismissed = 6;
+}
+
+// ------------------------------------------------------------------- files
+
+// GetFileView.
+message GetFileViewRequest {
+  // Where to look.
+  Scope scope = 1;
+  // Absolute or repository-relative; matched by trailing components.
+  string path = 2;
+  // Hops of impact analysis (default 2, at most 10).
+  uint32 depth = 3;
+  // Most records per list (default 20, at most 5000).
+  uint32 limit = 4;
+}
+
+// What the records say about a file.
+message FileView {
+  // The path asked for.
+  string path = 1;
+  // Newest first.
+  repeated Record records = 2;
+  // Problems about it.
+  repeated Record problems = 3;
+  // Current decisions and requirements.
+  repeated Record decisions = 4;
+  // Entities naming the file.
+  repeated Node entities = 5;
+  // What depends on those entities.
+  repeated Dependent dependents = 6;
+}
+
+// ListFiles.
+message ListFilesRequest {
+  // What to read.
+  Scope scope = 1;
+  // Most files (default 100, at most 5000).
+  uint32 limit = 2;
+  // next_cursor of the previous page; empty for the first.
+  string cursor = 3;
+  // Only files whose path contains this, any case; every file when empty.
+  string text = 4;
+}
+
+// A page of a scope's files.
+message Files {
+  // Most recently touched first (then by path, descending).
+  repeated FileTouch files = 1;
+  // Files matching the text, over all pages.
+  uint32 total = 2;
+  // Where the next page starts; empty on the last.
+  string next_cursor = 3;
+}
+
+// ----------------------------------------------------------- conversations
+
+// One captured turn.
+message Message {
+  // Its session.
+  string session_id = 1;
+  // Position in the session's stream.
+  uint64 seq = 2;
+  // message:<seq>, as records' derived_from and search hits name it.
+  string content_id = 3;
+  // The client's id for the turn.
+  string turn_id = 4;
+  // user or assistant.
+  string role = 5;
+  // Who wrote it, when known.
+  optional string author = 6;
+  // When it happened.
+  google.protobuf.Timestamp timestamp = 7;
+  // The text, whole.
+  string text = 8;
+  // Tools the assistant used.
+  repeated string tools = 9;
+  // Files the turn read or changed.
+  repeated string files = 10;
+  // Records drawn from this turn.
+  repeated string records = 11;
+  // The client's own session id, when it sent one.
+  optional string source_session = 12;
+  // The turn whole, as an agent keeps it (W25: the app's chat shows its
+  // steps and its end); empty for a turn captured as text only.
+  repeated pcx.blocks.v1.ModelBlock blocks = 13;
+}
+
+// ListConversations.
+message ListConversationsRequest {
+  // What to read.
+  Scope scope = 1;
+  // Most streams (default 100, at most 5000).
+  uint32 limit = 2;
+  // next_cursor of the previous page; empty for the first.
+  string cursor = 3;
+  // Only an agent's conversations (W25): the streams whose newest messages
+  // it wrote in as this speaker (`agent`, `chief`, a team's member); each
+  // then says who asked, its first question and how it stands. Unset:
+  // every stream.
+  optional string speaker = 4;
+}
+
+// How an agent's conversation stands (W25).
+enum ConversationState {
+  // Not listed by a speaker, or no prompt in its newest messages.
+  CONVERSATION_STATE_UNSPECIFIED = 0;
+  // Its newest turn ended.
+  CONVERSATION_IDLE = 1;
+  // Its newest prompt has no end yet.
+  CONVERSATION_RUNNING = 2;
+  // Its newest turn ended failing.
+  CONVERSATION_FAILED = 3;
+}
+
+// One session's message stream.
+message ConversationSummary {
+  // The session.
+  string session_id = 1;
+  // Its display name, empty when unnamed.
+  string name = 2;
+  // Messages in the stream.
+  uint64 messages = 3;
+  // The first message's time.
+  optional google.protobuf.Timestamp first_at = 4;
+  // The latest message's time.
+  optional google.protobuf.Timestamp last_at = 5;
+  // Authors of its latest 500 messages (older turns are not scanned, so a
+  // long stream's early authors can be missing).
+  repeated string authors = 6;
+  // Records drawn from its messages.
+  uint32 derived_records = 7;
+  // Listed by a speaker (W25): who asked its first question; unset: not
+  // known.
+  optional string asker = 8;
+  // That first question; unset: none in its oldest messages.
+  optional string first_question = 9;
+  // Listed by a speaker: how it stands.
+  ConversationState state = 10;
+}
+
+// A page of a scope's streams.
+message Conversations {
+  // Sessions with messages, most recently active first (then by session,
+  // descending).
+  repeated ConversationSummary conversations = 1;
+  // Streams over all pages.
+  uint32 total = 2;
+  // Where the next page starts; empty on the last.
+  string next_cursor = 3;
+}
+
+// GetConversation.
+message GetConversationRequest {
+  // The session.
+  string session_id = 1;
+  // First seq to return (0: from the start of the stream).
+  uint64 cursor = 2;
+  // Most messages (default 100, at most 5000).
+  uint32 limit = 3;
+  // When set, the page of messages just before this seq instead (newest
+  // page: the largest uint64); `cursor` is then ignored. Still returned in
+  // stream order.
+  optional uint64 before = 4;
+}
+
+// A page of a stream.
+message Conversation {
+  // The session.
+  string session_id = 1;
+  // Its display name, empty when unnamed.
+  string name = 2;
+  // In stream order.
+  repeated Message messages = 3;
+  // cursor of the next page; unset on the last.
+  optional uint64 next_cursor = 4;
+  // `before` of the previous (older) page; unset on the first.
+  optional uint64 prev_cursor = 5;
+  // Messages the whole stream holds.
+  uint64 total = 6;
+}
+
+// ---------------------------------------------------------------- activity
+
+// WatchActivity.
+message WatchActivityRequest {
+  // What to watch.
+  Scope scope = 1;
+  // Also send the records written after this, first (unset: only records
+  // stored from the call on).
+  optional google.protobuf.Timestamp since = 2;
+  // Close the stream after the first event.
+  bool first_only = 3;
+  // Also send records forgotten (validity ended) and removed (deleted);
+  // without it only written records are sent.
+  bool changes = 4;
+  // Also send each message appended to the scope's sessions (W25): an
+  // agent's turn a person did not start, followed as it is written.
+  bool messages = 5;
+}
+
+// What happened to a record.
+enum ActivityKind {
+  // A record was written.
+  ACTIVITY_WRITTEN = 0;
+  // A record was forgotten: its validity ended, it stays in the history.
+  ACTIVITY_FORGOTTEN = 1;
+  // A record was deleted; `record` is unset.
+  ACTIVITY_REMOVED = 2;
+  // A message was appended (W25): `message` is set, `record` and
+  // `record_id` are not.
+  ACTIVITY_MESSAGE = 3;
+}
+
+// A record change.
+message ActivityEvent {
+  // The record as it is now; unset when removed.
+  Record record = 1;
+  // What happened.
+  ActivityKind kind = 2;
+  // The record.
+  string record_id = 3;
+  // Its session (empty for a removal found by a re-read of the scope).
+  string session_id = 4;
+  // When it happened: the record's time when written, its retirement when
+  // forgotten, the deletion when removed.
+  google.protobuf.Timestamp at = 5;
+  // The message appended, as stored (ACTIVITY_MESSAGE).
+  Message message = 6;
+}

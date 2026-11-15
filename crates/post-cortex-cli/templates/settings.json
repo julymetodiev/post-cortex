@@ -1,0 +1,73 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pcx-compact-reinject.py <SESSION_ID> <WORKSPACE_ID>"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pcx-card.py <WORKSPACE_ID> <BACKEND>"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|mcp__.*__(edit_symbols|insert_after|edit_lines|replace_text|write_file|edit|write)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pcx-file-context.py <WORKSPACE_ID> <BACKEND>"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|mcp__.*__(edit_symbols|insert_after|edit_lines|replace_text|write_file|edit|write)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pcx-stop-check.py --remind <SESSION_ID>"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pcx-stop-check.py <SESSION_ID>"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pcx-capture.py <SESSION_ID> <BACKEND>"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '[PCX] Session: <SESSION_ID> | Rules: 1) Search PCX before answering code/arch questions 2) Log discoveries to PCX after'"
+          }
+        ]
+      }
+    ]
+  }
+}

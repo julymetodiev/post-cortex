@@ -1,0 +1,754 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/JuliusDeGroot/post-cortex/main/schemas/export/v1.3.0.json",
+  "title": "Post-Cortex Export Format",
+  "description": "Schema for Post-Cortex data export files (v1.3.0) - Added cards and captured message streams",
+  "type": "object",
+  "required": [
+    "format_version",
+    "metadata",
+    "sessions",
+    "workspaces",
+    "checkpoints"
+  ],
+  "properties": {
+    "format_version": {
+      "type": "string",
+      "description": "Export format version",
+      "enum": [
+        "1.0.0",
+        "1.1.0",
+        "1.2.0",
+        "1.3.0"
+      ]
+    },
+    "schema": {
+      "type": "string",
+      "format": "uri",
+      "description": "URL to this schema for validation"
+    },
+    "metadata": {
+      "$ref": "#/definitions/ExportMetadata"
+    },
+    "sessions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ExportedSession"
+      }
+    },
+    "workspaces": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ExportedWorkspace"
+      }
+    },
+    "checkpoints": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/SessionCheckpoint"
+      }
+    },
+    "embeddings": {
+      "type": "array",
+      "description": "Exported embeddings for semantic search (v1.2.0+)",
+      "items": {
+        "$ref": "#/definitions/ExportedEmbedding"
+      }
+    },
+    "cards": {
+      "type": "array",
+      "description": "Every stored version of the exported cards, oldest first per card (v1.3.0+)",
+      "items": {
+        "$ref": "#/definitions/Card"
+      }
+    }
+  },
+  "definitions": {
+    "ExportMetadata": {
+      "type": "object",
+      "required": [
+        "exported_at",
+        "post_cortex_version",
+        "export_type",
+        "compression"
+      ],
+      "properties": {
+        "exported_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "post_cortex_version": {
+          "type": "string"
+        },
+        "export_type": {
+          "oneOf": [
+            {
+              "const": "full"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "selective_sessions": {
+                  "type": "object",
+                  "properties": {
+                    "session_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "format": "uuid"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "selective_workspace": {
+                  "type": "object",
+                  "properties": {
+                    "workspace_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "compression": {
+          "type": "string",
+          "enum": [
+            "none",
+            "gzip",
+            "zstd"
+          ]
+        },
+        "session_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "workspace_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "update_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "checkpoint_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "embedding_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "message_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "card_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "ExportedSession": {
+      "type": "object",
+      "required": [
+        "session",
+        "updates"
+      ],
+      "properties": {
+        "session": {
+          "$ref": "#/definitions/ActiveSession"
+        },
+        "updates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ContextUpdate"
+          }
+        },
+        "messages": {
+          "type": "array",
+          "description": "The session's captured message stream, by seq (v1.3.0+)",
+          "items": {
+            "$ref": "#/definitions/Message"
+          }
+        }
+      }
+    },
+    "ActiveSession": {
+      "type": "object",
+      "required": [
+        "id",
+        "created_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "last_updated": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "hot_context": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ContextUpdate"
+          }
+        },
+        "entity_graph": {
+          "$ref": "#/definitions/EntityGraph"
+        }
+      }
+    },
+    "ContextUpdate": {
+      "type": "object",
+      "required": [
+        "id",
+        "timestamp",
+        "update_type",
+        "content"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "update_type": {
+          "type": "string",
+          "enum": [
+            "QuestionAnswered",
+            "ProblemSolved",
+            "CodeChanged",
+            "DecisionMade",
+            "ConceptDefined",
+            "RequirementAdded"
+          ]
+        },
+        "content": {
+          "$ref": "#/definitions/UpdateContent"
+        },
+        "related_code": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/definitions/CodeReference"
+            }
+          ]
+        },
+        "parent_update": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "user_marked_important": {
+          "type": "boolean"
+        },
+        "creates_entities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "creates_relationships": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EntityRelationship"
+          }
+        },
+        "references_entities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "UpdateContent": {
+      "type": "object",
+      "required": [
+        "title",
+        "description"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "examples": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "implications": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "CodeReference": {
+      "type": "object",
+      "required": [
+        "file_path",
+        "start_line",
+        "end_line",
+        "code_snippet",
+        "change_description"
+      ],
+      "properties": {
+        "file_path": {
+          "type": "string"
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_line": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "code_snippet": {
+          "type": "string"
+        },
+        "commit_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "change_description": {
+          "type": "string"
+        }
+      }
+    },
+    "EntityGraph": {
+      "type": "object",
+      "properties": {
+        "entities": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/EntityData"
+          }
+        },
+        "edges": {
+          "description": "Graph edges - v1.0.0: RelationType string, v1.1.0+: EdgeData object",
+          "type": "array"
+        }
+      }
+    },
+    "EntityData": {
+      "type": "object",
+      "required": [
+        "name",
+        "entity_type",
+        "first_mentioned",
+        "last_mentioned",
+        "mention_count",
+        "importance_score"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "entity_type": {
+          "type": "string",
+          "enum": [
+            "Technology",
+            "Concept",
+            "Problem",
+            "Solution",
+            "Decision",
+            "CodeComponent"
+          ]
+        },
+        "first_mentioned": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "last_mentioned": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "mention_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "importance_score": {
+          "type": "number"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "EntityRelationship": {
+      "type": "object",
+      "required": [
+        "from_entity",
+        "to_entity",
+        "relation_type",
+        "context"
+      ],
+      "properties": {
+        "from_entity": {
+          "type": "string"
+        },
+        "to_entity": {
+          "type": "string"
+        },
+        "relation_type": {
+          "type": "string",
+          "enum": [
+            "RequiredBy",
+            "LeadsTo",
+            "RelatedTo",
+            "ConflictsWith",
+            "DependsOn",
+            "Implements",
+            "CausedBy",
+            "Solves"
+          ]
+        },
+        "context": {
+          "type": "string"
+        }
+      }
+    },
+    "EdgeData": {
+      "description": "v1.1.0+ edge format with relation type and context",
+      "type": "object",
+      "required": [
+        "relation_type"
+      ],
+      "properties": {
+        "relation_type": {
+          "type": "string",
+          "enum": [
+            "RequiredBy",
+            "LeadsTo",
+            "RelatedTo",
+            "ConflictsWith",
+            "DependsOn",
+            "Implements",
+            "CausedBy",
+            "Solves"
+          ]
+        },
+        "context": {
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
+    "ExportedWorkspace": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "description",
+        "sessions",
+        "created_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Primary",
+                  "Related",
+                  "Dependency",
+                  "Shared"
+                ]
+              }
+            ]
+          }
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "SessionCheckpoint": {
+      "type": "object",
+      "required": [
+        "id",
+        "session_id",
+        "created_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "session_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "structured_context": {
+          "type": "object"
+        },
+        "recent_updates": {
+          "type": "array"
+        },
+        "code_references": {
+          "type": "object"
+        },
+        "change_history": {
+          "type": "array"
+        },
+        "total_updates": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "context_quality_score": {
+          "type": "number"
+        },
+        "compression_ratio": {
+          "type": "number"
+        }
+      }
+    },
+    "ExportedEmbedding": {
+      "type": "object",
+      "description": "Embedding vector for semantic search (v1.2.0+)",
+      "required": [
+        "content_id",
+        "session_id",
+        "vector",
+        "text",
+        "content_type",
+        "timestamp"
+      ],
+      "properties": {
+        "content_id": {
+          "type": "string",
+          "description": "Unique identifier for the embedded content"
+        },
+        "session_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Session this embedding belongs to"
+        },
+        "vector": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "Embedding vector (384 dimensions for MiniLM)"
+        },
+        "text": {
+          "type": "string",
+          "description": "Original text that was embedded"
+        },
+        "content_type": {
+          "type": "string",
+          "description": "Type of content (e.g., 'context_update', 'entity')"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When this embedding was created"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Additional metadata for the embedding"
+        }
+      }
+    },
+    "Message": {
+      "type": "object",
+      "description": "A captured conversation turn (v1.3.0+)",
+      "required": [
+        "session_id",
+        "seq",
+        "turn_id",
+        "role",
+        "timestamp",
+        "text",
+        "tools",
+        "files"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Position in the session's stream"
+        },
+        "turn_id": {
+          "type": "string",
+          "description": "The client's id for the turn; imports skip turns already stored"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "user",
+            "assistant"
+          ]
+        },
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "text": {
+          "type": "string"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "Card": {
+      "type": "object",
+      "description": "One version of a card (v1.3.0+)",
+      "required": [
+        "scope",
+        "version",
+        "text",
+        "updated_at"
+      ],
+      "properties": {
+        "scope": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": [
+                "user"
+              ]
+            },
+            {
+              "type": "object",
+              "required": [
+                "workspace"
+              ],
+              "properties": {
+                "workspace": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "text": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

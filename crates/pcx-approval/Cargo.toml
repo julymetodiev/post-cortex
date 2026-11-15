@@ -1,0 +1,21 @@
+[package]
+name = "pcx-approval"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Asking a person on the board to approve a module's code or grants, the one place that does; shared by workflow and dynamic."
+publish = false
+
+[dependencies]
+post-cortex-proto.workspace = true
+prost.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+pbjson-types.workspace = true
+
+[lints]
+workspace = true

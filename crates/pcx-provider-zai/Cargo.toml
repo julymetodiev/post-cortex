@@ -1,0 +1,24 @@
+[package]
+name = "pcx-provider-zai"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The Z.AI model provider of pcx: GLM models over Z.AI's coding endpoint."
+keywords = ["pcx", "llm", "zai", "glm"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-provider-zai"
+
+[dependencies]
+pcx-module-api.workspace = true
+pcx-openai-compat.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tokio-util.workspace = true
+
+[lints]
+workspace = true

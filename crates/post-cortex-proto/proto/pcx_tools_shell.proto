@@ -1,0 +1,157 @@
+syntax = "proto3";
+package pcx.tools.shell.v1;
+
+import "pcx_module.proto";
+
+// Commands in the sandbox: a bash command run to its end, and long-running
+// commands in tmux sessions.
+service Shell {
+  // Run a bash command in the sandbox and answer the end of its output
+  // (stdout, then stderr) and how it ended. For a command that runs long
+  // or forever (a server, a watcher), use TmuxStart.
+  rpc Bash(BashRequest) returns (BashResponse);
+  // Start a long-running command in a new tmux session of the sandbox;
+  // read its output with TmuxRead.
+  rpc TmuxStart(TmuxStartRequest) returns (TmuxSession);
+  // Read the last lines of a tmux session's pane, and whether its command
+  // has ended.
+  rpc TmuxRead(TmuxReadRequest) returns (TmuxReadResponse);
+  // Type text into a tmux session, then Enter unless enter is false.
+  rpc TmuxSend(TmuxSendRequest) returns (TmuxSession);
+  // List the module's tmux sessions and whether each command has ended.
+  rpc TmuxList(TmuxListRequest) returns (TmuxSessions);
+  // End a tmux session and its command.
+  rpc TmuxKill(TmuxKillRequest) returns (TmuxSession);
+}
+
+// Where a command starts.
+message Cwd {
+  // Working directory, relative to the root or absolute under a root;
+  // empty: the root.
+  string cwd = 1;
+  // The root cwd is relative to (one of the module's roots); empty: the
+  // first root.
+  string root = 2;
+}
+
+// Run a bash command.
+message BashRequest {
+  // The command.
+  string command = 1;
+  // Where it starts.
+  Cwd at = 2;
+  // Seconds before it is killed, 1 to 600; 0: 120.
+  uint32 timeout = 3;
+}
+
+// How a command ended.
+message Exit {
+  // Exactly one is set.
+  oneof how {
+    // It exited with this code.
+    int32 code = 1;
+    // A signal ended it.
+    bool signal = 2;
+    // It ran past its timeout and was killed.
+    bool timed_out = 3;
+    // The call was cancelled.
+    bool cancelled = 4;
+  }
+}
+
+// What a command printed and how it ended.
+message BashResponse {
+  // The end of its output, stdout then stderr.
+  string output = 1;
+  // Whether output is only its end.
+  bool truncated = 2;
+  // Its lines in all.
+  uint64 lines = 3;
+  // How it ended.
+  Exit exit = 4;
+}
+
+// Start a tmux session.
+message TmuxStartRequest {
+  // The command.
+  string command = 1;
+  // Where it starts.
+  Cwd at = 2;
+}
+
+// A tmux session.
+message TmuxSession {
+  // Its name.
+  string session = 1;
+}
+
+// Read a tmux session's pane.
+message TmuxReadRequest {
+  // The session, as TmuxStart or TmuxList names it.
+  string session = 1;
+  // Lines from the end, 1 to 2000; 0: 100.
+  uint32 lines = 2;
+}
+
+// The end of a pane.
+message TmuxReadResponse {
+  // The session.
+  string session = 1;
+  // Its last lines.
+  string pane = 2;
+  // Whether its command has ended.
+  bool exited = 3;
+}
+
+// Type into a tmux session.
+message TmuxSendRequest {
+  // The session.
+  string session = 1;
+  // What to type.
+  string text = 2;
+  // Press Enter after it; unset: true.
+  optional bool enter = 3;
+}
+
+// The module's tmux sessions.
+message TmuxListRequest {}
+
+// A tmux session and its command.
+message TmuxEntry {
+  // Its name.
+  string session = 1;
+  // Its command.
+  string command = 2;
+  // Whether its command has ended.
+  bool exited = 3;
+}
+
+// The module's tmux sessions.
+message TmuxSessions {
+  // The sessions.
+  repeated TmuxEntry sessions = 1;
+}
+
+// End a tmux session.
+message TmuxKillRequest {
+  // The session.
+  string session = 1;
+}
+
+// The shell tools' settings.
+message ShellConfig {
+  // PATH of the commands it runs; empty: the standard system directories.
+  string path = 1 [(pcx.module.v1.setting) = { title: "PATH" }];
+  // Other variables its commands get, a toolchain's (CARGO_HOME,
+  // RUSTUP_HOME, LIBCLANG_PATH, PROTOC); not PATH, TERM or LANG (the
+  // module's) nor HOME, TMPDIR or TMUX_TMPDIR (the sandbox's).
+  repeated Variable env = 2 [(pcx.module.v1.setting) = { title: "Environment" }];
+}
+
+// A variable of a command's environment.
+message Variable {
+  // Its name.
+  string name = 1 [(pcx.module.v1.setting) = { title: "Name", required: true }];
+  // Its value.
+  string value = 2 [(pcx.module.v1.setting) = { title: "Value" }];
+}

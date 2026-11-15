@@ -12,29 +12,21 @@
 
 //! Pluggable embedding backend trait.
 //!
-//! [`LocalEmbeddingEngine`](super::engine::LocalEmbeddingEngine) wraps any
-//! `EmbeddingBackend` and adds adaptive batching, concurrency control, timeouts,
-//! and performance tracking around the backend's raw `process_batch` call.
-//!
-//! Drop-in replacements (e.g. `model2vec-rs` static embeddings) implement this
-//! trait and become available to all callers without touching the engine.
+//! A backend is plain synchronous CPU work. [`LocalEmbeddingEngine`](crate::embeddings::engine::LocalEmbeddingEngine)
+//! alone decides where and when it runs: on the blocking pool, behind one
+//! semaphore, within a deadline, in batches of [`EmbeddingBackend::batch_size`].
 
-use anyhow::Result;
-use async_trait::async_trait;
+use crate::error::Result;
 
 /// A backend capable of producing embedding vectors for a batch of texts.
-#[async_trait]
 pub trait EmbeddingBackend: Send + Sync {
     /// Dimension of the produced embedding vectors.
     fn embedding_dimension(&self) -> usize;
 
-    /// Whether this backend runs a BERT-style model. BERT backends are routed
-    /// through the engine's concurrency controller, timeout, and adaptive
-    /// batching machinery; non-BERT backends are invoked directly.
-    fn is_bert_based(&self) -> bool;
+    /// Texts per [`Self::embed`] call: the engine slices longer inputs.
+    fn batch_size(&self) -> usize;
 
-    /// Process a batch of texts and return one embedding vector per text.
-    /// The engine slices large inputs into chunks no larger than the engine's
-    /// `current_batch_size` before calling this method.
-    async fn process_batch(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>>;
+    /// One embedding vector per text, in input order. Blocks the calling
+    /// thread for the whole batch.
+    fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
 }

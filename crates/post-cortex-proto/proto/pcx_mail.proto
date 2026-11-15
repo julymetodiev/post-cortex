@@ -1,0 +1,372 @@
+syntax = "proto3";
+package pcx.mail.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "pcx_module.proto";
+
+// Mail with the organisation's own credentials (docs/modules/mail.md):
+// sent through SMTP, Resend or Postmark, each send kept in its log.
+service Mail {
+  // Send a message: its subject and bodies. Answers its log entry; a
+  // recipient outside `allow` or a send past `daily_limit` is refused and
+  // logged; a send the transport fails is logged and fails.
+  rpc Send(SendRequest) returns (SentRecord);
+  // Send a fixed message to one address with the current settings.
+  rpc Test(TestRequest) returns (SentRecord);
+  // The log, the newest first, a page at a time.
+  rpc ListLog(ListLogRequest) returns (LogPage);
+  // The templates, by name.
+  rpc ListTemplates(ListTemplatesRequest) returns (TemplateList);
+  // One template, by name.
+  rpc GetTemplate(GetTemplateRequest) returns (TemplateRecord);
+  // Add a template, or change one from the version read, once its
+  // expressions check against its inputs.
+  rpc SaveTemplate(SaveTemplateRequest) returns (TemplateRecord);
+  // A template filled with its inputs' examples or the values given;
+  // nothing is sent.
+  rpc PreviewTemplate(PreviewTemplateRequest) returns (Filled);
+}
+
+// ------------------------------------------------------------- settings
+
+// The mail module's settings.
+message MailConfig {
+  // The workspace its log is kept in.
+  string workspace_id = 1 [(pcx.module.v1.setting) = { title: "Workspace", required: true, workspace: true }];
+  // Who the mail is from.
+  Mailbox from = 2 [(pcx.module.v1.setting) = { title: "From", required: true }];
+  // Where answers go; empty: to `from`.
+  string reply_to = 3 [(pcx.module.v1.setting) = { title: "Reply to", pattern: "[^@\\s<>,;]+@[^@\\s<>,;]+\\.[^@\\s<>,;]+", example: "team@example.com" }];
+  // How it sends: its settings are the field of the same name.
+  Transport transport = 4 [(pcx.module.v1.setting) = { title: "Transport", required: true }];
+  // An SMTP relay (SES through its SMTP interface too).
+  Smtp smtp = 5 [(pcx.module.v1.setting) = { title: "SMTP" }];
+  // Resend's API.
+  Resend resend = 6 [(pcx.module.v1.setting) = { title: "Resend" }];
+  // Postmark's API.
+  Postmark postmark = 7 [(pcx.module.v1.setting) = { title: "Postmark" }];
+  // The recipients it may send to, each an address or `@domain`; empty:
+  // any.
+  repeated string allow = 8 [(pcx.module.v1.setting) = { title: "Allowed recipients" }];
+  // Messages a day (UTC), at most 10,000; 0: 200.
+  uint32 daily_limit = 9 [(pcx.module.v1.setting) = { title: "Messages a day" }];
+}
+
+// An address with a name.
+message Mailbox {
+  // The address.
+  string address = 1 [(pcx.module.v1.setting) = { title: "Address", required: true, pattern: "[^@\\s<>,;]+@[^@\\s<>,;]+\\.[^@\\s<>,;]+", example: "team@example.com" }];
+  // The name shown with it; empty: none.
+  string name = 2 [(pcx.module.v1.setting) = { title: "Name" }];
+}
+
+// How the module sends.
+enum Transport {
+  // None chosen: refused.
+  TRANSPORT_UNSPECIFIED = 0;
+  // An SMTP relay.
+  TRANSPORT_SMTP = 1;
+  // Resend.
+  TRANSPORT_RESEND = 2;
+  // Postmark.
+  TRANSPORT_POSTMARK = 3;
+}
+
+// An SMTP relay.
+message Smtp {
+  // Its host.
+  string host = 1 [(pcx.module.v1.setting) = { title: "Host", required: true }];
+  // Its port; 0: 587 with STARTTLS, 465 with TLS, 25 without.
+  uint32 port = 2 [(pcx.module.v1.setting) = { title: "Port" }];
+  // How the connection is secured.
+  Security security = 3 [(pcx.module.v1.setting) = { title: "Security" }];
+  // The user it signs in as; empty: none.
+  string user = 4 [(pcx.module.v1.setting) = { title: "User" }];
+  // The user's password.
+  string password = 5 [(pcx.module.v1.setting) = { title: "Password", secret: true }];
+}
+
+// How an SMTP connection is secured.
+enum Security {
+  // STARTTLS, as SECURITY_STARTTLS.
+  SECURITY_UNSPECIFIED = 0;
+  // A plain connection upgraded with STARTTLS, which must succeed.
+  SECURITY_STARTTLS = 1;
+  // TLS from the start.
+  SECURITY_TLS = 2;
+  // None: only to a loopback host.
+  SECURITY_NONE = 3;
+}
+
+// Resend's API.
+message Resend {
+  // The API key.
+  string api_key = 1 [(pcx.module.v1.setting) = { title: "API key", required: true, secret: true }];
+  // The API's URL; empty: https://api.resend.com.
+  string api_url = 2 [(pcx.module.v1.setting) = { title: "API URL", pattern: "https?://\\S+", example: "https://api.resend.com" }];
+}
+
+// Postmark's API.
+message Postmark {
+  // The server's token.
+  string server_token = 1 [(pcx.module.v1.setting) = { title: "Server token", required: true, secret: true }];
+  // The message stream; empty: outbound.
+  string message_stream = 2 [(pcx.module.v1.setting) = { title: "Message stream" }];
+  // The API's URL; empty: https://api.postmarkapp.com.
+  string api_url = 3 [(pcx.module.v1.setting) = { title: "API URL", pattern: "https?://\\S+", example: "https://api.postmarkapp.com" }];
+}
+
+// ------------------------------------------------------------ the calls
+
+// A message to send: a template with its values, or a subject and
+// bodies.
+message SendRequest {
+  // Its recipients: at least one in `to`, at most 50 in all.
+  repeated string to = 1;
+  // Its copies.
+  repeated string cc = 2;
+  // Its hidden copies.
+  repeated string bcc = 3;
+  // Its subject: one line of at most 998 characters; empty with a
+  // template.
+  string subject = 4;
+  // Its text body, at most 1 MiB; empty with a template.
+  string text = 5;
+  // Its HTML body, at most 1 MiB; empty: text only.
+  string html = 6;
+  // The template it is made from, by name; empty: none.
+  string template = 7;
+  // The values of the template's inputs, by name.
+  google.protobuf.Struct values = 8;
+}
+
+// A test message's recipient.
+message TestRequest {
+  // The address it goes to.
+  string to = 1;
+}
+
+// A page of the log.
+message ListLogRequest {
+  // Entries at most; 0: 50, at most 200.
+  uint32 limit = 1;
+  // The entries older than this one, by id; empty: the newest.
+  string before = 2;
+  // Only those to this address (to, cc or bcc); empty: any.
+  string recipient = 3;
+  // Only those made from this template; empty: any.
+  string template = 4;
+}
+
+// The templates.
+message ListTemplatesRequest {}
+
+// The templates, by name.
+message TemplateList {
+  // The templates.
+  repeated TemplateRecord templates = 1;
+}
+
+// A template by name.
+message GetTemplateRequest {
+  // Its name.
+  string name = 1;
+}
+
+// A template to add (no id) or change (its id and the version read).
+message SaveTemplateRequest {
+  // The template's id; empty: a new one.
+  string id = 1;
+  // The version read; 0 with a new one.
+  uint64 version = 2;
+  // The template.
+  Template template = 3;
+}
+
+// A template to fill: one saved, by name, or one as it is being edited.
+message PreviewTemplateRequest {
+  // A saved template's name; empty: `template`.
+  string name = 1;
+  // A template not saved.
+  Template template = 2;
+  // The values of its inputs; none: their examples.
+  google.protobuf.Struct values = 3;
+}
+
+// A template filled.
+message Filled {
+  // The subject.
+  string subject = 1;
+  // The HTML body; empty: none.
+  string html = 2;
+  // The text body.
+  string text = 3;
+}
+
+// A template with its id and version.
+message TemplateRecord {
+  // The document's id.
+  string id = 1;
+  // Its version.
+  uint64 version = 2;
+  // The template.
+  Template template = 3;
+}
+
+// Entries of the log, the newest first.
+message LogPage {
+  // The entries.
+  repeated SentRecord entries = 1;
+  // Whether older entries follow the last.
+  bool more = 2;
+}
+
+// An entry of the log with its id.
+message SentRecord {
+  // The document's id.
+  string id = 1;
+  // The entry.
+  Sent sent = 2;
+}
+
+// ------------------------------------------------------------ documents
+
+// A send (document mail/sent, titled by its subject, not searchable). The
+// bodies are not kept.
+message Sent {
+  // Its subject.
+  string subject = 1;
+  // When it was asked.
+  google.protobuf.Timestamp at = 2;
+  // Its day in UTC, YYYY-MM-DD: what the daily limit counts.
+  string day = 3;
+  // Who asked (the call's author); empty: no author.
+  string author = 4;
+  // Its recipients.
+  repeated string to = 5;
+  // Its copies.
+  repeated string cc = 6;
+  // Its hidden copies.
+  repeated string bcc = 7;
+  // How it ended.
+  Outcome outcome = 8;
+  // The transport's id of the message, when sent.
+  string message_id = 9;
+  // Why it was refused or failed.
+  string error = 10;
+  // Whether it was a test message.
+  bool test = 11;
+  // The template it was made from; empty: none.
+  string template = 12;
+}
+
+// A template (document mail/template, titled by its name): a subject and
+// bodies of text and `{{ <CEL> }}` parts over the inputs it declares
+// (docs/modules/mail.md, templates).
+message Template {
+  // Its name: 1 to 64 of a-z, 0-9, '-', unique.
+  string name = 1;
+  // What it is for.
+  string description = 2;
+  // The values it takes.
+  repeated Input inputs = 3;
+  // Its subject: one line once filled.
+  string subject = 4;
+  // Its HTML body; empty: text only. Its values are HTML-escaped.
+  string html = 5;
+  // Its text body.
+  string text = 6;
+}
+
+// A value a template takes.
+message Input {
+  // Its name in the expressions: a lowercase letter or _, then letters,
+  // digits and _.
+  string name = 1;
+  // Its type as CEL writes it: string, int, double, bool, timestamp,
+  // list<T>, map<string, T>.
+  string type = 2;
+  // A value of it, which a preview and a test fill the template with.
+  google.protobuf.Value example = 3;
+  // What it is.
+  string description = 4;
+}
+
+// How a send ended.
+enum Outcome {
+  // Not set: refused when read.
+  OUTCOME_UNSPECIFIED = 0;
+  // The transport took it.
+  OUTCOME_SENT = 1;
+  // The module refused it (a recipient not allowed, the daily limit).
+  OUTCOME_REFUSED = 2;
+  // The transport failed.
+  OUTCOME_FAILED = 3;
+}
+
+// ------------------------------------- the providers' JSON, mirrored
+// Their fields as each API names them, encoded and decoded by the proto3
+// JSON mapping (unknown fields skipped).
+
+// Resend's POST /emails.
+message ResendEmail {
+  // `Name <address>` or the address.
+  string from = 1;
+  // The recipients.
+  repeated string to = 2;
+  // The copies.
+  repeated string cc = 3;
+  // The hidden copies.
+  repeated string bcc = 4;
+  // Where answers go; empty: from.
+  string reply_to = 5 [json_name = "reply_to"];
+  // The subject.
+  string subject = 6;
+  // The text body.
+  string text = 7;
+  // The HTML body; empty: none.
+  string html = 8;
+}
+
+// Resend's answer: the message's id, or why not.
+message ResendAnswer {
+  // The message's id, when sent.
+  string id = 1;
+  // The error's name (`validation_error`), when not.
+  string name = 2;
+  // Why not.
+  string message = 3;
+}
+
+// Postmark's POST /email.
+message PostmarkEmail {
+  // `Name <address>` or the address.
+  string from = 1 [json_name = "From"];
+  // The recipients, comma separated, as all of Postmark's lists.
+  string to = 2 [json_name = "To"];
+  // The copies.
+  string cc = 3 [json_name = "Cc"];
+  // The hidden copies.
+  string bcc = 4 [json_name = "Bcc"];
+  // Where answers go; empty: from.
+  string reply_to = 5 [json_name = "ReplyTo"];
+  // The subject.
+  string subject = 6 [json_name = "Subject"];
+  // The text body.
+  string text_body = 7 [json_name = "TextBody"];
+  // The HTML body; empty: none.
+  string html_body = 8 [json_name = "HtmlBody"];
+  // The message stream.
+  string message_stream = 9 [json_name = "MessageStream"];
+}
+
+// Postmark's answer: 0 and the message's id, or an error code and why.
+message PostmarkAnswer {
+  // 0 when sent.
+  int32 error_code = 1 [json_name = "ErrorCode"];
+  // What happened.
+  string message = 2 [json_name = "Message"];
+  // The message's id, when sent.
+  string message_id = 3 [json_name = "MessageID"];
+}

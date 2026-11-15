@@ -25,6 +25,8 @@
 
 use chrono::{DateTime, Utc};
 
+use crate::core::context_update::{ContextUpdate, UpdateType};
+
 /// Maximum number of flow items to retain in conversation_flow.
 /// Older items are removed when this limit is exceeded.
 pub const MAX_FLOW_ITEMS: usize = 500;
@@ -38,8 +40,11 @@ pub struct StructuredContext {
     /// Key decisions made during the conversation with their rationale.
     pub key_decisions: Vec<DecisionItem>,
 
-    /// Questions that have been asked, with their current status.
-    pub open_questions: Vec<QuestionItem>,
+    /// The questions of the session's Q&A records, each answered by its
+    /// record. Stored (and serialized) as `open_questions`, the name older
+    /// data and clients use.
+    #[serde(rename = "open_questions")]
+    pub answered_questions: Vec<QuestionItem>,
 
     /// Important concepts identified and defined during discussion.
     pub key_concepts: Vec<ConceptItem>,
@@ -98,18 +103,6 @@ impl DecisionItem {
     }
 }
 
-impl Default for DecisionItem {
-    fn default() -> Self {
-        Self {
-            description: String::new(),
-            context: String::new(),
-            alternatives: Vec::new(),
-            confidence: 0.5,
-            timestamp: Utc::now(),
-        }
-    }
-}
-
 /// A question raised during the conversation.
 ///
 /// Tracks the question text, its context, and current resolution status.
@@ -129,19 +122,6 @@ pub struct QuestionItem {
 
     /// When the question status was last updated.
     pub last_updated: DateTime<Utc>,
-}
-
-impl Default for QuestionItem {
-    fn default() -> Self {
-        let now = Utc::now();
-        Self {
-            question: String::new(),
-            context: String::new(),
-            status: QuestionStatus::Open,
-            timestamp: now,
-            last_updated: now,
-        }
-    }
 }
 
 /// Status of a question in the conversation.
@@ -179,18 +159,6 @@ pub struct ConceptItem {
     pub timestamp: DateTime<Utc>,
 }
 
-impl Default for ConceptItem {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            definition: String::new(),
-            examples: Vec::new(),
-            related_concepts: Vec::new(),
-            timestamp: Utc::now(),
-        }
-    }
-}
-
 /// A technical specification discussed in the conversation.
 ///
 /// Captures requirements and constraints for a technical component.
@@ -212,18 +180,6 @@ pub struct SpecItem {
     pub timestamp: DateTime<Utc>,
 }
 
-impl Default for SpecItem {
-    fn default() -> Self {
-        Self {
-            title: String::new(),
-            description: String::new(),
-            requirements: Vec::new(),
-            constraints: Vec::new(),
-            timestamp: Utc::now(),
-        }
-    }
-}
-
 /// A step in the conversation flow.
 ///
 /// Tracks the progression of the conversation including
@@ -243,17 +199,6 @@ pub struct FlowItem {
     pub outcome: Option<String>,
 }
 
-impl Default for FlowItem {
-    fn default() -> Self {
-        Self {
-            step_description: String::new(),
-            timestamp: Utc::now(),
-            related_updates: Vec::new(),
-            outcome: None,
-        }
-    }
-}
-
 impl Default for StructuredContext {
     fn default() -> Self {
         Self::new()
@@ -265,7 +210,7 @@ impl StructuredContext {
     pub fn new() -> Self {
         Self {
             key_decisions: Vec::new(),
-            open_questions: Vec::new(),
+            answered_questions: Vec::new(),
             key_concepts: Vec::new(),
             technical_specifications: Vec::new(),
             conversation_flow: Vec::new(),
@@ -285,10 +230,78 @@ impl StructuredContext {
         self.conversation_flow.push(item);
     }
 
+    /// The structured view of `records` (oldest first): the one derivation,
+    /// used by the session and by every reader. Q&A records become answered
+    /// questions, decisions (with their stated confidence, see
+    /// [`UpdateMeta::confidence_or_unstated`](crate::core::context_update::UpdateMeta::confidence_or_unstated)),
+    /// concepts and requirements their items, and every record a flow step
+    /// (at most [`MAX_FLOW_ITEMS`]).
+    pub fn from_records<'a>(records: impl IntoIterator<Item = &'a ContextUpdate>) -> Self {
+        let mut state = Self::new();
+        for update in records {
+            state.add_record(update);
+        }
+        state
+    }
+
+    fn add_record(&mut self, update: &ContextUpdate) {
+        let title = &update.content.title;
+        let step = match update.update_type {
+            UpdateType::QuestionAnswered => {
+                self.answered_questions.push(QuestionItem {
+                    question: title.clone(),
+                    context: update.content.description.clone(),
+                    status: QuestionStatus::Answered,
+                    timestamp: update.timestamp,
+                    last_updated: update.timestamp,
+                });
+                "Q&A"
+            }
+            UpdateType::ProblemSolved => "Problem Solved",
+            UpdateType::CodeChanged => "Code Change",
+            UpdateType::DecisionMade => {
+                self.key_decisions.push(DecisionItem::new(
+                    title.clone(),
+                    update.content.description.clone(),
+                    update.content.details.clone(),
+                    update.meta.confidence_or_unstated(),
+                    update.timestamp,
+                ));
+                "Decision Made"
+            }
+            UpdateType::ConceptDefined => {
+                self.key_concepts.push(ConceptItem {
+                    name: title.clone(),
+                    definition: update.content.description.clone(),
+                    examples: update.content.examples.clone(),
+                    related_concepts: update.content.details.clone(),
+                    timestamp: update.timestamp,
+                });
+                "Concept Defined"
+            }
+            UpdateType::RequirementAdded => {
+                self.technical_specifications.push(SpecItem {
+                    title: title.clone(),
+                    description: update.content.description.clone(),
+                    requirements: update.content.details.clone(),
+                    constraints: update.content.implications.clone(),
+                    timestamp: update.timestamp,
+                });
+                "Requirement Added"
+            }
+        };
+        self.add_flow_item(FlowItem {
+            step_description: format!("{step}: {title}"),
+            timestamp: update.timestamp,
+            related_updates: vec![update.id],
+            outcome: Some(update.content.description.clone()),
+        });
+    }
+
     /// Returns the total number of items across all categories.
     pub fn total_items(&self) -> usize {
         self.key_decisions.len()
-            + self.open_questions.len()
+            + self.answered_questions.len()
             + self.key_concepts.len()
             + self.technical_specifications.len()
             + self.conversation_flow.len()
@@ -301,60 +314,4 @@ impl StructuredContext {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_decision_item_confidence_clamping() {
-        let item = DecisionItem::new(
-            "Test".to_string(),
-            "Context".to_string(),
-            vec![],
-            1.5, // Should be clamped to 1.0
-            Utc::now(),
-        );
-        assert_eq!(item.confidence, 1.0);
-
-        let item2 = DecisionItem::new(
-            "Test".to_string(),
-            "Context".to_string(),
-            vec![],
-            -0.5, // Should be clamped to 0.0
-            Utc::now(),
-        );
-        assert_eq!(item2.confidence, 0.0);
-    }
-
-    #[test]
-    fn test_flow_item_limit() {
-        let mut ctx = StructuredContext::new();
-
-        // Add MAX_FLOW_ITEMS + 100 items
-        for i in 0..(MAX_FLOW_ITEMS + 100) {
-            ctx.add_flow_item(FlowItem {
-                step_description: format!("Step {}", i),
-                ..Default::default()
-            });
-        }
-
-        // Should have removed oldest 10% when limit was hit
-        assert!(ctx.conversation_flow.len() <= MAX_FLOW_ITEMS);
-    }
-
-    #[test]
-    fn test_structured_context_is_empty() {
-        let ctx = StructuredContext::new();
-        assert!(ctx.is_empty());
-        assert_eq!(ctx.total_items(), 0);
-    }
-
-    #[test]
-    fn test_default_implementations() {
-        let _ = DecisionItem::default();
-        let _ = QuestionItem::default();
-        let _ = ConceptItem::default();
-        let _ = SpecItem::default();
-        let _ = FlowItem::default();
-        let _ = QuestionStatus::default();
-    }
-}
+mod tests;

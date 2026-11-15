@@ -1,36 +1,33 @@
 // Copyright (c) 2025, 2026 Julius ML
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
+// Licensed under the MIT License. See LICENSE at the workspace root.
 
-//! Session persistence format: row-backed updates, update index, meta
-//! records, legacy-blob migration and full session deletion.
+//! Session persistence format (data version 3): a head row, records under
+//! ordinals, graph rows, vectorized keys, listing records, and full session
+//! deletion. A save writes what its changes name, so its batch does not
+//! grow with the session (layouts of older versions are migrated at open:
+//! `migrate/tests.rs`).
 
-use super::RealRocksDBStorage;
-use super::types::StoredEmbedding;
+use crate::rocksdb_storage::RealRocksDBStorage;
+use crate::rocksdb_storage::rows::SESSION_V2;
+use crate::rocksdb_storage::session_rows::queue_save;
+use crate::rocksdb_storage::types::StoredEmbedding;
 use chrono::Utc;
+use rocksdb::WriteBatch;
 use std::collections::HashMap;
 use tempfile::{TempDir, tempdir};
 use uuid::Uuid;
 
-use crate::error::is_not_found;
-use crate::traits::{GraphStorage, Storage, VectorStorage};
 use post_cortex_core::core::context_update::{
-    ContextUpdate, EntityData, EntityRelationship, EntityType, RelationType, UpdateContent,
+    ContextUpdate, EntityRelationship, EntityType, RelationType, TypedEntity, UpdateContent,
     UpdateType,
 };
 use post_cortex_core::session::active_session::ActiveSession;
 use post_cortex_core::workspace::SessionRole;
-use post_cortex_embeddings::VectorMetadata;
+use post_cortex_ports::VectorMetadata;
+use post_cortex_ports::storage::{SessionChanges, SessionStore, VectorStore, WorkspaceStore};
 
-fn update(title: &str) -> ContextUpdate {
+/// A record naming the entities `entities`; the first two are related.
+fn update_naming(title: &str, entities: &[&str]) -> ContextUpdate {
     ContextUpdate {
         meta: Default::default(),
         id: Uuid::new_v4(),
@@ -47,23 +44,48 @@ fn update(title: &str) -> ContextUpdate {
         parent_update: None,
         user_marked_important: false,
         creates_entities: vec![],
-        creates_relationships: vec![],
+        creates_relationships: match entities {
+            [a, b, ..] => vec![EntityRelationship {
+                from_entity: a.to_string(),
+                to_entity: b.to_string(),
+                relation_type: RelationType::RelatedTo,
+                context: title.to_string(),
+            }],
+            _ => vec![],
+        },
         references_entities: vec![],
-        typed_entities: vec![],
+        typed_entities: entities
+            .iter()
+            .map(|e| TypedEntity {
+                name: e.to_string(),
+                entity_type: EntityType::Concept,
+            })
+            .collect(),
         author: None,
         derived_from: Vec::new(),
     }
 }
 
+fn update(title: &str) -> ContextUpdate {
+    update_naming(title, &[])
+}
+
 fn session_with(id: Uuid, updates: &[ContextUpdate]) -> ActiveSession {
-    let mut session = ActiveSession::new(id, Some("name".into()), Some("desc".into()));
-    session.set_incremental_updates(updates.to_vec());
+    let mut session = ActiveSession::new(
+        id,
+        Some("name".into()),
+        Some("desc".into()),
+        chrono::Utc::now(),
+    );
+    for u in updates {
+        session.apply_record(u.clone());
+    }
     session
 }
 
 fn titles(session: &ActiveSession) -> Vec<String> {
     session
-        .incremental_updates
+        .records()
         .iter()
         .map(|u| u.content.title.clone())
         .collect()
@@ -79,12 +101,6 @@ fn raw_get(storage: &RealRocksDBStorage, key: &str) -> Option<Vec<u8>> {
     storage.db.get(key.as_bytes()).unwrap()
 }
 
-fn blob_update_count(storage: &RealRocksDBStorage, id: Uuid) -> usize {
-    let blob = raw_get(storage, &format!("session:{id}")).expect("blob");
-    let json: serde_json::Value = serde_json::from_slice(&blob).unwrap();
-    json["incremental_updates"].as_array().unwrap().len()
-}
-
 fn keys_containing(storage: &RealRocksDBStorage, needle: &str) -> Vec<String> {
     storage
         .db
@@ -94,208 +110,159 @@ fn keys_containing(storage: &RealRocksDBStorage, needle: &str) -> Vec<String> {
         .collect()
 }
 
+async fn save_all(storage: &RealRocksDBStorage, session: &ActiveSession) {
+    storage
+        .save_session(session, SessionChanges::everything(session, &[]))
+        .await
+        .unwrap();
+}
+
+async fn save(storage: &RealRocksDBStorage, session: &ActiveSession, changes: SessionChanges) {
+    storage.save_session(session, changes).await.unwrap();
+}
+
+fn writing(updates: Vec<ContextUpdate>) -> SessionChanges {
+    SessionChanges {
+        updates,
+        ..Default::default()
+    }
+}
+
 #[tokio::test]
-async fn blob_excludes_updates_and_load_rebuilds_them_in_order() {
+async fn the_head_holds_no_records_and_a_load_keeps_session_order() {
     let (_dir, storage) = open().await;
     let id = Uuid::new_v4();
     let updates: Vec<ContextUpdate> = (0..5).map(|i| update(&format!("u{i}"))).collect();
     let session = session_with(id, &updates);
+    save_all(&storage, &session).await;
 
-    storage.save_session(&session).await.unwrap();
-
-    assert_eq!(blob_update_count(&storage, id), 0);
-    for u in &updates {
-        assert!(raw_get(&storage, &format!("session:{id}:update:{}", u.id)).is_some());
-    }
-
-    let loaded = storage.load_session(id).await.unwrap();
-    assert_eq!(titles(&loaded), vec!["u0", "u1", "u2", "u3", "u4"]);
-    let rows = storage.load_session_updates(id).await.unwrap();
+    let head = raw_get(&storage, &format!("session:{id}")).expect("head");
+    assert!(head.starts_with(SESSION_V2));
+    assert!(head.len() < 400, "{} bytes", head.len());
     assert_eq!(
-        rows.iter().map(|u| u.id).collect::<Vec<_>>(),
-        updates.iter().map(|u| u.id).collect::<Vec<_>>()
+        keys_containing(&storage, &format!("session:{id}:rec:")).len(),
+        5
     );
+
+    let loaded = storage.load_session(id).await.unwrap().session;
+    assert_eq!(titles(&loaded), vec!["u0", "u1", "u2", "u3", "u4"]);
 }
 
+/// New records take the next ordinals in session order, whatever order the
+/// save names them in; a record written again keeps its ordinal.
 #[tokio::test]
-async fn every_persist_path_leaves_a_row_for_every_update() {
+async fn ordinals_follow_session_order_and_rewrites_keep_theirs() {
     let (_dir, storage) = open().await;
     let id = Uuid::new_v4();
-    let (u1, u2, u3) = (update("u1"), update("u2"), update("u3"));
-
-    storage
-        .save_session(&session_with(id, std::slice::from_ref(&u1)))
-        .await
-        .unwrap();
-
-    // u2 is in the snapshot but not passed explicitly (e.g. its own persist
-    // was coalesced or lost); it must still get a row.
-    let snapshot = session_with(id, &[u1.clone(), u2.clone(), u3.clone()]);
-    storage
-        .save_session_with_updates(&snapshot, id, vec![u3.clone()])
-        .await
-        .unwrap();
-    assert!(raw_get(&storage, &format!("session:{id}:update:{}", u2.id)).is_some());
-    assert_eq!(
-        titles(&storage.load_session(id).await.unwrap()),
-        vec!["u1", "u2", "u3"]
+    let mut session = session_with(id, &[update("u0")]);
+    save_all(&storage, &session).await;
+    let (a, b) = (update("u1"), update("u2"));
+    session.apply_record(a.clone());
+    session.apply_record(b.clone());
+    save(&storage, &session, writing(vec![b, a.clone()])).await;
+    let mut changed = a;
+    changed.content.description = "changed".into();
+    session.replace_records(
+        session
+            .records_owned()
+            .into_iter()
+            .map(|u| {
+                if u.id == changed.id {
+                    changed.clone()
+                } else {
+                    u
+                }
+            })
+            .collect(),
     );
+    save(&storage, &session, writing(vec![changed])).await;
 
-    // Plain re-save with an empty explicit list (vectorisation marks etc.).
-    storage
-        .save_session_with_updates(&snapshot, id, vec![])
-        .await
-        .unwrap();
+    let loaded = storage.load_session(id).await.unwrap().session;
+    assert_eq!(titles(&loaded), vec!["u0", "u1", "u2"]);
+    assert_eq!(loaded.records()[1].content.description, "changed");
     assert_eq!(
-        storage
-            .load_session(id)
-            .await
-            .unwrap()
-            .incremental_updates
-            .len(),
+        keys_containing(&storage, &format!("session:{id}:rec:")).len(),
         3
     );
 }
 
+/// Removed records lose their rows and vectorized keys; a snapshot that
+/// merely lacks a record (it predates it) never deletes it.
 #[tokio::test]
-async fn removed_updates_stay_removed_and_lose_their_rows() {
+async fn only_named_removals_delete_records() {
     let (_dir, storage) = open().await;
     let id = Uuid::new_v4();
-    let (u1, u2, u3) = (update("u1"), update("u2"), update("u3"));
-    storage
-        .save_session(&session_with(id, &[u1.clone(), u2.clone(), u3.clone()]))
-        .await
-        .unwrap();
-
-    let mut session = storage.load_session(id).await.unwrap();
-    assert!(session.remove_update_by_id(&u2.id));
-    storage
-        .save_session_with_changes(&session, id, vec![], vec![u2.id])
-        .await
-        .unwrap();
-
-    assert!(raw_get(&storage, &format!("session:{id}:update:{}", u2.id)).is_none());
-    let loaded = storage.load_session(id).await.unwrap();
-    assert_eq!(titles(&loaded), vec!["u1", "u3"]);
-    assert_eq!(storage.load_session_updates(id).await.unwrap().len(), 2);
-}
-
-/// A snapshot taken before an update landed (an evicted copy, a concurrent
-/// writer) must not delete that update: deletions are explicit only.
-#[tokio::test]
-async fn stale_snapshot_never_deletes_an_acknowledged_update() {
-    let (_dir, storage) = open().await;
-    let id = Uuid::new_v4();
-    let (u1, u2, u3) = (update("u1"), update("u2"), update("u3"));
-    let stale = session_with(id, std::slice::from_ref(&u1));
-    storage
-        .save_session(&session_with(id, &[u1.clone(), u2.clone()]))
-        .await
-        .unwrap();
-
-    // The stale copy (without u2) gains u3 and is saved last.
-    let mut stale = stale;
-    stale.set_incremental_updates(vec![u1.clone(), u3.clone()]);
-    storage
-        .save_session_with_updates(&stale, id, vec![u3.clone()])
-        .await
-        .unwrap();
-
-    assert!(raw_get(&storage, &format!("session:{id}:update:{}", u2.id)).is_some());
-    assert_eq!(
-        titles(&storage.load_session(id).await.unwrap()),
-        vec!["u1", "u2", "u3"]
-    );
-}
-
-#[tokio::test]
-async fn legacy_blob_with_embedded_updates_loads_and_is_migrated() {
-    let (_dir, storage) = open().await;
-    let id = Uuid::new_v4();
-    let updates = vec![update("old1"), update("old2"), update("old3")];
+    let updates = vec![update("keep"), update("gone"), update("late")];
     let session = session_with(id, &updates);
+    save(
+        &storage,
+        &session,
+        SessionChanges {
+            vectorized: updates.iter().map(|u| u.id).collect(),
+            ..SessionChanges::everything(&session, &[])
+        },
+    )
+    .await;
 
-    // What older versions wrote: the full blob, rows only for some updates.
-    storage
-        .db
-        .put(
-            format!("session:{id}").as_bytes(),
-            serde_json::to_vec(&session).unwrap(),
-        )
-        .unwrap();
-    storage
-        .batch_save_updates(id, vec![updates[0].clone()])
-        .await
-        .unwrap();
-    assert_eq!(blob_update_count(&storage, id), 3);
+    let stale = session_with(id, &updates[..2]);
+    save(
+        &storage,
+        &stale,
+        SessionChanges {
+            removed: vec![updates[1].id],
+            ..Default::default()
+        },
+    )
+    .await;
+    let stored = storage.load_session(id).await.unwrap();
+    assert_eq!(titles(&stored.session), vec!["keep", "late"]);
+    let mut vectorized = stored.vectorized;
+    vectorized.sort();
+    let mut want = vec![updates[0].id, updates[2].id];
+    want.sort();
+    assert_eq!(vectorized, want);
+    assert!(keys_containing(&storage, &updates[1].id.to_string()).is_empty());
+}
 
-    let loaded = storage.load_session(id).await.unwrap();
-    assert_eq!(titles(&loaded), vec!["old1", "old2", "old3"]);
-
-    // Migrated: slim blob, every row present, index and meta written.
-    assert_eq!(blob_update_count(&storage, id), 0);
-    for u in &updates {
-        assert!(raw_get(&storage, &format!("session:{id}:update:{}", u.id)).is_some());
+/// The batch of a save carrying one new record is the same size in a
+/// session of 10 records and in one of 500: a save costs what it changes.
+#[tokio::test]
+async fn a_save_writes_what_it_changes_whatever_the_session_size() {
+    let (_dir, storage) = open().await;
+    let mut sizes = Vec::new();
+    for records in [10, 500] {
+        let id = Uuid::new_v4();
+        let updates: Vec<ContextUpdate> = (0..records)
+            .map(|i| update_naming(&format!("r{i}"), &[&format!("e{}", i % 50), "hub"]))
+            .collect();
+        let mut session = session_with(id, &updates);
+        save_all(&storage, &session).await;
+        let new = update_naming("new", &["hub", "fresh"]);
+        session.apply_record(new.clone());
+        let mut batch = WriteBatch::default();
+        queue_save(&storage.db, &mut batch, &session, &writing(vec![new])).unwrap();
+        sizes.push((batch.len(), batch.size_in_bytes()));
+        storage.db.write(batch).unwrap();
+        let loaded = storage.load_session(id).await.unwrap().session;
+        assert_eq!(
+            loaded
+                .entity_graph()
+                .entities
+                .get("fresh")
+                .map(|e| e.mention_count),
+            Some(1)
+        );
+        assert_eq!(
+            loaded
+                .entity_graph()
+                .entities
+                .get("hub")
+                .map(|e| e.mention_count),
+            Some(records as u32 + 1)
+        );
     }
-    assert!(raw_get(&storage, &format!("session_updates:{id}")).is_some());
-    assert!(raw_get(&storage, &format!("session_meta:{id}")).is_some());
-
-    let reloaded = storage.load_session(id).await.unwrap();
-    assert_eq!(titles(&reloaded), vec!["old1", "old2", "old3"]);
-}
-
-#[tokio::test]
-async fn blob_from_an_older_writer_wins_over_a_stale_index() {
-    let (_dir, storage) = open().await;
-    let id = Uuid::new_v4();
-    let (u1, u2, u3) = (update("u1"), update("u2"), update("u3"));
-    storage
-        .save_session(&session_with(id, &[u1.clone(), u2.clone()]))
-        .await
-        .unwrap();
-
-    // A downgraded binary rewrites the full blob without touching the index.
-    let newer = session_with(id, &[u1.clone(), u3.clone()]);
-    storage
-        .db
-        .put(
-            format!("session:{id}").as_bytes(),
-            serde_json::to_vec(&newer).unwrap(),
-        )
-        .unwrap();
-
-    assert_eq!(
-        titles(&storage.load_session(id).await.unwrap()),
-        vec!["u1", "u3"]
-    );
-    assert!(raw_get(&storage, &format!("session:{id}:update:{}", u2.id)).is_none());
-    assert_eq!(
-        titles(&storage.load_session(id).await.unwrap()),
-        vec!["u1", "u3"]
-    );
-}
-
-#[tokio::test]
-async fn batch_save_updates_appends_to_a_row_backed_session() {
-    let (_dir, storage) = open().await;
-    let id = Uuid::new_v4();
-    let (u1, u2) = (update("u1"), update("u2"));
-    storage
-        .save_session(&session_with(id, std::slice::from_ref(&u1)))
-        .await
-        .unwrap();
-
-    storage
-        .batch_save_updates(id, vec![u1.clone(), u2.clone()])
-        .await
-        .unwrap();
-
-    assert_eq!(
-        titles(&storage.load_session(id).await.unwrap()),
-        vec!["u1", "u2"]
-    );
-    let summaries = storage.list_session_summaries().await.unwrap();
-    assert_eq!(summaries[0].update_count, 2);
+    assert_eq!(sizes[0].0, sizes[1].0, "{sizes:?}");
+    assert!(sizes[1].1 < sizes[0].1 + 64, "{sizes:?}");
 }
 
 #[tokio::test]
@@ -306,22 +273,10 @@ async fn list_sessions_and_summaries_skip_update_rows() {
         let id = Uuid::new_v4();
         let updates: Vec<ContextUpdate> = (0..i * 3).map(|j| update(&format!("{i}-{j}"))).collect();
         let mut session = session_with(id, &updates);
-        session.set_name(Some(format!("session {i}")));
-        storage.save_session(&session).await.unwrap();
+        session.set_name(Some(format!("session {i}")), chrono::Utc::now());
+        save_all(&storage, &session).await;
         ids.push((id, updates.len()));
     }
-
-    // One legacy session without meta, index or rows.
-    let legacy_id = Uuid::new_v4();
-    let legacy = session_with(legacy_id, &[update("l1"), update("l2")]);
-    storage
-        .db
-        .put(
-            format!("session:{legacy_id}").as_bytes(),
-            serde_json::to_vec(&legacy).unwrap(),
-        )
-        .unwrap();
-    ids.push((legacy_id, 2));
 
     let mut listed = storage.list_sessions().await.unwrap();
     listed.sort();
@@ -335,11 +290,6 @@ async fn list_sessions_and_summaries_skip_update_rows() {
         let s = summaries.iter().find(|s| s.id == *id).unwrap();
         assert_eq!(s.update_count, *count, "update count of {id}");
     }
-    let legacy_summary = summaries.iter().find(|s| s.id == legacy_id).unwrap();
-    assert_eq!(legacy_summary.name.as_deref(), Some("name"));
-    // Lazily backfilled, and the legacy blob itself is left alone.
-    assert!(raw_get(&storage, &format!("session_meta:{legacy_id}")).is_some());
-    assert_eq!(blob_update_count(&storage, legacy_id), 2);
 }
 
 #[tokio::test]
@@ -348,12 +298,10 @@ async fn delete_session_removes_every_record_of_the_session() {
     let id = Uuid::new_v4();
     let other = Uuid::new_v4();
     for sid in [id, other] {
+        let session = session_with(sid, &[update_naming("a", &["A", "B"]), update("b")]);
+        save_all(&storage, &session).await;
         storage
-            .save_session(&session_with(sid, &[update("a"), update("b")]))
-            .await
-            .unwrap();
-        storage
-            .add_vector(
+            .upsert_vectors(vec![(
                 vec![0.1; 8],
                 VectorMetadata {
                     id: format!("vec-{sid}"),
@@ -363,41 +311,15 @@ async fn delete_session_removes_every_record_of_the_session() {
                     timestamp: Utc::now(),
                     metadata: HashMap::new(),
                 },
-            )
-            .await
-            .unwrap();
-        for name in ["A", "B"] {
-            storage
-                .upsert_entity(
-                    sid,
-                    &EntityData {
-                        aliases: Vec::new(),
-                        name: name.into(),
-                        entity_type: EntityType::Concept,
-                        first_mentioned: Utc::now(),
-                        last_mentioned: Utc::now(),
-                        mention_count: 1,
-                        importance_score: 0.5,
-                        description: None,
-                    },
-                )
-                .await
-                .unwrap();
-        }
-        storage
-            .create_relationship(
-                sid,
-                &EntityRelationship {
-                    from_entity: "A".into(),
-                    to_entity: "B".into(),
-                    relation_type: RelationType::RelatedTo,
-                    context: String::new(),
-                },
-            )
+            )])
             .await
             .unwrap();
     }
     let workspace = Uuid::new_v4();
+    storage
+        .save_workspace_metadata(workspace, "ws", &workspace.to_string(), "", &[])
+        .await
+        .unwrap();
     storage
         .add_session_to_workspace(workspace, id, SessionRole::Primary)
         .await
@@ -417,55 +339,8 @@ async fn delete_session_removes_every_record_of_the_session() {
     assert_eq!(keys_containing(&storage, &other.to_string()), before_other);
     assert!(!storage.session_exists(id).await.unwrap());
     let err = storage.load_session(id).await.unwrap_err();
-    assert!(is_not_found(&err));
-    assert!(err.to_string().contains("Session not found"));
-}
-
-#[tokio::test]
-async fn clear_session_entities_drops_entities_and_relationships() {
-    let (_dir, storage) = open().await;
-    let id = Uuid::new_v4();
-    for name in ["A", "B"] {
-        storage
-            .upsert_entity(
-                id,
-                &EntityData {
-                    aliases: Vec::new(),
-                    name: name.into(),
-                    entity_type: EntityType::Concept,
-                    first_mentioned: Utc::now(),
-                    last_mentioned: Utc::now(),
-                    mention_count: 1,
-                    importance_score: 0.5,
-                    description: None,
-                },
-            )
-            .await
-            .unwrap();
-    }
-    storage
-        .create_relationship(
-            id,
-            &EntityRelationship {
-                from_entity: "A".into(),
-                to_entity: "B".into(),
-                relation_type: RelationType::DependsOn,
-                context: String::new(),
-            },
-        )
-        .await
-        .unwrap();
-
-    Storage::clear_session_entities(&storage, id).await.unwrap();
-
-    assert!(storage.list_entities(id).await.unwrap().is_empty());
-    assert!(
-        storage
-            .find_related_entities(id, "A")
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(err.is_not_found());
+    assert_eq!(err.to_string(), format!("not found: session {id}"));
 }
 
 #[tokio::test]
@@ -480,14 +355,37 @@ async fn same_content_id_in_two_sessions_is_removed_per_session() {
         timestamp: Utc::now(),
         metadata: HashMap::new(),
     };
-    storage.save_embedding(&embedding("s1")).await.unwrap();
-    storage.save_embedding(&embedding("s2")).await.unwrap();
-    assert_eq!(storage.total_count().await, 2);
-    assert!(storage.remove_session_vector("s1", "shared").await.unwrap());
-    assert!(!storage.remove_session_vector("s1", "shared").await.unwrap());
-    assert_eq!(storage.count_session_embeddings("s2").await, 1);
-    // Unscoped removal takes every session's copy.
-    storage.save_embedding(&embedding("s1")).await.unwrap();
-    assert!(storage.remove_vector("shared").await.unwrap());
-    assert_eq!(storage.total_count().await, 0);
+    let row = |e: StoredEmbedding| {
+        let metadata = e.to_metadata();
+        (e.vector, metadata)
+    };
+    storage
+        .upsert_vectors(vec![row(embedding("s1")), row(embedding("s2"))])
+        .await
+        .unwrap();
+    assert_eq!(storage.total_count().await.unwrap(), 2);
+    let shared = ["shared".to_string()];
+    assert_eq!(storage.delete_vectors("s1", &shared).await.unwrap(), 1);
+    assert_eq!(storage.delete_vectors("s1", &shared).await.unwrap(), 0);
+    assert_eq!(storage.count_session_embeddings("s2").await.unwrap(), 1);
+}
+
+/// A record ordinal of another length than 8 bytes is corrupt.
+#[tokio::test]
+async fn a_damaged_ordinal_is_corrupt() {
+    let (_dir, storage) = open().await;
+    let id = Uuid::new_v4();
+    let mut session = session_with(id, &[update("a")]);
+    save_all(&storage, &session).await;
+    storage
+        .db
+        .put(format!("session:{id}:next").as_bytes(), [1u8, 2])
+        .unwrap();
+    let late = update("late");
+    session.apply_record(late.clone());
+    let err = storage
+        .save_session(&session, writing(vec![late]))
+        .await
+        .unwrap_err();
+    assert!(err.is_corrupt(), "{err}");
 }

@@ -5,7 +5,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use post_cortex_memory::content_vectorizer::{ContentType, SemanticSearchResult};
+use post_cortex_memory::content_vectorizer::{ContentKind, HitSource, SemanticSearchResult};
 use post_cortex_memory::query_cache::{CacheScope, QueryCache, QueryCacheConfig};
 
 fn create_test_results() -> Arc<[SemanticSearchResult]> {
@@ -15,8 +15,8 @@ fn create_test_results() -> Arc<[SemanticSearchResult]> {
             signals: None,
             confidence: None,
             content_id: Uuid::new_v4().to_string(),
-            session_id: Uuid::new_v4(),
-            content_type: ContentType::UpdateContent,
+            source: HitSource::Session(Uuid::new_v4()),
+            content_type: ContentKind::UpdateContent,
             text_content: "Test result 1".to_string(),
             similarity_score: 0.9,
             importance_score: 0.5,
@@ -24,15 +24,18 @@ fn create_test_results() -> Arc<[SemanticSearchResult]> {
             combined_score: 0.78,
             neighbour_of: None,
             author: None,
+            title: None,
             derived_from: Vec::new(),
+            document: None,
+            full_chars: None,
         },
         SemanticSearchResult {
             validity: None,
             signals: None,
             confidence: None,
             content_id: Uuid::new_v4().to_string(),
-            session_id: Uuid::new_v4(),
-            content_type: ContentType::UpdateContent,
+            source: HitSource::Session(Uuid::new_v4()),
+            content_type: ContentKind::UpdateContent,
             text_content: "Test result 2".to_string(),
             similarity_score: 0.8,
             importance_score: 0.5,
@@ -40,7 +43,10 @@ fn create_test_results() -> Arc<[SemanticSearchResult]> {
             combined_score: 0.71,
             neighbour_of: None,
             author: None,
+            title: None,
             derived_from: Vec::new(),
+            document: None,
+            full_chars: None,
         },
     ])
 }

@@ -1,0 +1,40 @@
+[package]
+name = "pcx-dynamic"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Modules in Python or TypeScript installed into a running host, each version checked in a locked run and approved by a person."
+publish = false
+
+[[bin]]
+name = "pcx-dynamic"
+path = "src/main.rs"
+
+[dependencies]
+pcx-approval.workspace = true
+pcx-documents.workspace = true
+pcx-host.workspace = true
+pcx-module-api.workspace = true
+pcx-module-launcher.workspace = true
+post-cortex-proto.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
+pbjson-types.workspace = true
+prost.workspace = true
+prost-reflect.workspace = true
+prost-types.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+similar.workspace = true
+tar.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tokio-util.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

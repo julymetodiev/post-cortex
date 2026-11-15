@@ -1,0 +1,910 @@
+{
+  "tools": [
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Daemon administration. Actions: health, vectorize_session (session_id), vectorize_stats, create_checkpoint (session_id).",
+      "inputSchema": {
+        "description": "Request payload for the `admin` tool.",
+        "properties": {
+          "action": {
+            "description": "Administrative action on the Post-Cortex daemon.\n\nValid values:\n- health: Report daemon health (active sessions, embeddings status, version)\n- vectorize_session: Backfill embeddings for an existing session (requires session_id)\n- vectorize_stats: Return embedding-pipeline statistics as JSON\n- create_checkpoint: Persist a snapshot of a session for later recall (requires session_id)",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Session UUID, for vectorize_session and create_checkpoint.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "AdminRequest",
+        "type": "object"
+      },
+      "name": "admin"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Everything for one task in one call, within token_budget: the user and project cards first, then the graph entities named in the query with their one-hop neighbourhood and what depends on them (at most half of what the cards leave), then the records that best match the query, ranked by the same search as semantic_search (only records that still hold, each shown as its passage for the query). With sources=messages or all, also adds captured conversation turns matching the query as excerpts. Returns ranked items, entity neighbourhood, dependency impact, and an LLM-ready formatted block. Scope: session or workspace.",
+      "inputSchema": {
+        "description": "Request payload for the `assemble_context` tool.",
+        "properties": {
+          "query": {
+            "description": "The question or topic; its entities seed the graph traversal.",
+            "type": "string"
+          },
+          "select": {
+            "description": "JSONPath picking part of the response (e.g. \"$.formatted_text\", \"$.items[0:3].text\"). Allowed: $, .field, [n], [-n], [a:b], [*], .*, [0,3,7]. Not with select_map.",
+            "nullable": true,
+            "type": "string"
+          },
+          "select_map": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Output keys to JSONPaths, as in select (e.g. {\"text\": \"$.formatted_text\", \"ids\": \"$.items[*].entry_id\"}); a key with no match is null. Not with select.",
+            "nullable": true,
+            "type": "object"
+          },
+          "session_id": {
+            "description": "Session UUID; required without workspace_id.",
+            "nullable": true,
+            "type": "string"
+          },
+          "sources": {
+            "description": "What to assemble from (default records): records (the records, entity graph and impact analysis), messages (captured turns matching the query with the turns around them, plus the graph and impact analysis) or all (records get half the budget).",
+            "nullable": true,
+            "type": "string"
+          },
+          "token_budget": {
+            "description": "Token budget (default 4000, > 0): items are packed highest score first until it is used.",
+            "format": "uint32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "workspace_id": {
+            "description": "Workspace UUID: merges the context of all its sessions; takes precedence over session_id.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "AssembleContextRequest",
+        "type": "object"
+      },
+      "name": "assemble_context"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Get session summary. Use 'include' to specify sections: decisions, insights, entities, or all (default).",
+      "inputSchema": {
+        "description": "Request payload for the `get_structured_summary` tool.",
+        "properties": {
+          "compact": {
+            "description": "Use compact format for large sessions",
+            "nullable": true,
+            "type": "boolean"
+          },
+          "concepts_limit": {
+            "description": "Maximum concepts to include",
+            "format": "uint",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "decisions_limit": {
+            "description": "Maximum decisions to include",
+            "format": "uint",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "entities_limit": {
+            "description": "Maximum entities to include",
+            "format": "uint",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "include": {
+            "description": "Sections to include: decisions, insights, entities, questions, all (default: all)",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true,
+            "type": "array"
+          },
+          "min_confidence": {
+            "description": "Minimum confidence level",
+            "format": "float",
+            "nullable": true,
+            "type": "number"
+          },
+          "questions_limit": {
+            "description": "Maximum questions to include",
+            "format": "uint",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "session_id": {
+            "description": "Session ID",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "GetStructuredSummaryRequest",
+        "type": "object"
+      },
+      "name": "get_structured_summary"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "The documents modules keep in a workspace, versioned. Actions: put (kind, data, text, expected_version; document_id for a change), get, history, list (kind, fields, limit, cursor), delete. Only the module that declares a kind writes it; anyone who reads the workspace reads it.",
+      "inputSchema": {
+        "description": "Request payload for the `manage_document` tool.",
+        "properties": {
+          "action": {
+            "description": "Action on the documents modules keep in a workspace.\n\nValid values:\n- put: Write the next version of a document (kind, data, text, expected_version; document_id for a change, none for a new one)\n- get: The latest version of a document, or one version (document_id, optional version)\n- history: Earlier versions of a document, newest first (document_id, optional limit)\n- list: The documents of a kind, most recently changed first (kind, optional fields, limit, cursor)\n- delete: Delete a document with every version (document_id)\n\nOnly the module that declares a kind (board/task) writes and deletes its documents; anyone who\nreads the workspace reads them. put needs the version you read (0 for a new document); if someone\nchanged it since, nothing is written and the latest version comes back so you can decide again.",
+            "type": "string"
+          },
+          "author": {
+            "description": "Who writes this version (optional; defaults to the caller).",
+            "nullable": true,
+            "type": "string"
+          },
+          "cursor": {
+            "description": "For list: the next_cursor of the previous page.",
+            "nullable": true,
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": true,
+            "description": "The document's data for put: an object its kind's schema takes.",
+            "nullable": true,
+            "type": "object"
+          },
+          "document_id": {
+            "description": "Document ID (36-char UUID): for get, history, delete, and put of a change. A new document has none; memory gives it one.",
+            "nullable": true,
+            "type": "string"
+          },
+          "expected_version": {
+            "description": "For put: the version you read (0 for a new document).",
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "fields": {
+            "additionalProperties": true,
+            "description": "For list: top-level data fields and the values a listed document has (all must match), e.g. {\"column\": \"todo\"}.",
+            "nullable": true,
+            "type": "object"
+          },
+          "kind": {
+            "description": "Document kind, <module>/<name> (board/task), for put and list.",
+            "nullable": true,
+            "type": "string"
+          },
+          "limit": {
+            "description": "For list and history: at most this many (default 100, max 5000).",
+            "format": "uint32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "text": {
+            "description": "The document's text for put (at most 32 KiB); search finds it.",
+            "nullable": true,
+            "type": "string"
+          },
+          "version": {
+            "description": "For get: this version instead of the latest.",
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "workspace_id": {
+            "description": "Workspace ID (36-char UUID) the documents live in. Required.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "workspace_id"
+        ],
+        "title": "ManageDocumentRequest",
+        "type": "object"
+      },
+      "name": "manage_document"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "A session's message stream, its conversation turns. Actions: append (messages: each with turn_id, role, text, and for an agent's turn its parent and blocks), page (from, limit; oldest first, next_from for the next page). Agents keep their turns whole here to resume them.",
+      "inputSchema": {
+        "$defs": {
+          "MessageInput": {
+            "additionalProperties": false,
+            "description": "One turn of an append.",
+            "properties": {
+              "author": {
+                "description": "Who wrote the turn (optional; defaults to the caller).",
+                "nullable": true,
+                "type": "string"
+              },
+              "blocks": {
+                "description": "The turn whole: [{\"type\":\"text\",\"text\":..}, {\"type\":\"thinking\",\"text\":..,\"signature\":null}, {\"type\":\"tool_use\",\"id\":..,\"name\":..,\"input\":{..}}, {\"type\":\"tool_result\",\"tool_use_id\":..,\"content\":..,\"is_error\":false}]",
+                "items": true,
+                "nullable": true,
+                "type": "array"
+              },
+              "parent": {
+                "description": "The turn_id it follows (a fork); none: the one before it.",
+                "nullable": true,
+                "type": "string"
+              },
+              "role": {
+                "description": "user (a person, or tool results) or assistant (the model).",
+                "type": "string"
+              },
+              "text": {
+                "description": "The turn's text (what search reads); may be empty when it has blocks.",
+                "nullable": true,
+                "type": "string"
+              },
+              "tools": {
+                "description": "Names of the tools the turn used.",
+                "items": {
+                  "type": "string"
+                },
+                "nullable": true,
+                "type": "array"
+              },
+              "turn_id": {
+                "description": "The turn's id, unique in the session; an append skips one stored already.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "turn_id",
+              "role"
+            ],
+            "type": "object"
+          }
+        },
+        "description": "Request payload for the `manage_messages` tool.",
+        "properties": {
+          "action": {
+            "description": "Action on a session's message stream (its conversation turns).\n\nValid values:\n- append: Store turns at the end of the stream, in order (messages); a turn already stored (its turn_id) is skipped\n- page: Read the stream oldest first from a position (from, limit); next_from is where the next page starts\n\nAn agent keeps its turns whole: each with the turn it follows (parent) and its blocks (text,\nthinking, tool_use, tool_result); text is what search reads.",
+            "type": "string"
+          },
+          "from": {
+            "description": "For page: the first position read (default 0).",
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "limit": {
+            "description": "For page: at most this many turns (default 100, max 1000).",
+            "format": "uint32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "messages": {
+            "description": "For append: the turns, in order.",
+            "items": {
+              "$ref": "#/$defs/MessageInput"
+            },
+            "nullable": true,
+            "type": "array"
+          },
+          "session_id": {
+            "description": "Session ID (36-char UUID) whose stream it is. Required.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "session_id"
+        ],
+        "title": "ManageMessagesRequest",
+        "type": "object"
+      },
+      "name": "manage_messages"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Manage entities and context entries in a session. Actions: delete (remove entity + cascade typed edges; requires entity_name), delete_update (remove a single context entry by entry_id).",
+      "inputSchema": {
+        "description": "Request payload for the `manage_entity` tool.",
+        "properties": {
+          "action": {
+            "description": "Action to perform on session content.\n\nValid values:\n- delete: Remove an entity from the session (cascades typed edges). Requires entity_name.\n- merge: Merge entity_name into `into` when both name one thing (\"Surreal\" into \"SurrealDB\"): mentions,\n  relations and counts move over and entity_name becomes an alias. Spellings that differ only in case,\n  spaces, '-' or '_' merge on their own. Requires entity_name and into.\n- delete_update: Remove a single context update (ghost / bad row) by entry_id. Requires entry_id.\n- forget: Retire a record that no longer holds: it stops being valid now but stays in the history\n  (search shows its end date). Requires entry_id.\n- purge: Erase a record and everything derived from it (embedding, full-text entry, entities and edges\n  only it introduced), e.g. for GDPR erasure. Cannot be undone. Requires entry_id.",
+            "type": "string"
+          },
+          "entity_name": {
+            "description": "The entity, for delete and merge (matched case-insensitively), e.g. \"RocksDB\".",
+            "nullable": true,
+            "type": "string"
+          },
+          "entry_id": {
+            "description": "The record's entry_id (as search and assemble_context return it), for delete_update, forget and purge.",
+            "nullable": true,
+            "type": "string"
+          },
+          "into": {
+            "default": null,
+            "description": "Entity to merge entity_name into (required for action=merge).",
+            "nullable": true,
+            "type": "string"
+          },
+          "session_id": {
+            "description": "UUID of the session holding the entity or update.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "session_id"
+        ],
+        "title": "ManageEntityRequest",
+        "type": "object"
+      },
+      "name": "manage_entity"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Manage workspaces and their cards. Actions: create, list, get, delete, add_session, remove_session; get_card / update_card for the project card (workspace_id) or the user card (card: \"user\"): short markdown notes put in front of every session",
+      "inputSchema": {
+        "description": "Request payload for the `manage_workspace` tool.",
+        "properties": {
+          "action": {
+            "description": "Action:\n- create (name, description)\n- list (include_archived)\n- get, delete, archive, unarchive (workspace_id)\n- update: rename and/or redescribe (workspace_id; name, description)\n- add_session (workspace_id, session_id; role), remove_session (workspace_id, session_id)\n- get_card: the project card (workspace_id) or the user card (card \"user\"); history\n- update_card: the next version of a card (content, expected_version; workspace_id or card \"user\")\n- dismiss_radar_item (workspace_id, kind, key; author), restore_radar_item (workspace_id, kind, key), list_radar_dismissals (workspace_id)\n\nCards are markdown notes of at most 2 KB put in front of every session: the project card holds the stack, conventions and goals, the user card preferences. update_card needs the version you read (0 for a new card); if it changed since, nothing is written and the latest comes back to merge.",
+            "type": "string"
+          },
+          "author": {
+            "description": "Who writes the card, for update_card (optional): your agent name, the user, a teammate. Default: the connection's X-PCX-Author header, else the MCP client's name.",
+            "nullable": true,
+            "type": "string"
+          },
+          "card": {
+            "description": "Which card get_card and update_card act on: workspace (default; the project card of workspace_id) or user (the user's card).",
+            "nullable": true,
+            "type": "string"
+          },
+          "content": {
+            "description": "New card text for update_card: markdown, at most 2 KB, replacing the whole card (sections: Stack, Conventions, Preferences, Current goals).",
+            "nullable": true,
+            "type": "string"
+          },
+          "description": {
+            "description": "Workspace description, for create and update.",
+            "nullable": true,
+            "type": "string"
+          },
+          "expected_version": {
+            "description": "For update_card: the version your content was edited from (get_card shows it; 0 when there is no card).",
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "history": {
+            "description": "For get_card: this many older versions as well (default 0).",
+            "format": "uint32",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "include_archived": {
+            "description": "For list: include archived workspaces (default false).",
+            "nullable": true,
+            "type": "boolean"
+          },
+          "key": {
+            "description": "For the radar actions: which item: the entity name (unsolved_problem, stale_entity), the record id (decision_without_rationale), the question text (open_question) or \"<name>|<of>\" (alias_candidate), as the radar lists them.",
+            "nullable": true,
+            "type": "string"
+          },
+          "kind": {
+            "description": "For the radar actions: the item's list: unsolved_problem, decision_without_rationale, open_question, stale_entity or alias_candidate.",
+            "nullable": true,
+            "type": "string"
+          },
+          "name": {
+            "description": "Workspace name, for create and update.",
+            "nullable": true,
+            "type": "string"
+          },
+          "role": {
+            "description": "Role of the session, for add_session: primary, related (default), dependency or shared.",
+            "nullable": true,
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Session UUID, for add_session and remove_session.",
+            "nullable": true,
+            "type": "string"
+          },
+          "workspace_id": {
+            "description": "Workspace UUID, for every action but create, list and the user card's (find it with action list).",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "ManageWorkspaceRequest",
+        "type": "object"
+      },
+      "name": "manage_workspace"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Query session data. Types include: find_related_entities, get_entity_context, search_updates, entity_importance, entity_network, find_related_content, key_decisions, key_insights, session_statistics, structured_summary, decisions, open_questions, assemble_context, record (one record whole by entry_id, e.g. after a search snippet).",
+      "inputSchema": {
+        "description": "Request payload for the `query_conversation_context` tool.",
+        "properties": {
+          "parameters": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Query parameters as key-value pairs",
+            "type": "object"
+          },
+          "query_type": {
+            "description": "Query type. Supported: find_related_entities, get_entity_context, search_updates, entity_importance, entity_network, find_related_content (topic, max_results), key_decisions, key_insights (limit), session_statistics, structured_summary, decisions, open_questions, related_entities, all_entities, trace_relationships, get_most_important_entities, get_recently_mentioned_entities, analyze_entity_importance, find_entities_by_type, assemble_context, recent_changes, code_references, record (entry_id: one record whole, e.g. one a semantic_search snippet cut). Graph views (JSON; add workspace_id to view a whole workspace): entity (entity, limit: records, decisions, relations, aliases), impact (entity, depth: who depends on it plus valid decisions/requirements/problems about them, a pre-change risk report), topics (limit, per_topic: entity communities with key decisions), lineage (entity, depth: problem -> decision -> consequences in time order), radar (limit, include_dismissed: unsolved problems, decisions without rationale, open questions, stale entities, possible aliases; items dismissed with manage_workspace dismiss_radar_item are left out and listed under dismissed unless include_dismissed=true), file (path, depth: past problems, decisions and dependents of a source file).",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Session ID",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "query_type",
+          "parameters"
+        ],
+        "title": "QueryConversationContextRequest",
+        "type": "object"
+      },
+      "name": "query_conversation_context"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Universal semantic search. Scope: session (requires scope_id), workspace (requires scope_id), or global (default).",
+      "inputSchema": {
+        "description": "Request payload for the `semantic_search` tool.",
+        "properties": {
+          "author": {
+            "description": "Only records and messages by this author (optional), e.g. \"claude-code\", \"hermes:eq-lead\" or a person's name.",
+            "nullable": true,
+            "type": "string"
+          },
+          "date_from": {
+            "description": "Only results from this date on (YYYY-MM-DD or RFC 3339).",
+            "nullable": true,
+            "type": "string"
+          },
+          "date_to": {
+            "description": "Only results up to this date (YYYY-MM-DD or RFC 3339).",
+            "nullable": true,
+            "type": "string"
+          },
+          "detail": {
+            "description": "How much of each result's text (default snippet).\n\n- snippet: a long text as its passage around the query's words (about 400 characters, with full_chars, its whole length), a short one whole\n- full: every text whole, and the records and turns around each hit (neighbour_of)\n\nRead one result whole: a record (UUID content_id) with query_conversation_context query_type record, a message (message:<seq>) with manage_messages page, an entity (entity:<name>) with get_entity_context, a document with manage_document get.",
+            "nullable": true,
+            "type": "string"
+          },
+          "interaction_type": {
+            "description": "Only these types: qa, decision_made, problem_solved, code_change, requirement_added, concept_defined.",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true,
+            "type": "array"
+          },
+          "limit": {
+            "description": "At most this many results (default 10, max 100).",
+            "format": "uint",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "mode": {
+            "description": "Ranking effort (default set by the server): fast (vector + keyword fused, ~40 ms), local (plus a local cross-encoder, ~1 s on CPU), accurate (plus the Voyage reranker when the server has a key, ~0.5 s; else as local).",
+            "nullable": true,
+            "type": "string"
+          },
+          "prefer_author": {
+            "description": "Rank this author's records and messages a little higher (optional), e.g. your own agent name; others still appear.",
+            "nullable": true,
+            "type": "string"
+          },
+          "query": {
+            "description": "What to find, in natural language.",
+            "type": "string"
+          },
+          "recency_bias": {
+            "description": "Favour recent results (default 0: off). Scores decay as e^(-λ·days/365): at 0.5 a year-old result keeps ~61%, at 1.0 ~37%. Reorders, filters nothing; 0.5-1.0 suits recent bugs, 0 timeless docs.",
+            "format": "float",
+            "nullable": true,
+            "type": "number"
+          },
+          "scope": {
+            "description": "session, workspace or global (default). session and workspace need scope_id.",
+            "nullable": true,
+            "type": "string"
+          },
+          "scope_id": {
+            "description": "The session or workspace UUID, for scope session or workspace.",
+            "nullable": true,
+            "type": "string"
+          },
+          "select": {
+            "description": "JSONPath picking part of the response (e.g. \"$.results[*].content_id\"). Allowed: $, .field, [n], [-n], [a:b], [*], .*, [0,3,7]. Not with select_map.",
+            "nullable": true,
+            "type": "string"
+          },
+          "select_map": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Output keys to JSONPaths, as in select (e.g. {\"ids\": \"$.results[*].content_id\"}); a key with no match is null. Result fields: content_id, session_id, content_type, text_content, similarity_score, importance_score, combined_score, timestamp. Not with select.",
+            "nullable": true,
+            "type": "object"
+          },
+          "sources": {
+            "description": "What to search (default records): records (the structured context), messages (captured conversation turns, each with the turns around it) or all. Use messages for what was said but never logged as a record.",
+            "nullable": true,
+            "type": "string"
+          },
+          "trace": {
+            "default": null,
+            "description": "Add `signals` to each result: its ranks in the vector, BM25 and graph rankings, the fused and the reranker score (optional, default false).",
+            "nullable": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "SemanticSearchRequest",
+        "type": "object"
+      },
+      "name": "semantic_search"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Manage sessions. Actions: create, list, load, search, update_metadata, delete; resolve_project (key, name, optional workspace) finds or creates the workspace and session of a project.",
+      "inputSchema": {
+        "description": "Request payload for the `session` tool.",
+        "properties": {
+          "action": {
+            "description": "Action:\n- create (name, description): a new session's UUID\n- list\n- load (session_id): one session's metadata\n- search (query): sessions by name or description\n- update_metadata (session_id; name and/or description)\n- delete (session_id): the session and its updates, for good\n- delete_message (session_id, seq): one captured turn; records derived from it keep its id\n- delete_messages (session_id): every captured turn; records stay\n- resolve_project (key, name; workspace): find or create the project's workspace and session; the same key always gives the same ones",
+            "type": "string"
+          },
+          "description": {
+            "description": "Session description, for create and update_metadata.",
+            "nullable": true,
+            "type": "string"
+          },
+          "key": {
+            "description": "For resolve_project: the git remote origin URL without scheme, user and .git, host lowercased (git@host:a/b is host/a/b), or local:<first 16 hex of the sha256 of the absolute git root or working directory>. 1 to 512 printable characters, no whitespace. Example: \"github.com/julymetodiev/post-cortex\".",
+            "nullable": true,
+            "type": "string"
+          },
+          "name": {
+            "description": "Session name, for create and update_metadata; for resolve_project, the name of a new workspace and session (1 to 200 characters).",
+            "nullable": true,
+            "type": "string"
+          },
+          "query": {
+            "description": "For search: a case-insensitive substring of a session's name or description.",
+            "nullable": true,
+            "type": "string"
+          },
+          "seq": {
+            "description": "For delete_message: the turn's position, the number in its content id message:<seq>.",
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "session_id": {
+            "description": "Session UUID, for load, update_metadata, delete, delete_message and delete_messages.",
+            "nullable": true,
+            "type": "string"
+          },
+          "workspace": {
+            "description": "For resolve_project: put a new key in the workspace of this name (created if missing) instead of a new one named after the project. Ignored when the key is bound already.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "SessionRequest",
+        "type": "object"
+      },
+      "name": "session"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Add context updates to conversation. Supports single update or bulk mode with updates array.",
+      "inputSchema": {
+        "$defs": {
+          "ContextUpdateItem": {
+            "description": "One update of a bulk write.",
+            "properties": {
+              "code_reference": {
+                "description": "Optional code location: \"src/main.rs:42\" or {\"file\", \"line\", \"function\"}."
+              },
+              "confidence": {
+                "default": null,
+                "description": "How sure you are, 0..1; optional.",
+                "format": "float",
+                "nullable": true,
+                "type": "number"
+              },
+              "content": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key-value pairs; every value is a string (stringify nested JSON). Its title and description come from the type's keys: qa question, answer; decision_made decision, rationale; problem_solved problem, solution; code_change file (or file_path), changes (or diff, change); requirement_added requirement, description; concept_defined concept, definition. title and description stand in for either; at least one of the two must be given. Other keys are kept as details.",
+                "type": "object"
+              },
+              "derived_from": {
+                "default": null,
+                "description": "Optional: content ids of this session's captured messages it was drawn from (e.g. \"message:12\"); each must exist.",
+                "items": {
+                  "type": "string"
+                },
+                "nullable": true,
+                "type": "array"
+              },
+              "entities": {
+                "default": [],
+                "description": "The entities it mentions; at least one.",
+                "items": {
+                  "$ref": "#/$defs/EntityItem"
+                },
+                "type": "array"
+              },
+              "interaction_type": {
+                "description": "One of qa, decision_made, problem_solved, code_change, requirement_added, concept_defined (exact, lowercase).",
+                "type": "string"
+              },
+              "relations": {
+                "default": [],
+                "description": "Relations between those entities; at least one.",
+                "items": {
+                  "$ref": "#/$defs/RelationItem"
+                },
+                "type": "array"
+              },
+              "supersedes": {
+                "default": null,
+                "description": "Optional: entry ids of this session's records it replaces; they stay in the history, marked as ended.",
+                "items": {
+                  "type": "string"
+                },
+                "nullable": true,
+                "type": "array"
+              },
+              "valid_from": {
+                "default": null,
+                "description": "When the fact started to hold, if not now (RFC 3339 or YYYY-MM-DD); optional.",
+                "nullable": true,
+                "type": "string"
+              }
+            },
+            "required": [
+              "interaction_type",
+              "content"
+            ],
+            "type": "object"
+          },
+          "EntityItem": {
+            "description": "An entity an update mentions.",
+            "properties": {
+              "entity_type": {
+                "default": "concept",
+                "description": "concept (the default, also for an unknown value), technology,\nproblem, solution, decision or code_component.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Its unique name.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "RelationItem": {
+            "description": "A relation between two entities of the same update.",
+            "properties": {
+              "context": {
+                "description": "Why it holds; required: a relation without it is refused, and the whole update with it.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "from_entity": {
+                "description": "An entity of the update, by name.",
+                "type": "string"
+              },
+              "relation_type": {
+                "description": "depends_on, implements, caused_by, leads_to, related_to, required_by,\nconflicts_with or solves; another value is refused.",
+                "type": "string"
+              },
+              "to_entity": {
+                "description": "Another entity of the update, by name.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "from_entity",
+              "to_entity",
+              "relation_type",
+              "context"
+            ],
+            "type": "object"
+          }
+        },
+        "description": "Request payload for the `update_conversation_context` tool.",
+        "properties": {
+          "author": {
+            "description": "Who writes it: your agent name, the user, a teammate (optional). Default: the connection's X-PCX-Author header, else the MCP client's name unless that only names an SDK. Shown in results and usable as a search filter.",
+            "nullable": true,
+            "type": "string"
+          },
+          "code_reference": {
+            "description": "Optional code location: \"src/main.rs:42\" or {\"file\", \"line\", \"function\"}."
+          },
+          "confidence": {
+            "default": null,
+            "description": "How sure you are, 0..1; optional.",
+            "format": "float",
+            "nullable": true,
+            "type": "number"
+          },
+          "content": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Single update: key-value pairs; every value is a string (stringify nested JSON). Its title and description come from the type's keys: qa question, answer; decision_made decision, rationale; problem_solved problem, solution; code_change file (or file_path), changes (or diff, change); requirement_added requirement, description; concept_defined concept, definition. title and description stand in for either; at least one of the two must be given. Other keys are kept as details. Required unless updates is given.",
+            "nullable": true,
+            "type": "object"
+          },
+          "derived_from": {
+            "default": null,
+            "description": "Optional: content ids of this session's captured messages it was drawn from (e.g. \"message:12\"); each must exist.",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true,
+            "type": "array"
+          },
+          "dry_run": {
+            "description": "Validate and preview without storing anything.",
+            "nullable": true,
+            "type": "boolean"
+          },
+          "entities": {
+            "default": [],
+            "description": "The entities it mentions; at least one.",
+            "items": {
+              "$ref": "#/$defs/EntityItem"
+            },
+            "type": "array"
+          },
+          "interaction_type": {
+            "description": "Single update: one of qa, decision_made, problem_solved, code_change, requirement_added, concept_defined (exact, lowercase). Required unless updates is given.",
+            "nullable": true,
+            "type": "string"
+          },
+          "relations": {
+            "default": [],
+            "description": "Relations between those entities; at least one.",
+            "items": {
+              "$ref": "#/$defs/RelationItem"
+            },
+            "type": "array"
+          },
+          "session_id": {
+            "description": "Session UUID (from the session tool or search results).",
+            "type": "string"
+          },
+          "supersedes": {
+            "default": null,
+            "description": "Optional: entry ids of this session's records it replaces; they stay in the history, marked as ended.",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true,
+            "type": "array"
+          },
+          "updates": {
+            "description": "Bulk: several updates, each with its own interaction_type, content, entities and relations. When given, the single-update fields are ignored.",
+            "items": {
+              "$ref": "#/$defs/ContextUpdateItem"
+            },
+            "nullable": true,
+            "type": "array"
+          },
+          "valid_from": {
+            "default": null,
+            "description": "When the fact started to hold, if not now (RFC 3339 or YYYY-MM-DD); optional.",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "UpdateConversationContextRequest",
+        "type": "object"
+      },
+      "name": "update_conversation_context"
+    }
+  ]
+}

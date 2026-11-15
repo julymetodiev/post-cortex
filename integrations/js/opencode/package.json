@@ -1,0 +1,66 @@
+{
+  "name": "@post-cortex/opencode",
+  "version": "0.1.0",
+  "description": "post-cortex memory for OpenCode: project and user cards in the system prompt, file memory after edits, optional turn capture",
+  "license": "MIT",
+  "author": "Chronicle Labs Ltd.",
+  "homepage": "https://post-cortex.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/julymetodiev/post-cortex.git",
+    "directory": "integrations/js/opencode"
+  },
+  "bugs": "https://github.com/julymetodiev/post-cortex/issues",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "post-cortex",
+    "memory",
+    "mcp",
+    "agents"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/server.js",
+    "dist/server.d.ts",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test build-test/test/*.test.js",
+    "clean": "rm -rf dist build-test"
+  },
+  "dependencies": {
+    "@post-cortex/plugin-core": "0.1.0"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.19.0"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.19.3"
+  }
+}

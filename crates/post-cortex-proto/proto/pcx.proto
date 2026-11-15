@@ -1,6 +1,11 @@
 syntax = "proto3";
 package pcx.v1;
 
+import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+import "views.proto";
+import "pcx_blocks.proto";
+
 service PostCortex {
   // --- Session Management ---
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
@@ -11,26 +16,37 @@ service PostCortex {
   rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
 
   // --- Context Operations ---
+
+  // Record what was learned in a session: a decision, a fix, a change, a
+  // requirement, a definition or an answer, with the entities it names and
+  // the relations between them.
   rpc UpdateContext(UpdateContextRequest) returns (UpdateContextResponse);
   rpc QueryContext(QueryContextRequest) returns (QueryContextResponse);
   rpc BulkUpdateContext(BulkUpdateContextRequest) returns (BulkUpdateContextResponse);
   rpc CreateCheckpoint(CreateCheckpointRequest) returns (CreateCheckpointResponse);
 
   // --- Semantic Search ---
+
+  // Search memory by meaning: a session's records, a workspace's or all
+  // of them, best first.
   rpc SemanticSearch(SemanticSearchRequest) returns (SemanticSearchResponse);
   rpc FindRelatedContent(FindRelatedContentRequest) returns (FindRelatedContentResponse);
   rpc VectorizeSession(VectorizeSessionRequest) returns (VectorizeSessionResponse);
-  rpc GetVectorizationStats(GetVectorizationStatsRequest) returns (TextResponse);
+  rpc GetVectorizationStats(GetVectorizationStatsRequest) returns (VectorizationStats);
 
   // --- Analysis & Insights ---
-  rpc GetStructuredSummary(GetStructuredSummaryRequest) returns (TextResponse);
-  rpc GetKeyDecisions(GetKeyDecisionsRequest) returns (TextResponse);
-  rpc GetKeyInsights(GetKeyInsightsRequest) returns (TextResponse);
-  rpc GetEntityImportance(GetEntityImportanceRequest) returns (TextResponse);
-  rpc GetEntityNetwork(GetEntityNetworkRequest) returns (TextResponse);
-  rpc GetSessionStatistics(GetSessionStatisticsRequest) returns (TextResponse);
+  rpc GetStructuredSummary(GetStructuredSummaryRequest) returns (StructuredSummary);
+  rpc GetKeyDecisions(GetKeyDecisionsRequest) returns (KeyDecisions);
+  rpc GetKeyInsights(GetKeyInsightsRequest) returns (KeyInsights);
+  rpc GetEntityImportance(GetEntityImportanceRequest) returns (EntityImportance);
+  rpc GetEntityNetwork(GetEntityNetworkRequest) returns (EntityNetwork);
+  rpc GetSessionStatistics(GetSessionStatisticsRequest) returns (SessionStatistics);
 
   // --- Graph-Aware Context Assembly ---
+
+  // The context of a session or a workspace for a query, within a token
+  // budget: the records that match it, their entities' neighbours, and
+  // who depends on those entities.
   rpc AssembleContext(AssembleContextRequest) returns (AssembleContextResponse);
 
   // --- Graph Maintenance ---
@@ -46,10 +62,10 @@ service PostCortex {
   // Erase a record and everything derived from it (GDPR erasure).
   rpc PurgeUpdate(UpdateRefRequest) returns (UpdateRefResponse);
 
-  // --- Graph and memory views (ROADMAP Phase 4) ---
-  // JSON of one view: graph, entity, impact, timeline, topics, lineage,
-  // radar. Same views and parameters as the REST /api/graph... routes.
-  rpc GetGraphView(GetGraphViewRequest) returns (TextResponse);
+  // --- Graph views for agents ---
+  // One view: entity, impact, topics, lineage, radar or file (the same
+  // views as the MCP query_conversation_context types).
+  rpc GetGraphView(GetGraphViewRequest) returns (GraphView);
 
   // --- Workspace Management ---
   rpc CreateWorkspace(CreateWorkspaceRequest) returns (CreateWorkspaceResponse);
@@ -58,6 +74,8 @@ service PostCortex {
   rpc DeleteWorkspace(DeleteWorkspaceRequest) returns (DeleteWorkspaceResponse);
   rpc AddSessionToWorkspace(AddSessionToWorkspaceRequest) returns (AddSessionToWorkspaceResponse);
   rpc RemoveSessionFromWorkspace(RemoveSessionFromWorkspaceRequest) returns (RemoveSessionFromWorkspaceResponse);
+  // Find or create the workspace and session of a project key (idempotent).
+  rpc ResolveProject(ResolveProjectRequest) returns (ResolveProjectResponse);
 
   // --- Source Tracking ---
   rpc RegisterSource(RegisterSourceRequest) returns (RegisterSourceAck);
@@ -75,98 +93,299 @@ service PostCortex {
   // (entries that were marked stale by invalidate_source but never re-registered).
   rpc GetStaleEntriesBySource(GetStaleEntriesBySourceRequest) returns (GetStaleEntriesBySourceResponse);
 
-  // --- Conversation capture and cards (ROADMAP Phase 2) ---
+  // --- Conversation capture and cards ---
   rpc AppendMessages(AppendMessagesRequest) returns (AppendMessagesResponse);
+  // A session's turns in order, a page at a time (an agent's transcript).
+  rpc ListMessages(ListMessagesRequest) returns (MessagePage);
   rpc GetCard(GetCardRequest) returns (GetCardResponse);
   rpc UpdateCard(UpdateCardRequest) returns (UpdateCardResponse);
 
   // --- Health ---
   rpc Health(HealthRequest) returns (HealthResponse);
+
+  // --- Workspace lifecycle ---
+  // Change the name and/or description of a workspace.
+  rpc UpdateWorkspace(UpdateWorkspaceRequest) returns (UpdateWorkspaceResponse);
+  // Archive a workspace: it keeps its sessions and data and is left out of
+  // ListWorkspaces unless include_archived is set.
+  rpc ArchiveWorkspace(ArchiveWorkspaceRequest) returns (ArchiveWorkspaceResponse);
+  rpc UnarchiveWorkspace(ArchiveWorkspaceRequest) returns (ArchiveWorkspaceResponse);
+
+  // --- Message stream maintenance ---
+  // Delete one captured turn. Records derived_from it keep the id.
+  rpc DeleteMessage(DeleteMessageRequest) returns (DeleteMessagesResponse);
+  // Delete a session's whole message stream.
+  rpc DeleteMessages(DeleteMessagesRequest) returns (DeleteMessagesResponse);
+
+  // --- Radar dismissals (per workspace) ---
+  // Hide a radar item from the radar view of the workspace and of its
+  // member sessions (GetGraphView radar with include_dismissed=true shows it).
+  rpc DismissRadarItem(DismissRadarItemRequest) returns (DismissRadarItemResponse);
+  rpc RestoreRadarItem(RestoreRadarItemRequest) returns (RestoreRadarItemResponse);
+  rpc ListRadarDismissals(ListRadarDismissalsRequest) returns (ListRadarDismissalsResponse);
+
+  // --- Export / import (the `pcx export` file format) ---
+  // The archive of a scope, as the bytes of a `pcx export` file, in chunks.
+  rpc Export(ExportRequest) returns (stream ExportChunk);
+  // Read an archive sent in chunks; the first chunk carries the settings.
+  // Without settings.commit only a preview (counts, conflicts) is returned.
+  rpc Import(stream ImportChunk) returns (ImportResponse);
+
+  // --- Project lookup ---
+  // Where ResolveProject would put a project key, without creating
+  // anything (gateways authorise a resolution with it).
+  rpc FindProject(FindProjectRequest) returns (FindProjectResponse);
+
+  // --- Documents of modules (W23) ---
+  // Write the next version of a document unless it changed since the
+  // version the writer read; a conflict answers the latest version. Only
+  // the module that declares the kind writes it.
+  rpc PutDocument(PutDocumentRequest) returns (PutDocumentResponse);
+  // The latest version of a document, or one version.
+  rpc GetDocument(GetDocumentRequest) returns (Document);
+  // Earlier versions of a document, newest first.
+  rpc GetDocumentHistory(GetDocumentHistoryRequest) returns (DocumentHistory);
+  // The documents of a kind, the most recently changed first.
+  rpc ListDocuments(ListDocumentsRequest) returns (DocumentPage);
+  // Delete a document with every version. Only the module that declares
+  // its kind deletes it.
+  rpc DeleteDocument(DeleteDocumentRequest) returns (DeleteDocumentResponse);
 }
 
-// ============ Common ============
+// ============ Documents ============
 
-// Used for RPCs that return JSON text from analysis functions.
-message TextResponse {
-  string text = 1;
+// One version of a document a module keeps in memory.
+message Document {
+  // Its workspace.
+  string workspace_id = 1;
+  // Its id, given by memory at its first version.
+  string id = 2;
+  // Its kind, `<module>/<name>` (`board/task`).
+  string kind = 3;
+  // 1 for the first version, one more for every change.
+  uint64 version = 4;
+  // Its data: a message of the type its kind declares.
+  google.protobuf.Any data = 5;
+  // Its title: the data field its kind names as the title.
+  string title = 6;
+  // Its text.
+  string text = 7;
+  // When this version was written.
+  google.protobuf.Timestamp updated_at = 8;
+  // Who wrote this version; unset: unknown.
+  optional string author = 9;
 }
+
+// Write the next version of a document.
+message PutDocumentRequest {
+  // Its workspace.
+  string workspace_id = 1;
+  // The document; empty for a new one (with expected_version 0).
+  string document_id = 2;
+  // Its kind, `<module>/<name>`.
+  string kind = 3;
+  // Its data: a message of the type its kind declares.
+  google.protobuf.Any data = 4;
+  // Its text (at most 32 KiB); search finds it.
+  string text = 5;
+  // The version the writer read; 0: a new document.
+  uint64 expected_version = 6;
+  // Who writes this version; unset: the caller.
+  optional string author = 7;
+}
+
+// A put: the version written, or on a conflict the latest one.
+message PutDocumentResponse {
+  // Whether the version was written (false: a conflict).
+  bool written = 1;
+  // The version written; on a conflict the latest (unset: none).
+  Document document = 2;
+}
+
+// One version of a document.
+message GetDocumentRequest {
+  // Its workspace.
+  string workspace_id = 1;
+  // The document.
+  string document_id = 2;
+  // This version; unset: the latest.
+  optional uint64 version = 3;
+}
+
+// Earlier versions of a document.
+message GetDocumentHistoryRequest {
+  // Its workspace.
+  string workspace_id = 1;
+  // The document.
+  string document_id = 2;
+  // At most this many; 0: 100.
+  uint32 limit = 3;
+}
+
+// Versions of a document, newest first.
+message DocumentHistory {
+  // The versions.
+  repeated Document versions = 1;
+}
+
+// The documents of a kind.
+message ListDocumentsRequest {
+  // Their workspace.
+  string workspace_id = 1;
+  // Their kind, `<module>/<name>`.
+  string kind = 2;
+  // Only documents whose data has these fields equal to `example`'s; unset:
+  // all of them.
+  DocumentFilter filter = 3;
+  // At most this many; 0: 100.
+  uint32 limit = 4;
+  // The next_cursor of the previous page; empty: the first page.
+  string cursor = 5;
+}
+
+// Documents whose data has some fields equal to an example's.
+message DocumentFilter {
+  // A message of the kind's type with the values to match.
+  google.protobuf.Any example = 1;
+  // The top-level fields of it that must be equal, by name.
+  repeated string fields = 2;
+}
+
+// A page of documents.
+message DocumentPage {
+  // The latest version of each, the most recently changed first.
+  repeated Document documents = 1;
+  // Documents matching over all pages.
+  uint64 total = 2;
+  // Where the next page starts; empty on the last.
+  string next_cursor = 3;
+}
+
+// Delete a document.
+message DeleteDocumentRequest {
+  // Its workspace.
+  string workspace_id = 1;
+  // The document.
+  string document_id = 2;
+}
+
+// A deleted document.
+message DeleteDocumentResponse {}
 
 // ============ Session Management ============
 
+// Create a session.
 message CreateSessionRequest {
+  // Name of the session; empty: none.
   string name = 1;
+  // Description of the session; empty: none.
   string description = 2;
 }
 
+// The session created.
 message CreateSessionResponse {
+  // Id of the new session.
   string session_id = 1;
 }
 
+// List the sessions.
 message ListSessionsRequest {
   // Optional filter by name substring
   string name_filter = 1;
+  // Most sessions to return; 0: 100.
   uint32 limit = 2;
 }
 
+// One session as listings show it.
 message SessionInfo {
+  // Id of the session.
   string session_id = 1;
+  // Name; empty when it has none.
   string name = 2;
+  // Description; empty when it has none.
   string description = 3;
+  // When it was created, in Unix seconds.
   int64 created_at_unix = 4;
+  // Records it holds.
   uint32 update_count = 5;
 }
 
+// The sessions listed.
 message ListSessionsResponse {
+  // The sessions.
   repeated SessionInfo sessions = 1;
 }
 
+// Load one session.
 message LoadSessionRequest {
+  // Id of the session.
   string session_id = 1;
 }
 
+// The session loaded.
 message LoadSessionResponse {
+  // The session.
   SessionInfo session = 1;
 }
 
+// Find sessions by name or description.
 message SearchSessionsRequest {
+  // Substring of the name or description, any case; not empty.
   string query = 1;
 }
 
+// The sessions found.
 message SearchSessionsResponse {
+  // The sessions whose name or description contains the query.
   repeated SessionInfo sessions = 1;
 }
 
+// Change a session's name and/or description.
 message UpdateSessionMetadataRequest {
+  // Id of the session.
   string session_id = 1;
   // All fields are optional — only provided fields are updated.
   optional string name = 2;
+  // New description; unset: unchanged.
   optional string description = 3;
 }
 
+// The change was made.
 message UpdateSessionMetadataResponse {
+  // Always true; failures are errors.
   bool success = 1;
 }
 
+// Delete a session and everything stored under it.
 message DeleteSessionRequest {
+  // Id of the session.
   string session_id = 1;
 }
 
+// The session was deleted.
 message DeleteSessionResponse {
+  // Whether the session existed.
   bool success = 1;
 }
 
+// Delete an entity of a session's graph with its edges.
 message DeleteEntityRequest {
+  // Id of the session.
   string session_id = 1;
+  // Name (or alias) of the entity; not empty.
   string entity_name = 2;
 }
 
+// Whether the entity was deleted.
 message DeleteEntityResponse {
   // True if the entity existed and was removed; false if it was not
   // present in the session (no-op).
   bool existed = 1;
 }
 
+// Merge one entity into another.
 message MergeEntitiesRequest {
+  // Id of the session.
   string session_id = 1;
   // The entity that becomes an alias.
   string entity_name = 2;
@@ -174,55 +393,345 @@ message MergeEntitiesRequest {
   string into = 3;
 }
 
+// Whether the entities were merged.
 message MergeEntitiesResponse {
   // False if either entity is unknown or both are one.
   bool merged = 1;
 }
 
+// Name one record of a session.
 message UpdateRefRequest {
+  // Id of the session.
   string session_id = 1;
+  // Entry id of the record.
   string entry_id = 2;
 }
 
+// Whether the record was changed.
 message UpdateRefResponse {
   // False if the record is unknown (or, for ForgetUpdate, already retired).
   bool existed = 1;
 }
 
+// One graph view of a session or a workspace.
 message GetGraphViewRequest {
-  // graph, entity, impact, timeline, topics, lineage or radar.
-  string view = 1;
   // The session to view, or any member of the workspace.
   string session_id = 2;
   // View the whole workspace instead (optional).
   string workspace_id = 3;
-  // View parameters: limit, at, from, to, depth, per_topic, entity.
-  map<string, string> params = 4;
+  // The view and its parameters (a limit or depth left 0: the default; one
+  // above the most: the most).
+  oneof view {
+    // An entity, its relations, records and decisions.
+    EntityViewParams entity = 5;
+    // Who depends on an entity, and the risks recorded about them.
+    ImpactViewParams impact = 6;
+    // The topics (communities) of the graph.
+    TopicsViewParams topics = 7;
+    // How an entity came to be, record by record.
+    LineageViewParams lineage = 8;
+    // What needs attention: unsolved problems, decisions without a
+    // rationale, open questions, stale entities, alias candidates.
+    RadarViewParams radar = 9;
+    // What memory holds about a source file.
+    FileViewParams file = 10;
+  }
+  reserved 1, 4;
+}
+
+// Parameters of the entity view.
+message EntityViewParams {
+  // Entity name or alias.
+  string entity = 1;
+  // Most records; 0: 100.
+  uint32 limit = 2;
+}
+
+// Parameters of the impact view.
+message ImpactViewParams {
+  // Entity name or alias.
+  string entity = 1;
+  // Hops; 0: 3, at most 10.
+  uint32 depth = 2;
+  // Most risk records; 0: 100.
+  uint32 limit = 3;
+}
+
+// Parameters of the topics view.
+message TopicsViewParams {
+  // Most topics; 0: 100.
+  uint32 limit = 1;
+  // Entities and decisions per topic; 0: 5, at most 50.
+  uint32 per_topic = 2;
+}
+
+// Parameters of the lineage view.
+message LineageViewParams {
+  // Entity name or alias.
+  string entity = 1;
+  // Hops; 0: 3, at most 10.
+  uint32 depth = 2;
+}
+
+// Parameters of the radar view.
+message RadarViewParams {
+  // Most items per list; 0: 100.
+  uint32 limit = 1;
+  // Keep dismissed items in the lists.
+  bool include_dismissed = 2;
+}
+
+// Parameters of the file view.
+message FileViewParams {
+  // Source file path.
+  string path = 1;
+  // Hops of impact analysis; 0: 2, at most 10.
+  uint32 depth = 2;
+  // Most records per list; 0: 20.
+  uint32 limit = 3;
+}
+
+// One rendered graph view.
+message GraphView {
+  // The view asked for.
+  oneof view {
+    // The entity view.
+    EntityView entity = 1;
+    // The impact view.
+    ImpactView impact = 2;
+    // The topics view.
+    TopicsView topics = 3;
+    // The lineage view.
+    LineageView lineage = 4;
+    // The radar view.
+    RadarView radar = 5;
+    // The file view.
+    FileView file = 6;
+  }
+}
+
+// An entity as the graph views show it.
+message GraphNode {
+  // Its name.
+  string name = 1;
+  // Its type (stored name, `code_component`).
+  string entity_type = 2;
+  // Its other names.
+  repeated string aliases = 3;
+  // Its description; unset: none.
+  optional string description = 4;
+  // Its importance, in (0, 1].
+  float importance = 5;
+  // How often it was mentioned.
+  uint32 mention_count = 6;
+  // Records that name it.
+  uint64 records = 7;
+  // When it was first seen.
+  google.protobuf.Timestamp first_seen = 8;
+  // When it was last seen.
+  google.protobuf.Timestamp last_seen = 9;
+  // Its topic; unset: none.
+  optional uint64 community = 10;
+}
+
+// A relation as the graph views show it.
+message GraphEdge {
+  // Source entity.
+  string from = 1;
+  // Target entity.
+  string to = 2;
+  // Relation type (stored name, `depends_on`).
+  string relation_type = 3;
+  // Why it holds.
+  string context = 4;
+  // Its weight.
+  float weight = 5;
+  // Since when it holds; unset: unknown.
+  optional google.protobuf.Timestamp valid_from = 6;
+  // Until when it held; unset: it holds.
+  optional google.protobuf.Timestamp valid_to = 7;
+  // The records that state it.
+  repeated string records = 8;
+}
+
+// A record as the graph views show it.
+message RecordView {
+  // Its id.
+  string id = 1;
+  // Its session.
+  string session_id = 2;
+  // Its interaction type (stored name, `decision_made`).
+  string interaction_type = 3;
+  // Its title.
+  string title = 4;
+  // Its text.
+  string description = 5;
+  // Who wrote it; unset: unknown.
+  optional string author = 6;
+  // When it was written.
+  google.protobuf.Timestamp timestamp = 7;
+  // The writer's confidence; unset: none.
+  optional float confidence = 8;
+  // The records it was derived from.
+  repeated string derived_from = 9;
+  // The source file it is about; unset: none.
+  optional string file = 10;
+  // Its validity.
+  pcx.views.v1.Validity validity = 11;
+}
+
+// The entity view.
+message EntityView {
+  // The entity.
+  GraphNode entity = 1;
+  // Its relations.
+  repeated GraphEdge relations = 2;
+  // Records that name it, newest first.
+  repeated RecordView records = 3;
+  // Decisions that name it.
+  repeated RecordView decisions = 4;
+  // Records that name it, all of them.
+  uint64 total_records = 5;
+}
+
+// An entity that depends on the one asked for.
+message ImpactItem {
+  // The dependent entity.
+  string entity = 1;
+  // Its type; unset: unknown.
+  optional string entity_type = 2;
+  // The entity it depends through.
+  string via = 3;
+  // The relation type (stored name).
+  string relation_type = 4;
+  // Why the relation holds.
+  string context = 5;
+  // Hops from the entity asked for.
+  uint64 depth = 6;
+}
+
+// The impact view.
+message ImpactView {
+  // The entity asked for.
+  string entity = 1;
+  // Who depends on it, nearest first.
+  repeated ImpactItem dependents = 2;
+  // Problems and decisions recorded about the dependents.
+  repeated RecordView risks = 3;
+}
+
+// A topic of the topics view.
+message TopicView {
+  // Its id.
+  uint64 id = 1;
+  // Entities in it.
+  uint64 size = 2;
+  // Its central entities.
+  repeated GraphNode central = 3;
+  // Its key decisions.
+  repeated RecordView key_decisions = 4;
+  // Records about it.
+  uint64 records = 5;
+  // Its first record; unset: none.
+  optional google.protobuf.Timestamp first = 6;
+  // Its last record; unset: none.
+  optional google.protobuf.Timestamp last = 7;
+}
+
+// The topics view.
+message TopicsView {
+  // The topics, largest first.
+  repeated TopicView topics = 1;
+  // Entities in no topic.
+  uint64 unclustered = 2;
+}
+
+// A step of the lineage view.
+message LineageStep {
+  // The record.
+  RecordView record = 1;
+  // The causal relation it asserted, when that is how it joined; unset:
+  // none.
+  pcx.views.v1.RelationRef relation = 2;
+}
+
+// The lineage view.
+message LineageView {
+  // The entity asked for.
+  string entity = 1;
+  // Entities on the causal chain.
+  repeated string chain = 2;
+  // The records, in time order.
+  repeated LineageStep steps = 3;
+}
+
+// The file view.
+message FileView {
+  // The file.
+  string path = 1;
+  // Records with a code reference to it or about an entity naming it,
+  // newest first.
+  repeated RecordView records = 2;
+  // Problems solved there.
+  repeated RecordView problems = 3;
+  // Valid decisions and requirements about it.
+  repeated RecordView decisions = 4;
+  // Entities naming it (its path, file name or stem).
+  repeated GraphNode entities = 5;
+  // What depends on those entities.
+  repeated ImpactItem dependents = 6;
+}
+
+// The radar view.
+message RadarView {
+  // Problem entities nothing solves.
+  repeated GraphNode unsolved_problems = 1;
+  // Valid decisions recorded without a rationale.
+  repeated RecordView decisions_without_rationale = 2;
+  // Questions still open in the sessions' structured context.
+  repeated string open_questions = 3;
+  // Entities untouched for months, most important first.
+  repeated GraphNode stale_entities = 4;
+  // Entities that may be one.
+  repeated pcx.views.v1.AliasCandidate alias_candidates = 5;
+  // Dismissals of the scope's workspaces that match items on the radar;
+  // those items are left out of the lists above unless include_dismissed.
+  repeated RadarDismissal dismissed = 6;
 }
 
 // ============ Context Update ============
 
+// An entity a record names.
 message EntityInfo {
+  // Name of the entity.
   string name = 1;
   string entity_type = 2;  // "technology", "concept", "problem", "solution", "decision", "code_component"
 }
 
+// A relation between two entities a record states.
 message RelationInfo {
+  // Source entity (one of the record's entities).
   string from_entity = 1;
+  // Target entity (one of the record's entities).
   string to_entity = 2;
   string relation_type = 3;  // "required_by", "leads_to", "related_to", "conflicts_with", "depends_on", "implements", "caused_by", "solves"
   string context = 4;        // short explanation of the relation
 }
 
+// Write one record to a session.
 message UpdateContextRequest {
+  // Id of the session; it must exist.
   string session_id = 1;
   // Interaction type: qa, code_change, problem_solved, decision_made,
   // requirement_added, concept_defined
   string interaction_type = 2;
+  // What the record says.
   ContextContent content = 3;
   // Optional source file reference (for freshness tracking)
   SourceReference source_ref = 4;
+  // Entities the record names; at least one.
   repeated EntityInfo entities = 5;
+  // Relations between those entities; at least one.
   repeated RelationInfo relations = 6;
   // Who writes it (agent name, user or teammate). Unset = unknown.
   optional string author = 7;
@@ -236,112 +745,163 @@ message UpdateContextRequest {
   optional float confidence = 11;
 }
 
+// The text of a record.
 message ContextContent {
+  // One-line title.
   string title = 1;
+  // The body.
   string description = 2;
+  // Further points.
   repeated string details = 3;
+  // Examples.
   repeated string examples = 4;
+  // Consequences.
   repeated string implications = 5;
   // Optional code reference
   CodeReference code_ref = 6;
 }
 
+// The code a record is about.
 message CodeReference {
+  // Path of the file.
   string file_path = 1;
+  // First line; 0: the whole file.
   uint32 start_line = 2;
+  // Last line; 0: the whole file.
   uint32 end_line = 3;
+  // The code, when given.
   string code_snippet = 4;
+  // Commit the code is at; empty: unknown.
   string commit_hash = 5;
+  // Branch; empty: unknown.
   string branch = 6;
+  // What changed.
   string change_description = 7;
 }
 
+// The record written.
 message UpdateContextResponse {
+  // Entry id of the record.
   string update_id = 1;
+  // Always true; failures are errors.
   bool success = 2;
 }
 
 // ============ Bulk Context Update ============
 
+// One record of a bulk write.
 message ContextUpdateItem {
+  // As in UpdateContextRequest.
   string interaction_type = 1;
+  // What the record says.
   ContextContent content = 2;
+  // Entities the record names; at least one.
   repeated EntityInfo entities = 3;
+  // Relations between those entities; at least one.
   repeated RelationInfo relations = 4;
   // Captured messages of the session it was drawn from (`message:<seq>`).
   repeated string derived_from = 5;
   // As in UpdateContextRequest.
   optional string valid_from = 6;
+  // As in UpdateContextRequest.
   repeated string supersedes = 7;
+  // As in UpdateContextRequest.
   optional float confidence = 8;
 }
 
+// Write several records to a session, all or none.
 message BulkUpdateContextRequest {
+  // Id of the session; it must exist.
   string session_id = 1;
+  // The records, in order.
   repeated ContextUpdateItem updates = 2;
   // Who writes the updates (agent name, user or teammate). Unset = unknown.
   optional string author = 3;
 }
 
+// The records written.
 message BulkUpdateContextResponse {
+  // Entry ids of the records, in input order.
   repeated string update_ids = 1;
+  // Records written (all of them; failures are errors).
   uint32 success_count = 2;
+  // Always 0: a failing batch writes nothing and is an error.
   uint32 failure_count = 3;
 }
 
 // ============ Checkpoint ============
 
+// Checkpoint a session.
 message CreateCheckpointRequest {
+  // Id of the session.
   string session_id = 1;
 }
 
+// The checkpoint made.
 message CreateCheckpointResponse {
+  // Id of the checkpoint.
   string checkpoint_id = 1;
+  // Always true; failures are errors.
   bool success = 2;
 }
 
 // ============ Context Query ============
 
+// List a session's records, oldest first.
 message QueryContextRequest {
+  // Id of the session.
   string session_id = 1;
-  // Filter by interaction type (empty = all)
+  // Interaction types to keep, by wire name (`decision_made`, ...),
+  // comma-separated; empty = all. An unknown name is an invalid argument.
   string interaction_type = 2;
+  // Most records to return; 0: 50.
   uint32 limit = 3;
   // Return only updates after this timestamp
   int64 after_unix = 4;
 }
 
+// One record as listed.
 message ContextUpdateEntry {
+  // Entry id of the record.
   string id = 1;
+  // Its interaction type, by wire name.
   string interaction_type = 2;
+  // What the record says.
   ContextContent content = 3;
+  // When it was written, in Unix seconds.
   int64 timestamp_unix = 4;
+  // Names of the entities it names.
   repeated string entities = 5;
+  // The code it is about, when given.
   SourceReference source_ref = 6;
 }
 
+// One page of records.
 message QueryContextResponse {
+  // The records, oldest first.
   repeated ContextUpdateEntry updates = 1;
-  uint32 total = 2;
+  uint32 total = 2; // records the filter matches (updates holds at most limit)
 }
 
 // ============ Semantic Search ============
 
+// Search a session, a workspace or every session.
 message SemanticSearchRequest {
+  // What to look for; not empty.
   string query = 1;
+  // Most results; 0: 10.
   uint32 max_results = 2;
   // Empty = global search across all sessions
   string session_id = 3;
+  // Leave out results scored below this; 0: none.
   float min_score = 4;
   // If set, search across ALL sessions in this workspace (takes precedence over session_id)
   optional string workspace_id = 5;
 
-  // Optional server-side JSONPath filtering of the response.
-  // Two mutually exclusive forms; at most one should be set.
-  // Form A: single JSONPath expression → matched value returned directly.
-  optional string select_string = 6;
-  // Form B: map of output-key → JSONPath expression → object with same keys returned.
-  map<string, string> select_map = 7;
+  // 6, 7: the JSONPath select, which answered JSON in a string (W23: a
+  // client reads the typed response; the MCP tool keeps its select).
+  reserved 6, 7;
+  reserved "select_string", "select_map";
   // Ranking effort: "fast", "local" or "accurate". Unset = the server default.
   optional string mode = 8;
   // What to search: "records", "messages" or "all". Unset = records.
@@ -350,114 +910,610 @@ message SemanticSearchRequest {
   optional string author = 10;
   // Rank results by this author a little higher; others still appear.
   optional string prefer_author = 11;
-  // Add "signals" (JSON: ranks in the vector, BM25 and graph rankings, fused
-  // and reranker scores) to each result's metadata.
+  // Fill each result's signals (its ranks in the vector, BM25 and graph
+  // rankings, the fused and reranker scores).
   optional bool trace = 12;
 }
 
+// One search hit.
 message SearchResult {
+  // Entry id of a record, `message:<seq>` of a turn, `entity:<name>` of an
+  // entity.
   string entry_id = 1;
+  // The text that matched.
   string content = 2;
+  // Combined score, higher first.
   float score = 3;
+  // Session of the hit; empty for a document.
   string session_id = 4;
+  // Kind of content, by wire name (`Document` for a module's document).
   string content_type = 5;
-  // neighbour_of, author, derived_from; for records that no longer hold
-  // valid_to, ended_by, end_reason; confidence; signals (JSON) when traced.
-  map<string, string> metadata = 6;
+  // 6: its facts as strings, `signals` as JSON in one (W23: each is a typed
+  // field below).
+  reserved 6;
+  reserved "metadata";
+  // Workspace of a document hit; empty for other hits.
+  string workspace_id = 7;
+  // The hit it was returned beside (an adjacent record of the same
+  // session), when it did not match itself.
+  optional string neighbour_of = 8;
+  // Who wrote the record or message, when known.
+  optional string author = 9;
+  // For a record: its title.
+  optional string title = 10;
+  // For a record: the captured messages it was drawn from (`message:<seq>`).
+  repeated string derived_from = 11;
+  // For a record that no longer holds: when it held, what ended it and why.
+  pcx.views.v1.Validity validity = 12;
+  // For a record: how sure its writer was, 0..1.
+  optional float confidence = 13;
+  // How it was found, when the search asked for a trace.
+  SearchSignals signals = 14;
+  // For a document hit: its kind and version.
+  DocumentHit document = 15;
 }
 
+// How a search hit was found: its place in each ranking (1 = first; unset:
+// not among that ranking's candidates), the fused score and the reranker's.
+message SearchSignals {
+  // Rank in the vector search.
+  optional uint64 vector_rank = 1;
+  // Cosine similarity in the vector search.
+  optional float vector_similarity = 2;
+  // Rank in the BM25 search.
+  optional uint64 bm25_rank = 3;
+  // Rank among the retrieval graph's candidates.
+  optional uint64 graph_rank = 4;
+  // Reciprocal rank fusion score, when more than one ranking had candidates.
+  optional float fused = 5;
+  // Reranker score, when the search was reranked.
+  optional float rerank = 6;
+}
+
+// The document a search hit is.
+message DocumentHit {
+  // Its kind, `<module>/<name>`.
+  string kind = 1;
+  // Its latest version.
+  uint64 version = 2;
+}
+
+// The hits of a search.
 message SemanticSearchResponse {
+  // The hits, best first.
   repeated SearchResult results = 1;
+  // Hits at or above min_score.
   uint32 total_matches = 2;
-  // When a select filter was requested, contains the JSONPath-filtered result
-  // as a JSON string. Empty when no select was requested.
-  string selected_json = 3;
+  reserved 3;
+  reserved "selected_json";
+  // Whether a reranker ordered the hits: a local or accurate search where
+  // one is configured (the remote one only in workspaces that allow it).
+  bool reranked = 4;
 }
 
+// Content of other sessions related to a topic.
 message FindRelatedContentRequest {
+  // The session to look from (its content is left out).
   string session_id = 1;
+  // The topic; not empty.
   string topic = 2;
+  // Most results; unset: 10.
   optional uint32 limit = 3;
 }
 
+// The related content.
 message FindRelatedContentResponse {
+  // The hits, best first.
   repeated SearchResult results = 1;
 }
 
+// Embed a session's records that have no vectors yet.
 message VectorizeSessionRequest {
+  // Id of the session.
   string session_id = 1;
 }
 
+// Vectors written.
 message VectorizeSessionResponse {
+  // Always true; failures are errors.
   bool success = 1;
+  // Vectors written by this call.
   uint32 vectors_created = 2;
 }
 
+// Statistics of the search index.
 message GetVectorizationStatsRequest {}
 
 // ============ Analysis & Insights ============
 
+// The structured summary of a session.
 message GetStructuredSummaryRequest {
+  // Id of the session.
   string session_id = 1;
+  // Short form; unset: false (large summaries are compacted anyway).
   optional bool compact = 2;
+  // Most decisions; unset: the default.
   optional uint32 decisions_limit = 3;
+  // Most entities; unset: the default.
   optional uint32 entities_limit = 4;
+  // Most questions; unset: the default.
   optional uint32 questions_limit = 5;
+  // Most concepts; unset: the default.
   optional uint32 concepts_limit = 6;
+  // Leave out decisions below this confidence; unset: none.
   optional float min_confidence = 7;
+  // Only these sections; empty: the whole summary.
+  repeated SummarySection include = 8;
+  // Most insights (the insights section); unset: 5.
+  optional uint32 insights_limit = 9;
 }
 
+// A section of a structured summary.
+enum SummarySection {
+  // Not a section.
+  SUMMARY_SECTION_UNSPECIFIED = 0;
+  // key_decisions.
+  SUMMARY_SECTION_DECISIONS = 1;
+  // key_insights.
+  SUMMARY_SECTION_INSIGHTS = 2;
+  // important_entities and entity_summaries.
+  SUMMARY_SECTION_ENTITIES = 3;
+  // answered_questions.
+  SUMMARY_SECTION_QUESTIONS = 4;
+}
+
+// The key decisions of a session.
 message GetKeyDecisionsRequest {
+  // Id of the session.
   string session_id = 1;
 }
 
+// The key insights of a session.
 message GetKeyInsightsRequest {
+  // Id of the session.
   string session_id = 1;
+  // Most insights; unset: 5.
   optional uint32 limit = 2;
 }
 
+// A session's entities ranked by importance.
 message GetEntityImportanceRequest {
+  // Id of the session.
   string session_id = 1;
+  // Most entities; unset: 100.
   optional uint32 limit = 2;
+  // Leave out entities below this; unset: none.
   optional float min_importance = 3;
 }
 
+// The entity network of a session around an entity.
 message GetEntityNetworkRequest {
+  // Id of the session.
   string session_id = 1;
+  // The entity at the center; unset: the most important one.
   optional string center_entity = 2;
+  // Most entities; unset: 50.
   optional uint32 max_entities = 3;
+  // Most relationships; unset: 100.
   optional uint32 max_relationships = 4;
 }
 
+// Counts of a session.
 message GetSessionStatisticsRequest {
+  // Id of the session.
   string session_id = 1;
+}
+
+// How sure a decision was.
+enum ConfidenceLevel {
+  // Not given.
+  CONFIDENCE_LEVEL_UNSPECIFIED = 0;
+  // Below 0.4.
+  CONFIDENCE_LEVEL_VERY_LOW = 1;
+  // 0.4 to 0.6.
+  CONFIDENCE_LEVEL_LOW = 2;
+  // 0.6 to 0.8.
+  CONFIDENCE_LEVEL_MEDIUM = 3;
+  // 0.8 and above.
+  CONFIDENCE_LEVEL_HIGH = 4;
+}
+
+// Where a question stands.
+enum QuestionStatus {
+  // Not given.
+  QUESTION_STATUS_UNSPECIFIED = 0;
+  // Awaiting an answer.
+  QUESTION_STATUS_OPEN = 1;
+  // Being worked on.
+  QUESTION_STATUS_IN_PROGRESS = 2;
+  // Answered.
+  QUESTION_STATUS_ANSWERED = 3;
+  // Left for later.
+  QUESTION_STATUS_DEFERRED = 4;
+}
+
+// How urgent a question is.
+enum UrgencyLevel {
+  // Not given.
+  URGENCY_LEVEL_UNSPECIFIED = 0;
+  // Not time-sensitive.
+  URGENCY_LEVEL_LOW = 1;
+  // Moderately time-sensitive.
+  URGENCY_LEVEL_MEDIUM = 2;
+  // Needs prompt attention.
+  URGENCY_LEVEL_HIGH = 3;
+}
+
+// How complex a concept is, by its examples and related concepts.
+enum ComplexityLevel {
+  // Not given.
+  COMPLEXITY_LEVEL_UNSPECIFIED = 0;
+  // Few.
+  COMPLEXITY_LEVEL_LOW = 1;
+  // Some.
+  COMPLEXITY_LEVEL_MEDIUM = 2;
+  // Many.
+  COMPLEXITY_LEVEL_HIGH = 3;
+}
+
+// How important an entity is, on the (0, 1] scale of its importance.
+enum ImportanceLevel {
+  // Not given.
+  IMPORTANCE_LEVEL_UNSPECIFIED = 0;
+  // The lowest band.
+  IMPORTANCE_LEVEL_MINIMAL = 1;
+  // Low.
+  IMPORTANCE_LEVEL_LOW = 2;
+  // Medium.
+  IMPORTANCE_LEVEL_MEDIUM = 3;
+  // High.
+  IMPORTANCE_LEVEL_HIGH = 4;
+  // The highest band.
+  IMPORTANCE_LEVEL_CRITICAL = 5;
+}
+
+// How recently an entity was seen.
+enum RecencyLevel {
+  // Not given.
+  RECENCY_LEVEL_UNSPECIFIED = 0;
+  // Today.
+  RECENCY_LEVEL_TODAY = 1;
+  // One to three days ago.
+  RECENCY_LEVEL_RECENT = 2;
+  // Four to seven days ago.
+  RECENCY_LEVEL_THIS_WEEK = 3;
+  // Eight to thirty days ago.
+  RECENCY_LEVEL_THIS_MONTH = 4;
+  // Longer ago.
+  RECENCY_LEVEL_OLD = 5;
+}
+
+// How long a session has run.
+enum SessionDuration {
+  // Not given.
+  SESSION_DURATION_UNSPECIFIED = 0;
+  // Up to an hour.
+  SESSION_DURATION_SHORT = 1;
+  // Two to four hours.
+  SESSION_DURATION_MEDIUM = 2;
+  // Five to eight hours.
+  SESSION_DURATION_LONG = 3;
+  // Longer.
+  SESSION_DURATION_EXTENDED = 4;
+}
+
+// Records per hour of a session.
+enum ActivityLevel {
+  // Not given.
+  ACTIVITY_LEVEL_UNSPECIFIED = 0;
+  // None.
+  ACTIVITY_LEVEL_MINIMAL = 1;
+  // Up to 2.
+  ACTIVITY_LEVEL_LOW = 2;
+  // Up to 5.
+  ACTIVITY_LEVEL_MEDIUM = 3;
+  // Up to 10.
+  ACTIVITY_LEVEL_HIGH = 4;
+  // More.
+  ACTIVITY_LEVEL_VERY_HIGH = 5;
+}
+
+// A decision of a summary.
+message DecisionSummary {
+  // The decision.
+  string description = 1;
+  // Its context.
+  string context = 2;
+  // The options considered.
+  repeated string alternatives = 3;
+  // Its confidence, 0 to 1.
+  float confidence = 4;
+  // When it was recorded.
+  google.protobuf.Timestamp timestamp = 5;
+  // Its confidence band.
+  ConfidenceLevel confidence_level = 6;
+}
+
+// A question of a summary.
+message QuestionSummary {
+  // The question.
+  string question = 1;
+  // Its context.
+  string context = 2;
+  // Where it stands.
+  QuestionStatus status = 3;
+  // When it was asked.
+  google.protobuf.Timestamp timestamp = 4;
+  // When it last changed.
+  google.protobuf.Timestamp last_updated = 5;
+  // Days since it was asked.
+  int64 days_open = 6;
+  // How urgent it is.
+  UrgencyLevel urgency_level = 7;
+}
+
+// A concept of a summary.
+message ConceptSummary {
+  // Its name.
+  string name = 1;
+  // Its definition.
+  string definition = 2;
+  // Its examples.
+  repeated string examples = 3;
+  // Related concepts.
+  repeated string related_concepts = 4;
+  // When it was defined.
+  google.protobuf.Timestamp timestamp = 5;
+  // How complex it is.
+  ComplexityLevel complexity_level = 6;
+}
+
+// An entity of a summary.
+message EntitySummary {
+  // Its name.
+  string entity_name = 1;
+  // Its importance.
+  float importance_score = 2;
+  // How often it was mentioned.
+  uint32 mention_count = 3;
+  // Its relationships.
+  uint64 relationship_count = 4;
+  // When it was first seen.
+  google.protobuf.Timestamp first_seen = 5;
+  // When it was last seen.
+  google.protobuf.Timestamp last_seen = 6;
+  // Its importance band.
+  ImportanceLevel importance_level = 7;
+  // How recently it was seen.
+  RecencyLevel recency_level = 8;
+}
+
+// Counts of a session in its summary.
+message SummaryStats {
+  // The session.
+  string session_id = 1;
+  // Records in the hot window.
+  uint64 hot_context_size = 2;
+  // Records in the warm tier.
+  uint64 warm_context_size = 3;
+  // Records in the cold tier.
+  uint64 cold_context_size = 4;
+  // Records.
+  uint64 total_updates = 5;
+  // Entities.
+  uint64 entity_count = 6;
+  // Decisions.
+  uint64 decision_count = 7;
+  // Open questions.
+  uint64 open_question_count = 8;
+  // Concepts.
+  uint64 concept_count = 9;
+  // Files with code references.
+  uint64 code_reference_count = 10;
+  // When it was created.
+  google.protobuf.Timestamp created_at = 11;
+  // When it last changed.
+  google.protobuf.Timestamp last_updated = 12;
+  // How long it has run.
+  SessionDuration session_duration = 13;
+  // How active it is.
+  ActivityLevel activity_level = 14;
+}
+
+// How a summary was limited.
+enum Compaction {
+  // The request's limits applied.
+  COMPACTION_NONE = 0;
+  // The request asked for the short form.
+  COMPACTION_REQUESTED = 1;
+  // It was estimated too large and was shortened.
+  COMPACTION_AUTO = 2;
+}
+
+// The structured summary of a session.
+message StructuredSummary {
+  // The session.
+  string session_id = 1;
+  // When it was built.
+  google.protobuf.Timestamp generated_at = 2;
+  // Its key decisions.
+  repeated DecisionSummary key_decisions = 3;
+  // Its answered questions (its Q&A records).
+  repeated QuestionSummary answered_questions = 4;
+  // Its key concepts.
+  repeated ConceptSummary key_concepts = 5;
+  // Its most important entities, by name.
+  repeated string important_entities = 6;
+  // Those entities.
+  repeated EntitySummary entity_summaries = 7;
+  // Its counts.
+  SummaryStats session_stats = 8;
+  // Its key insights (with the insights section).
+  repeated string key_insights = 9;
+  // The sections asked for; empty: the whole summary.
+  repeated SummarySection sections = 10;
+  // How it was limited.
+  Compaction compaction = 11;
+  // The size estimate that shortened it (COMPACTION_AUTO), in tokens.
+  uint64 estimated_tokens = 12;
+}
+
+// The key decisions of a session.
+message KeyDecisions {
+  // The decisions.
+  repeated DecisionSummary decisions = 1;
+}
+
+// The key insights of a session.
+message KeyInsights {
+  // The insights.
+  repeated string insights = 1;
+}
+
+// An entity ranked by importance.
+message EntityAnalysis {
+  // Its name.
+  string entity_name = 1;
+  // Its importance, with graph centrality.
+  float importance_score = 2;
+  // How often it was mentioned.
+  uint32 mention_count = 3;
+  // Its edges.
+  uint64 relationship_count = 4;
+  // Records naming it.
+  uint64 update_references = 5;
+  // When it was first seen.
+  google.protobuf.Timestamp first_seen = 6;
+  // When it was last seen.
+  google.protobuf.Timestamp last_seen = 7;
+}
+
+// The entities of a session ranked by importance.
+message EntityImportance {
+  // The top entities, most important first.
+  repeated EntityAnalysis entities = 1;
+  // Entities in the session.
+  uint64 total_entities = 2;
+  // Entities at or above min_importance.
+  uint64 after_filter = 3;
+  // Entities returned.
+  uint64 shown = 4;
+  // More matched than were returned.
+  bool truncated = 5;
+}
+
+// An entity of a network.
+message NetworkEntity {
+  // Its name.
+  string name = 1;
+  // Its type (stored name, `code_component`).
+  string entity_type = 2;
+  // Its importance.
+  float importance_score = 3;
+  // How often it was mentioned.
+  uint32 mention_count = 4;
+}
+
+// A relationship of a network.
+message NetworkRelationship {
+  // Source entity.
+  string from = 1;
+  // Relation type (stored name, `depends_on`).
+  string relation_type = 2;
+  // Target entity.
+  string to = 3;
+}
+
+// The entity network of a session around a center entity.
+message EntityNetwork {
+  // The session.
+  string session_id = 1;
+  // The center: the one asked for, else the most important entity; unset:
+  // the session has none.
+  optional string center_entity = 2;
+  // The entities reached, closest first.
+  repeated NetworkEntity entities = 3;
+  // The relationships between them.
+  repeated NetworkRelationship relationships = 4;
+}
+
+// Size and activity of a session.
+message SessionStatistics {
+  // The session.
+  string session_id = 1;
+  // Its name; unset: none.
+  optional string name = 2;
+  // Its description; unset: none.
+  optional string description = 3;
+  // When it was created.
+  google.protobuf.Timestamp created_at = 4;
+  // When it last changed.
+  google.protobuf.Timestamp last_updated = 5;
+  // Records in the hot window.
+  uint64 hot_updates = 6;
+  // Records.
+  uint64 total_updates = 7;
+  // Entities of its graph.
+  uint64 entity_count = 8;
+  // Edges of its graph.
+  uint64 relationship_count = 9;
+  // Files with code references.
+  uint64 code_references = 10;
+  // Entries of the change history.
+  uint64 change_history = 11;
+  // Its first record; unset: none.
+  optional google.protobuf.Timestamp first_update = 12;
+  // Its last record; unset: none.
+  optional google.protobuf.Timestamp last_update = 13;
+  // Minutes between the first and the last record; unset: no records.
+  optional int64 duration_minutes = 14;
+}
+
+// Statistics of the search index.
+message VectorizationStats {
+  // Vectors in the index.
+  uint64 total_vectors = 1;
+  // Memory the index uses, in MiB.
+  uint64 memory_usage_mb = 2;
+  // Dimension of the embeddings.
+  uint64 embedding_dimension = 3;
 }
 
 // ============ Graph-Aware Context Assembly ============
 
+// Assemble context for a query within a token budget.
 message AssembleContextRequest {
+  // The session; ignored when workspace_id is set.
   string session_id = 1;
   string query = 2;           // Query/hint to assemble context for
-  uint32 token_budget = 3;    // Max tokens for assembled context (default: 4000)
+  uint32 token_budget = 3;    // Max tokens for assembled context (default: 4000; the cards always go in)
   // If set, assemble context across ALL sessions in this workspace (takes precedence over session_id)
   optional string workspace_id = 4;
 
-  // Optional server-side JSONPath filtering of the response.
-  // Two mutually exclusive forms; at most one should be set.
-  // Form A: single JSONPath expression → matched value returned directly.
-  optional string select_string = 5;
-  // Form B: map of output-key → JSONPath expression → object with same keys returned.
-  map<string, string> select_map = 6;
+  // 5, 6: the JSONPath select, which answered JSON in a string (W23: a
+  // client reads the typed response; the MCP tool keeps its select).
+  reserved 5, 6;
+  reserved "select_string", "select_map";
   // What to assemble from: "records", "messages" or "all". Unset = records.
   optional string sources = 7;
 }
 
+// One piece of assembled context.
 message AssembledContextItem {
+  // The text.
   string text = 1;
+  // Its relevance, higher first.
   float score = 2;
-  string source = 3;          // "semantic_match", "graph_traversal", "recent_update", "conversation"
-  string via_entity = 4;      // For graph_traversal source, the entity it was found through
+  // "semantic_match" (a record or document search ranked for the query)
+  // or "conversation" (a captured turn).
+  string source = 3;
+  // 4: via_entity, of the graph_traversal source, gone: every record comes
+  // from search.
+  reserved 4;
+  reserved "via_entity";
+  // Entities of the graph context it names.
   repeated string entities = 5;
+  // Estimated tokens of the text.
   uint32 token_estimate = 6;
   // Stable ID of the underlying ContextUpdateEntry / SearchResult this
   // item was sourced from. Empty when the item was synthesized rather
@@ -467,224 +1523,367 @@ message AssembledContextItem {
   string entry_id = 7;
 }
 
+// An entity of the query and how it was reached.
 message AssembledEntityContext {
+  // Name of the entity.
   string name = 1;
   string relevance = 2;       // "direct_mention" or "graph_neighbor"
   string via_entity = 3;      // For graph_neighbor, the entity connected through
   string via_relation = 4;    // For graph_neighbor, the relation type
+  // Its relations.
   repeated EntityRelation relationships = 5;
 }
 
+// A relation of an entity in assembled context.
 message EntityRelation {
+  // Source entity.
   string from_entity = 1;
+  // Target entity.
   string to_entity = 2;
   string relation_type = 3;   // DependsOn, RelatedTo, RequiredBy, LeadsTo, etc.
+  // Why the relation holds.
   string context = 4;
 }
 
+// An entity that depends on one the query names.
 message ImpactEntry {
+  // The dependent entity.
   string entity = 1;
+  // The entity it depends on.
   string depends_on = 2;
+  // The relation, by wire name.
   string relation_type = 3;
+  // Why the relation holds.
   string context = 4;
 }
 
+// The assembled context.
 message AssembleContextResponse {
+  // The pieces, best first.
   repeated AssembledContextItem items = 1;
+  // Entities of the query and their neighbours.
   repeated AssembledEntityContext entity_context = 2;
+  // Who depends on the entities of the query.
   repeated ImpactEntry impact = 3;
+  // Estimated tokens of the whole context.
   uint32 total_tokens = 4;
   string formatted_text = 5;  // Pre-formatted text for direct LLM injection
-  // When a select filter was requested, contains the JSONPath-filtered result
-  // as a JSON string. Empty when no select was requested.
-  string selected_json = 6;
+  reserved 6;
+  reserved "selected_json";
   // The user card and the project cards, in front of the context.
   repeated CardInfo cards = 7;
 }
 
 // ============ Workspace Management ============
 
+// Create a workspace.
 message CreateWorkspaceRequest {
+  // Name of the workspace.
   string name = 1;
+  // Description; empty: none.
   string description = 2;
 }
 
+// The workspace created.
 message CreateWorkspaceResponse {
+  // Id of the new workspace.
   string workspace_id = 1;
 }
 
+// One workspace.
 message WorkspaceInfo {
+  // Id of the workspace.
   string workspace_id = 1;
+  // Name.
   string name = 2;
+  // Description; empty when it has none.
   string description = 3;
+  // When it was created, in Unix seconds.
   int64 created_at_unix = 4;
+  // Its member sessions.
   repeated WorkspaceSessionEntry sessions = 5;
+  // Whether it is archived.
+  bool archived = 6;
+  int64 archived_at_unix = 7;  // 0 while not archived
+  // The segment of its addresses: made from its name when it is created,
+  // unique, kept after a rename.
+  string slug = 8;
+  // Whether its accurate searches may use the remote reranker (Voyage),
+  // which receives the query and the candidates' text. Off until a person
+  // turns it on.
+  bool remote_rerank = 9;
 }
 
+// A member session of a workspace.
 message WorkspaceSessionEntry {
+  // Id of the session.
   string session_id = 1;
   // Role: Primary, Related, Dependency, Shared
   string role = 2;
 }
 
+// One workspace.
 message GetWorkspaceRequest {
+  // Id of the workspace.
   string workspace_id = 1;
 }
 
+// The workspace.
 message GetWorkspaceResponse {
+  // The workspace.
   WorkspaceInfo workspace = 1;
 }
 
-message ListWorkspacesRequest {}
+// List the workspaces.
+message ListWorkspacesRequest {
+  // Include archived workspaces (left out by default).
+  bool include_archived = 1;
+}
 
+// The workspaces listed.
 message ListWorkspacesResponse {
+  // The workspaces.
   repeated WorkspaceInfo workspaces = 1;
 }
 
+// Delete a workspace (its sessions stay).
 message DeleteWorkspaceRequest {
+  // Id of the workspace.
   string workspace_id = 1;
 }
 
+// The workspace was deleted.
 message DeleteWorkspaceResponse {
+  // Whether the workspace existed.
   bool success = 1;
 }
 
-message AddSessionToWorkspaceRequest {
+// Same fields as REST POST /api/projects/resolve.
+message ResolveProjectRequest {
+  string key = 1;                // normalised git remote or local:<hash>, 1 to 512 chars
+  string name = 2;               // name of a new workspace and session
+  optional string client = 3;    // the client asking
+  optional string workspace = 4; // workspace to put a new key in (created if missing)
+}
+
+// The workspace and session of the project key.
+message ResolveProjectResponse {
+  // Id of the workspace.
   string workspace_id = 1;
+  // Id of the session.
+  string session_id = 2;
+  bool created = 3;              // true: this call bound the key
+}
+
+// Make a session a member of a workspace.
+message AddSessionToWorkspaceRequest {
+  // Id of the workspace.
+  string workspace_id = 1;
+  // Id of the session.
   string session_id = 2;
   // Role: Primary, Related, Dependency, Shared
   string role = 3;
 }
 
+// The session was added.
 message AddSessionToWorkspaceResponse {
+  // Always true; failures are errors.
   bool success = 1;
 }
 
+// Remove a session from a workspace.
 message RemoveSessionFromWorkspaceRequest {
+  // Id of the workspace.
   string workspace_id = 1;
+  // Id of the session.
   string session_id = 2;
 }
 
+// The session was removed.
 message RemoveSessionFromWorkspaceResponse {
+  // Always true; failures are errors.
   bool success = 1;
 }
 
 // ============ Source Tracking ============
 
+// The code a record was written from, to tell when it changes.
 message SourceReference {
+  // Path of the file.
   string file_path = 1;
   bytes content_hash = 2;  // blake3
+  // When it was read, in Unix seconds.
   int64 captured_at_unix = 3;
+  // Entry id of the record.
   string entry_id = 4;
+  // Which part of the file.
   SourceScope scope = 5;
 }
 
+// Which part of a file a reference covers.
 message SourceScope {
+  // The part.
   oneof scope {
+    // The whole file.
     bool whole_file = 1;
+    // One symbol.
     FunctionScope function = 2;
+    // A range of lines.
     BlockScope block = 3;
   }
 }
 
+// One symbol of a file.
 message FunctionScope {
+  // Name of the symbol.
   string name = 1;
+  // Hash of its syntax tree.
   bytes ast_hash = 2;
   string symbol_type = 3;    // "Function", "Struct", "Class", "Trait", "Interface", "Method", "Enum"
   repeated string imports = 4; // Symbols this symbol depends on
 }
 
+// A range of lines of a file.
 message BlockScope {
+  // First line.
   uint32 start_line = 1;
+  // Last line.
   uint32 end_line = 2;
+  // Hash of the lines' text.
   bytes content_hash = 3;
 }
 
+// Register the source of a record.
 message RegisterSourceRequest {
+  // The reference.
   SourceReference source_ref = 1;
+  // The session the reference belongs to. Empty: the `x-session-id`
+  // metadata (older clients); neither is an invalid argument.
+  string session_id = 2;
 }
 
+// The reference was registered.
 message RegisterSourceAck {}
 
+// Register several sources at once.
 message RegisterSourceBatchRequest {
+  // The references.
   repeated SourceReference sources = 1;
+  // As in RegisterSourceRequest.
+  string session_id = 2;
 }
 
+// The references registered.
 message RegisterSourceBatchAck {
+  // References registered.
   uint32 registered = 1;
 }
 
+// Whether records still match their sources.
 message FreshnessRequest {
+  // Entry ids of the records.
   repeated string entry_ids = 1;
+  // Current hash of each record's file, parallel to entry_ids.
   repeated FileHash current_hashes = 2;
   repeated FreshnessCheck checks = 3; // Richer per-entry checks (optional, parallel to entry_ids)
 }
 
+// The richer check of one entry.
 message FreshnessCheck {
+  // Path of the file.
   string file_path = 1;
   bytes content_hash = 2;   // File-level hash (fallback)
   bytes ast_hash = 3;       // Function-level AST hash (optional)
   string symbol_name = 4;   // For fuzzy matching when lines shift (optional)
 }
 
+// The current hash of a file.
 message FileHash {
+  // Path of the file.
   string file_path = 1;
+  // Its hash (blake3).
   bytes hash = 2;
 }
 
+// The freshness of each record asked about.
 message FreshnessReport {
+  // One per entry id, in order.
   repeated FreshnessEntry entries = 1;
 }
 
+// The freshness of one record.
 message FreshnessEntry {
+  // Entry id of the record.
   string entry_id = 1;
+  // Path of its file.
   string file_path = 2;
+  // Whether it still matches.
   FreshnessStatus status = 3;
+  // Hash registered with the record.
   bytes stored_hash = 4;
+  // Hash given now.
   bytes current_hash = 5;
 }
 
+// Whether a record still matches its source.
 enum FreshnessStatus {
+  // It matches.
   FRESH = 0;
+  // Its source changed.
   STALE = 1;
+  // No source is registered for it.
   SOURCE_MISSING = 2;
+  // It could not be told.
   UNKNOWN = 3;
 }
 
+// Mark the records of a changed file stale.
 message InvalidateRequest {
+  // Path of the file.
   string file_path = 1;
+  // Its new hash.
   bytes new_hash = 2;
   string session_id = 3;  // Optional: rebuild entity graph for this session
 }
 
+// What was invalidated.
 message InvalidateAck {
+  // Records marked stale.
   uint32 entries_invalidated = 1;
   uint32 entities_rebuilt = 2;  // Entity graph rebuild count (0 if no session_id)
 }
 
 // ============ Symbol Dependencies (Phase 9.2) ============
 
+// A symbol of a file.
 message SymbolId {
+  // Path of the file.
   string file_path = 1;
+  // Name of the symbol.
   string symbol_name = 2;
   string symbol_type = 3;  // "Function", "Struct", etc.
 }
 
+// Record that a symbol depends on others.
 message RegisterSymbolDependencyRequest {
   SymbolId from_symbol = 1;        // The symbol that depends on another
   repeated SymbolId to_symbols = 2; // Symbols it depends on
 }
 
+// The dependencies recorded.
 message RegisterSymbolDependencyAck {
+  // Dependency edges written.
   uint32 edges_created = 1;
 }
 
+// Mark a changed symbol and its dependents stale.
 message CascadeInvalidateRequest {
   SymbolId changed_symbol = 1;  // The symbol that changed
   bytes new_ast_hash = 2;       // Its new AST hash
   uint32 max_depth = 3;         // Max graph traversal depth (0 = unlimited)
 }
 
+// What a cascade invalidated.
 message CascadeInvalidateReport {
   uint32 direct_invalidations = 1;   // Entries for the changed symbol
   uint32 cascade_invalidations = 2;  // Entries invalidated via dependency graph
@@ -693,17 +1892,23 @@ message CascadeInvalidateReport {
 
 // ============ Stale Entry Query ============
 
+// The stale records of a file.
 message GetStaleEntriesBySourceRequest {
+  // Path of the file.
   string file_path = 1;
 }
 
+// A stale record.
 message StaleEntryInfo {
+  // Entry id of the record.
   string entry_id = 1;
   string symbol_name = 2;  // May be empty for whole-file entries
   string symbol_type = 3;  // May be empty
 }
 
+// The stale records of the file.
 message GetStaleEntriesBySourceResponse {
+  // The records.
   repeated StaleEntryInfo entries = 1;
 }
 
@@ -713,55 +1918,110 @@ message GetStaleEntriesBySourceResponse {
 message CapturedMessage {
   string turn_id = 1;                 // the client's id for the turn; appends are idempotent on it
   string role = 2;                    // "user" or "assistant"
+  // Who wrote it; unset: unknown.
   optional string author = 3;
   optional string source_session = 4; // the client's own conversation id
   optional int64 timestamp_unix_ms = 5; // unset = time of the request
+  // The text of the turn.
   string text = 6;
+  // Tools the turn used.
   repeated string tools = 7;
+  // Files the turn touched.
   repeated string files = 8;
+  // The turn it follows (an agent's branch); unset: the one before it.
+  optional string parent = 9;
+  // Its blocks as the model sent or read them (an agent's turn): text,
+  // reasoning, tool calls and results, a compaction's summary.
+  repeated pcx.blocks.v1.ModelBlock blocks = 10;
 }
 
+// Capture conversation turns into a session's stream.
 message AppendMessagesRequest {
+  // Id of the session; it must exist.
   string session_id = 1;
+  // The turns, in order.
   repeated CapturedMessage messages = 2;
 }
 
+// The turns stored.
 message AppendMessagesResponse {
   repeated uint64 appended = 1; // positions of the turns stored by this call
   uint32 skipped = 2;           // already captured, repeated or empty
-  uint32 vectorized = 3;
+  // Deprecated: always 0, the turns are embedded in the background (queued).
+  uint32 vectorized = 3 [deprecated = true];
+  uint32 queued = 4;            // stored turns whose embedding was queued
+}
+
+// A page of a session's turns.
+message ListMessagesRequest {
+  // Id of the session.
+  string session_id = 1;
+  // The position of the first turn; 0: the first.
+  uint64 from = 2;
+  // At most this many turns, from 1 to 1000; 0: 100.
+  uint32 limit = 3;
+}
+
+// A stored turn and its position.
+message StoredMessage {
+  // Its position in the session's stream.
+  uint64 position = 1;
+  // The turn.
+  CapturedMessage message = 2;
+}
+
+// The turns of a page, in order.
+message MessagePage {
+  // The turns.
+  repeated StoredMessage messages = 1;
+  // Where the next page starts; unset: this is the last.
+  optional uint64 next_from = 2;
 }
 
 // ============ Project and user cards ============
 
+// One version of a card.
 message CardInfo {
   string scope = 1;            // `workspace:<uuid>` or `user`
+  // Its version, from 1.
   uint64 version = 2;
+  // Its text.
   string text = 3;
+  // When it was written, in Unix seconds.
   int64 updated_at_unix = 4;
+  // Who wrote it; unset: unknown.
   optional string author = 5;
 }
 
 // Either workspace_id (project card) or user = true (user card).
 message GetCardRequest {
+  // The workspace of a project card.
   optional string workspace_id = 1;
+  // The user card instead.
   bool user = 2;
   uint32 history = 3;          // older versions to return as well
 }
 
+// A card and its history.
 message GetCardResponse {
   optional CardInfo card = 1;  // unset: no card yet
+  // Older versions, newest first.
   repeated CardInfo history = 2;
 }
 
+// Write the next version of a card.
 message UpdateCardRequest {
+  // The workspace of a project card.
   optional string workspace_id = 1;
+  // The user card instead.
   bool user = 2;
   string content = 3;          // whole new text, at most 2 KB
   uint64 expected_version = 4; // version the content was edited from; 0 = no card yet
+  // Who writes it; unset: unknown.
   optional string author = 5;
 }
 
+// Whether the card was written.
 message UpdateCardResponse {
   bool written = 1;            // false: the card changed since expected_version
   optional CardInfo card = 2;  // the new version, or the latest one when not written
@@ -769,12 +2029,322 @@ message UpdateCardResponse {
 
 // ============ Health ============
 
+// The health of the server.
 message HealthRequest {}
 
+// The health of the server.
 message HealthResponse {
+  // Whether the server is healthy.
   bool healthy = 1;
+  // Its version.
   string version = 2;
+  // Sessions held in memory.
   uint64 active_sessions = 3;
+  // Deprecated: the requests counted (record writes and session creates),
+  // not updates; the same value as total_requests.
   uint64 total_updates = 4;
+  // Whether search is on.
   bool embeddings_enabled = 5;
+  // Requests counted since start (record writes and session creates).
+  uint64 total_requests = 6;
+  // The commit the server is built from (abbreviated); empty when it was
+  // built outside a git checkout. With `version`, which build answers.
+  string commit = 7;
+}
+
+// ============ Workspace lifecycle ============
+
+// Change a workspace's name, description and/or remote reranking.
+message UpdateWorkspaceRequest {
+  // Id of the workspace.
+  string workspace_id = 1;
+  // Only the fields given change. Name: trimmed, 1 to 200 characters, not
+  // the name of another workspace. Description: at most 4000 characters.
+  optional string name = 2;
+  // New description; unset: unchanged.
+  optional string description = 3;
+  // Allow (true) or forbid (false) its accurate searches the remote
+  // reranker; unset: unchanged.
+  optional bool remote_rerank = 4;
+}
+
+// The workspace after the change.
+message UpdateWorkspaceResponse {
+  // The workspace.
+  WorkspaceInfo workspace = 1;
+}
+
+// Archive or unarchive a workspace.
+message ArchiveWorkspaceRequest {
+  // Id of the workspace.
+  string workspace_id = 1;
+}
+
+// The workspace after the change.
+message ArchiveWorkspaceResponse {
+  // The workspace.
+  WorkspaceInfo workspace = 1;
+  bool changed = 2;            // false: it already was in that state
+}
+
+// ============ Message stream maintenance ============
+
+// Delete one captured turn.
+message DeleteMessageRequest {
+  // Id of the session.
+  string session_id = 1;
+  uint64 seq = 2;              // position of the turn (`message:<seq>`)
+}
+
+// Delete a session's whole message stream.
+message DeleteMessagesRequest {
+  // Id of the session.
+  string session_id = 1;
+}
+
+// What was deleted.
+message DeleteMessagesResponse {
+  uint64 deleted = 1;          // turns deleted (0 or 1 for DeleteMessage)
+  uint64 remaining = 2;        // turns left in the stream
+}
+
+// ============ Radar dismissals ============
+
+// kind: unsolved_problem (key: entity name), decision_without_rationale
+// (record id), open_question (question text), stale_entity (entity name),
+// alias_candidate (`<name>|<of>`).
+message RadarDismissal {
+  // The radar list of the item.
+  string kind = 1;
+  // Which item (see above).
+  string key = 2;
+  // When it was dismissed, in Unix seconds.
+  int64 dismissed_at_unix = 3;
+  // Who dismissed it; unset: unknown.
+  optional string author = 4;
+}
+
+// Hide a radar item.
+message DismissRadarItemRequest {
+  // Id of the workspace.
+  string workspace_id = 1;
+  // The radar list of the item (see RadarDismissal).
+  string kind = 2;
+  string key = 3;              // trimmed, 1 to 1024 bytes
+  // Who dismisses it; unset: unknown.
+  optional string author = 4;
+}
+
+// The dismissal stored.
+message DismissRadarItemResponse {
+  // The dismissal.
+  RadarDismissal dismissal = 1;
+}
+
+// Show a dismissed radar item again.
+message RestoreRadarItemRequest {
+  // Id of the workspace.
+  string workspace_id = 1;
+  // The radar list of the item.
+  string kind = 2;
+  // Which item.
+  string key = 3;
+}
+
+// Whether the item was dismissed.
+message RestoreRadarItemResponse {
+  bool existed = 1;            // false: the item was not dismissed
+}
+
+// The dismissals of a workspace.
+message ListRadarDismissalsRequest {
+  // Id of the workspace.
+  string workspace_id = 1;
+}
+
+// The dismissals.
+message ListRadarDismissalsResponse {
+  // The dismissals, by kind and key.
+  repeated RadarDismissal dismissals = 1;
+}
+
+// ============ Export / import ============
+
+// Export a scope as a `pcx export` archive.
+message ExportRequest {
+  string scope = 1;                 // "all" (default), "session" or "workspace"
+  repeated string session_ids = 2;  // for scope "session"
+  string workspace_id = 3;          // for scope "workspace"
+  // Include the sessions' checkpoints.
+  bool include_checkpoints = 4;
+  string compression = 5;           // "none" (default), "gzip" or "zstd"
+  bool no_messages = 6;             // leave the captured message streams out
+}
+
+// What an export holds.
+message ExportSummary {
+  // Format version of the archive.
+  string format_version = 1;
+  // Sessions.
+  uint32 sessions = 2;
+  // Workspaces.
+  uint32 workspaces = 3;
+  // Records.
+  uint32 updates = 4;
+  // Checkpoints.
+  uint32 checkpoints = 5;
+  // Vectors.
+  uint32 embeddings = 6;
+  // Size of the archive in bytes.
+  uint64 total_bytes = 7;
+  // Its compression.
+  string compression = 8;
+  // Captured turns.
+  uint32 messages = 9;
+  uint32 cards = 10;                // card versions
+  // Document versions (format 1.5.0).
+  uint32 documents = 11;
+}
+
+// Concatenated, the data of the chunks is a `pcx export` file.
+message ExportChunk {
+  // The next bytes of the archive.
+  bytes data = 1;
+  // Whether this is the last chunk.
+  bool last = 2;
+  ExportSummary summary = 3;        // set on the last chunk
+}
+
+// How an import treats what the server has.
+message ImportSettings {
+  bool commit = 1;                  // false: preview only, nothing is written
+  bool skip_existing = 2;           // leave sessions/workspaces the server has
+  bool overwrite = 3;               // replace them
+  repeated string session_ids = 4;  // only these sessions (empty: all)
+  repeated string workspace_ids = 5;// only these workspaces (empty: all)
+  // A card whose history diverged from the archive's: take the archive's
+  // latest version when it was written later (by time; version numbers of
+  // two histories are not compared), as the server's next version. Without
+  // it (and without overwrite) the server's card stays.
+  bool cards_newer = 6;
+}
+
+// The data of the chunks, concatenated, is a `pcx export` file (JSON,
+// gzip or zstd; detected from its first bytes).
+message ImportChunk {
+  // The next bytes of the archive.
+  bytes data = 1;
+  ImportSettings settings = 2;      // read from the first chunk only
+}
+
+// Something the archive and the server both hold.
+message ImportConflict {
+  string kind = 1;                  // "session", "workspace" or "card"
+  string id = 2;                    // a card's workspace; nil uuid: user card
+  // Its name.
+  string name = 3;
+  // "error", "skip" or "overwrite"; for a card also "keep" (the server's
+  // stays: the default for diverged histories) or "update" (cards_newer
+  // and the archive's was written later: added as the next version)
+  string resolution = 4;
+  // A card: the latest version on each side, so a person can choose.
+  ImportCardHead target = 5;        // the server's
+  // The archive's.
+  ImportCardHead archive = 6;
+}
+
+// The latest version of a card on one side.
+message ImportCardHead {
+  uint64 version = 1;               // in its own history
+  int64 updated_at_unix = 2;        // seconds
+  string first_line = 3;            // first non-empty line of its text
+}
+
+// What an import found and, when committed, did.
+message ImportResponse {
+  // Whether anything was written.
+  bool committed = 1;
+  // Format version of the archive.
+  string format_version = 2;
+  // What the archive holds, after the session/workspace filters.
+  uint32 sessions = 3;
+  // Workspaces.
+  uint32 workspaces = 4;
+  // Records.
+  uint32 updates = 5;
+  // Checkpoints.
+  uint32 checkpoints = 6;
+  // Vectors.
+  uint32 embeddings = 7;
+  // What both sides hold.
+  repeated ImportConflict conflicts = 8;
+  // Set when committed.
+  uint32 sessions_imported = 9;
+  // Sessions left as the server had them.
+  uint32 sessions_skipped = 10;
+  // Workspaces written.
+  uint32 workspaces_imported = 11;
+  // Workspaces left as the server had them.
+  uint32 workspaces_skipped = 12;
+  // Records written.
+  uint32 updates_imported = 13;
+  // Checkpoints written.
+  uint32 checkpoints_imported = 14;
+  // Vectors written.
+  uint32 embeddings_imported = 15;
+  // What could not be written.
+  repeated string errors = 16;
+  // What the archive holds (after the filters): captured messages, those
+  // whose turn the server does not store yet, and cards (one per scope).
+  uint32 messages = 17;
+  // Captured turns the server does not store yet.
+  uint32 messages_new = 18;
+  // Cards (one per scope).
+  uint32 cards = 19;
+  // Set when committed.
+  uint32 messages_imported = 20;
+  uint32 messages_skipped = 21;     // turn stored already
+  // Card versions written.
+  uint32 cards_imported = 22;
+  uint32 cards_skipped = 23;        // left as the server had them
+  // What a commit would refuse: the archive's vectors were embedded with
+  // another model than the server's (the commit fails, writing nothing).
+  repeated string warnings = 24;
+  // Documents of modules the import covers.
+  uint32 documents = 25;
+  // Set when committed: documents written or brought up to date.
+  uint32 documents_imported = 26;
+  // Set when committed: documents left as the server had them.
+  uint32 documents_skipped = 27;
+}
+
+// ============ Project lookup ============
+
+// Where ResolveProject would put a project key.
+message FindProjectRequest {
+  string key = 1;                // as in ResolveProjectRequest
+  optional string workspace = 2; // workspace name a new key would join
+}
+
+// Where the key is, or would go.
+message FindProjectResponse {
+  // The key is bound: workspace_id is its workspace, session_id its session
+  // (empty if unknown). Not bound: workspace_id is the existing workspace
+  // named in the request, empty when a new workspace would be made.
+  bool bound = 1;
+  // The workspace (see bound).
+  string workspace_id = 2;
+  // The session of a bound key; empty if unknown.
+  string session_id = 3;
+}
+
+// `post-cortex.memory.record_added`: a record was written, once per
+// workspace its session belongs to (docs/host.md, events of a module).
+message RecordAdded {
+  // The record.
+  string record = 1;
+  // A workspace its session belongs to; empty: none.
+  string workspace_id = 2;
+  // Its type by wire name (`decision_made`).
+  string record_type = 3;
 }

@@ -1,0 +1,16 @@
+{
+  "name": "@post-cortex/module",
+  "version": "0.5.0",
+  "description": "A pcx module in TypeScript (Deno, Node), on the Rust core of pcx.",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": ["index.js", "index.d.ts", "*.node"],
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.16.0"
+  },
+  "devDependencies": {
+    "@bufbuild/protoc-gen-es": "^2.16.0"
+  }
+}

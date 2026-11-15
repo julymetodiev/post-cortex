@@ -1,0 +1,29 @@
+[package]
+name = "pcx-module-node"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "@post-cortex/module: a pcx module in TypeScript (Deno, Node), on the Rust core (napi-rs)."
+publish = false
+
+[lib]
+name = "pcx_module_node"
+# Tested through the real host by bindings/tests, not by a test binary of
+# its own (an extension links against the runtime that loads it).
+test = false
+doctest = false
+crate-type = ["cdylib"]
+
+[dependencies]
+pcx-module-core.workspace = true
+napi.workspace = true
+napi-derive.workspace = true
+
+[build-dependencies]
+napi-build.workspace = true
+
+[lints]
+workspace = true

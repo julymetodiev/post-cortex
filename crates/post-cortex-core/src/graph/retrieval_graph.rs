@@ -11,7 +11,7 @@
 //!
 //! Extracted terms live only here: they are every content word of a record,
 //! not entities, and are not written to the session's
-//! [`SimpleEntityGraph`](super::entity_graph::SimpleEntityGraph).
+//! [`SimpleEntityGraph`](crate::graph::entity_graph::SimpleEntityGraph).
 //!
 //! On LoCoMo the graph raises the share of questions whose evidence is in
 //! the top-300 candidate pool from 0.924 to 0.947 (multi-hop 0.798 to
@@ -24,13 +24,18 @@ use std::sync::LazyLock;
 use rust_stemmers::{Algorithm, Stemmer};
 
 use crate::core::context_update::EntityRelationship;
+use crate::graph::analytics::{PageRank, personalised_pagerank};
+use crate::graph::entity_graph::{entity_key, name_keys_in, name_words};
 
 /// Nodes on more than this share of the records are dropped: they connect
 /// everything (speakers, the project name, "today").
 const MAX_DF_SHARE: f32 = 0.05;
-/// PageRank damping; lower keeps the walk close to the seeds.
-const DAMPING: f32 = 0.5;
-const ITERATIONS: usize = 30;
+/// PageRank damping (lower keeps the walk close to the seeds) and steps.
+const PAGE_RANK: PageRank = PageRank {
+    damping: 0.5,
+    max_iterations: 30,
+    tolerance: 0.0,
+};
 
 static STEMMER: LazyLock<Stemmer> = LazyLock::new(|| Stemmer::create(Algorithm::English));
 
@@ -105,20 +110,23 @@ pub struct GraphRecord<R> {
 pub struct RetrievalGraph<R> {
     records: Vec<R>,
     /// Term or entity -> node index (after the records). Entities are keyed
-    /// as `"entity:" + lowercased name` so they never collide with terms.
+    /// as `"entity:"` + their resolution key ([`entity_key`]), so they never
+    /// collide with terms and spellings of one entity meet.
     nodes: HashMap<String, usize>,
     /// Weighted adjacency over all nodes (records first): record-key edges
     /// weigh 1, relation edges their type's
     /// [`RelationType::weight`](crate::core::context_update::RelationType::weight).
-    edges: Vec<Vec<(usize, f32)>>,
+    edges: Vec<Vec<(usize, f64)>>,
     /// Total edge weight per node.
-    strength: Vec<f32>,
+    strength: Vec<f64>,
     /// Records each non-record node is on, for seed weights.
-    df: Vec<f32>,
+    df: Vec<f64>,
+    /// Most words in an entity name of the graph, for seeding.
+    max_entity_words: usize,
 }
 
-fn entity_key(name: &str) -> String {
-    format!("entity:{}", name.to_lowercase())
+fn entity_node_key(name: &str) -> String {
+    format!("entity:{}", entity_key(name))
 }
 
 impl<R: Clone> RetrievalGraph<R> {
@@ -130,9 +138,13 @@ impl<R: Clone> RetrievalGraph<R> {
     ) -> Self {
         let mut ids = Vec::new();
         let mut keys_per_record: Vec<HashSet<String>> = Vec::new();
+        let mut max_entity_words = 0;
         for record in records {
             let mut keys = record.terms;
-            keys.extend(record.entities.iter().map(|e| entity_key(e)));
+            for entity in &record.entities {
+                max_entity_words = max_entity_words.max(name_words(entity));
+                keys.insert(entity_node_key(entity));
+            }
             ids.push(record.id);
             keys_per_record.push(keys);
         }
@@ -156,7 +168,7 @@ impl<R: Clone> RetrievalGraph<R> {
             .enumerate()
             .map(|(i, &k)| (k.to_string(), n + i))
             .collect();
-        let df: Vec<f32> = kept.iter().map(|k| count[k] as f32).collect();
+        let df: Vec<f64> = kept.iter().map(|k| count[k] as f64).collect();
 
         let mut edges = vec![Vec::new(); n + nodes.len()];
         for (r, keys) in keys_per_record.iter().enumerate() {
@@ -169,13 +181,13 @@ impl<R: Clone> RetrievalGraph<R> {
         }
         for rel in relations {
             let (Some(&a), Some(&b)) = (
-                nodes.get(&entity_key(&rel.from_entity)),
-                nodes.get(&entity_key(&rel.to_entity)),
+                nodes.get(&entity_node_key(&rel.from_entity)),
+                nodes.get(&entity_node_key(&rel.to_entity)),
             ) else {
                 continue;
             };
             if a != b {
-                let w = rel.relation_type.weight();
+                let w = f64::from(rel.relation_type.weight());
                 edges[a].push((b, w));
                 edges[b].push((a, w));
             }
@@ -190,52 +202,33 @@ impl<R: Clone> RetrievalGraph<R> {
             edges,
             strength,
             df,
+            max_entity_words,
         }
     }
 
     /// Records ranked by personalised PageRank from the query, best first,
     /// at most `limit`. Seeds are the query's terms and the agent entities
-    /// it names, each weighted by 1/df. Empty when the query reaches no node.
+    /// it names (whole words, see [`name_keys_in`]), each weighted by 1/df.
+    /// Empty when the query reaches no node.
     pub fn rank(&self, query: &str, limit: usize) -> Vec<R> {
         let n = self.records.len();
-        let mut seed = vec![0f32; self.edges.len()];
-        let lower = query.to_lowercase();
-        let entity_seeds = self
-            .nodes
-            .iter()
-            .filter_map(|(k, &node)| Some((k.strip_prefix("entity:")?, node)))
-            .filter(|(name, _)| !name.is_empty() && lower.contains(name))
-            .map(|(_, node)| node);
+        let mut seed = vec![0f64; self.edges.len()];
+        let entity_seeds = name_keys_in(query, self.max_entity_words)
+            .into_iter()
+            .filter_map(|key| self.nodes.get(&format!("entity:{key}")).copied());
         let term_seeds = terms(query)
             .into_iter()
             .filter_map(|t| self.nodes.get(&t).copied());
         for node in term_seeds.chain(entity_seeds) {
             seed[node] = 1.0 / self.df[node - n];
         }
-        let total: f32 = seed.iter().sum();
+        let total: f64 = seed.iter().sum();
         if total == 0.0 {
             return Vec::new();
         }
         seed.iter_mut().for_each(|s| *s /= total);
 
-        let mut rank = seed.clone();
-        let mut next = vec![0f32; rank.len()];
-        for _ in 0..ITERATIONS {
-            for (x, s) in next.iter_mut().zip(&seed) {
-                *x = (1.0 - DAMPING) * s;
-            }
-            for (node, neighbours) in self.edges.iter().enumerate() {
-                if neighbours.is_empty() {
-                    continue;
-                }
-                let share = DAMPING * rank[node] / self.strength[node];
-                for &(m, w) in neighbours {
-                    next[m] += share * w;
-                }
-            }
-            std::mem::swap(&mut rank, &mut next);
-        }
-
+        let rank = personalised_pagerank(&self.edges, &self.strength, &seed, PAGE_RANK);
         let mut order: Vec<usize> = (0..n).filter(|&r| rank[r] > 0.0).collect();
         order.sort_by(|&a, &b| rank[b].total_cmp(&rank[a]));
         order.truncate(limit);
@@ -254,124 +247,4 @@ impl<R: Clone> RetrievalGraph<R> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::context_update::RelationType;
-
-    fn record(
-        id: usize,
-        text: &str,
-        entities: Vec<&'static str>,
-    ) -> (usize, String, Vec<&'static str>) {
-        (id, text.to_string(), entities)
-    }
-
-    fn graph(
-        rows: &[(usize, String, Vec<&'static str>)],
-        relations: &[EntityRelationship],
-    ) -> RetrievalGraph<usize> {
-        RetrievalGraph::build(
-            rows.iter().map(|(id, text, entities)| GraphRecord {
-                id: *id,
-                terms: terms(text),
-                entities: entities.iter().map(|e| e.to_string()).collect(),
-            }),
-            relations,
-        )
-    }
-
-    /// Filler so that no real node is above the 5% df cut-off, while common
-    /// words ("the", "about") are, as in real text.
-    fn filler(rows: &mut Vec<(usize, String, Vec<&'static str>)>) {
-        rows.extend((100..160).map(|i| {
-            record(
-                i,
-                &format!("the filler record number {i} about the weather"),
-                vec![],
-            )
-        }));
-    }
-
-    #[test]
-    fn keys_round_trip_sorted_and_deduplicated() {
-        let joined = join_keys(["new york", "adopt", "adopt", ""]);
-        assert_eq!(joined, "adopt\nnew york");
-        assert_eq!(
-            split_keys(&joined).collect::<Vec<_>>(),
-            ["adopt", "new york"]
-        );
-        assert_eq!(split_keys("").count(), 0);
-    }
-
-    #[test]
-    fn terms_are_stemmed_words_and_names() {
-        let t = terms("Caroline researched adoption agencies in New York with Melanie.");
-        for want in [
-            "caroline", "new york", "melanie", "research", "adopt", "agenc",
-        ] {
-            assert!(t.contains(want), "{want} missing from {t:?}");
-        }
-        assert!(
-            !t.contains("in"),
-            "words under three characters are skipped"
-        );
-    }
-
-    #[test]
-    fn terms_work_in_any_script() {
-        let t = terms("Přišel jsem do Prahy, viděl jsem kočku.");
-        assert!(t.contains("prahy") && t.contains("kočku"), "{t:?}");
-        let t = terms("Решихме да ползваме SurrealDB за базата.");
-        assert!(
-            t.contains("решихме") && t.contains("базата") && t.contains("surrealdb"),
-            "{t:?}"
-        );
-    }
-
-    /// A record sharing no term with the query is reached through a record
-    /// that does (the multi-hop case).
-    #[test]
-    fn reaches_second_hop_records_through_terms() {
-        let mut rows = vec![
-            record(0, "Caroline adopted a puppy called Biscuit", vec![]),
-            record(1, "Biscuit chewed the sofa yesterday", vec![]),
-            record(2, "Melanie painted a sunrise over the lake", vec![]),
-        ];
-        filler(&mut rows);
-        let g = graph(&rows, &[]);
-        let ranked = g.rank("What did Caroline's puppy chew?", 10);
-        assert_eq!(ranked.first(), Some(&0));
-        assert!(ranked.contains(&1), "{ranked:?}");
-        assert!(!ranked.contains(&2), "{ranked:?}");
-        assert!(g.rank("unrelated zebracorn", 10).is_empty());
-    }
-
-    /// Agent entities and their relations connect records whose text does
-    /// not overlap at all.
-    #[test]
-    fn agent_entities_and_relations_join_records() {
-        let mut rows = vec![
-            record(0, "switched the storage layer", vec!["SurrealDB"]),
-            record(
-                1,
-                "index rebuild blocks startup for minutes",
-                vec!["HNSW index"],
-            ),
-            record(2, "unrelated note about lunch", vec![]),
-        ];
-        filler(&mut rows);
-        let relations = [EntityRelationship {
-            from_entity: "HNSW index".into(),
-            to_entity: "SurrealDB".into(),
-            relation_type: RelationType::DependsOn,
-            context: String::new(),
-        }];
-        let ranked = graph(&rows, &relations).rank("what do we know about surrealdb?", 10);
-        assert_eq!(ranked.first(), Some(&0), "{ranked:?}");
-        assert!(ranked.contains(&1), "related entity's record: {ranked:?}");
-        assert!(!ranked.contains(&2));
-        // Without the relation the second record is unreachable.
-        let ranked = graph(&rows, &[]).rank("what do we know about surrealdb?", 10);
-        assert!(!ranked.contains(&1), "{ranked:?}");
-    }
-}
+mod tests;

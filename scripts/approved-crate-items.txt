@@ -1,0 +1,10 @@
+# Crate-internal items (`pub(crate)`) the owner approved as a crate's own API,
+# one per line: <file> <item>. `check-architecture.sh --new` skips an added
+# `pub(crate)` item only when it is listed here; every other one fails.
+# Owner 2026-10-24 (W14): the Documents service is built like every capability
+# service, and the documents' embedding pass is a sibling of the records' and
+# the messages' that the pipeline calls.
+crates/post-cortex-memory/src/capabilities/documents.rs new
+crates/post-cortex-memory/src/memory_system/document_vectors.rs vectorize_documents_now
+# Owner 2026-10-26 (W24): the Blobs service is built like the Documents service.
+crates/post-cortex-memory/src/capabilities/blobs.rs new

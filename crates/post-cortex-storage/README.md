@@ -4,9 +4,9 @@
 [![Docs.rs](https://docs.rs/post-cortex-storage/badge.svg)](https://docs.rs/post-cortex-storage)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
 
-Storage backends for [post-cortex](https://docs.rs/post-cortex). Provides the `Storage` trait (plus `VectorStorage` / `GraphStorage`), the lock-free RocksDB backend (`RealRocksDBStorage`) and an optional SurrealDB backend (`SurrealDBStorage`) behind the `surrealdb-storage` feature.
+Storage backends for [post-cortex](https://docs.rs/post-cortex). Provides the storage ports (one trait per capability: `SessionStore`, `CheckpointStore`, `WorkspaceStore`, `GraphStore`, `VectorStore`, `MessageStore`, `CardStore`, `DismissalStore`, `FreshnessStore`; bundled per backend by `Stores`), the RocksDB backend (`RealRocksDBStorage`), an optional SurrealDB backend (`SurrealDBStorage`) behind the `surrealdb-storage` feature, and the `pcx export` archive with its one export/import (`export_import`).
 
-Session blobs and their context updates are stored as separate rows (RocksDB keeps a `session_updates:{id}` index; blobs written by 0.3.x are migrated on load). Removals are passed explicitly through `Storage::save_session_with_changes`, and `Storage::list_session_summaries` lists sessions without loading them. Data written by 0.4 is not readable by older versions.
+Session blobs and their context updates are stored as separate rows (RocksDB keeps a `session_updates:{id}` index; blobs written by 0.3.x are migrated on load). Removals are passed explicitly through `SessionStore::save_session_with_changes`, and `SessionStore::list_session_summaries` lists sessions without loading them. Data written by 0.4 is not readable by older versions.
 
 ## Install
 
@@ -31,16 +31,17 @@ The SurrealDB schema changed in 0.4.0 (embedding records keyed `{session_id}_{co
 ## Example
 
 ```rust,no_run
-use post_cortex_storage::{RealRocksDBStorage, Storage};
+use post_cortex_storage::{RealRocksDBStorage, Stores};
 use std::sync::Arc;
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // `new_with_dimension` rejects embeddings whose length does not match the
     // model (256 for the default potion-multilingual-128M); `new` accepts any.
-    let storage: Arc<dyn Storage> =
-        Arc::new(RealRocksDBStorage::new_with_dimension("./pcx-data", 256).await?);
+    let backend = RealRocksDBStorage::new_with_dimension("./pcx-data", 256).await?;
+    // One `Arc<dyn Port>` per capability; hand each consumer the ports it uses.
+    let stores = Stores::of(Arc::new(backend));
 
-    for summary in storage.list_session_summaries().await? {
+    for summary in stores.sessions.list_session_summaries().await? {
         println!("{} {:?} ({} updates)", summary.id, summary.name, summary.update_count);
     }
     Ok(())

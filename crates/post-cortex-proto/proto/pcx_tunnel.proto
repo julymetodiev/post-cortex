@@ -1,0 +1,271 @@
+syntax = "proto3";
+package pcx.tunnel.v1;
+
+import "pcx_module.proto";
+
+// A daemon connected to an organisation of the cloud (docs/connect.md): it
+// pairs once (a device flow), then holds one outbound tunnel to the gateway,
+// which forwards the requests of the organisation's people over it. The
+// daemon is the client of both services; the gateway serves them.
+
+// Pairing a daemon with an organisation. Neither call has a bearer: the
+// device code is the secret, and a person approves in the app.
+service Pairing {
+  // Ask for a pairing: answers the code a person approves and the code the
+  // daemon polls with.
+  rpc StartPairing(StartPairingRequest) returns (PairingStarted);
+  // Whether the pairing is approved; once approved, the daemon's token,
+  // answered once.
+  rpc PollPairing(PollPairingRequest) returns (PairingState);
+}
+
+// The tunnel: one stream each way while the daemon is connected, the
+// daemon's token as the call's bearer.
+service Tunnel {
+  // The daemon serves the organisation's requests over it.
+  rpc Serve(stream DaemonFrame) returns (stream GatewayFrame);
+  // The daemon leaves its organisation (`pcx connect --off`): its token is
+  // revoked and its tunnel closed.
+  rpc Leave(LeaveRequest) returns (Left);
+}
+
+// Leave the organisation; the bearer names the daemon.
+message LeaveRequest {}
+
+// The daemon left: its token no longer connects.
+message Left {}
+
+// A workspace of the daemon.
+message Workspace {
+  // Its id.
+  string id = 1;
+  // Its name.
+  string name = 2;
+}
+
+// A daemon asks to be paired.
+message StartPairingRequest {
+  // The daemon's name, as the organisation will see it.
+  string name = 1;
+  // The machine's host name.
+  string machine = 2;
+  // The daemon's version.
+  string version = 3;
+  // Its workspaces, of which the approver chooses those the organisation
+  // sees.
+  repeated Workspace workspaces = 4;
+  // What it offers (none: a space): with a runner, the approver gives it to
+  // a workspace of the organisation (docs/connect.md section 7).
+  repeated Offer offers = 5;
+}
+
+// A pairing waiting for a person.
+message PairingStarted {
+  // The secret the daemon polls with.
+  string device_code = 1;
+  // The short code a person checks in the app.
+  string user_code = 2;
+  // The page of the app where a person approves.
+  string verification_url = 3;
+  // Seconds between two polls.
+  uint32 interval_secs = 4;
+  // Seconds until the pairing expires.
+  uint32 expires_in_secs = 5;
+}
+
+// Where a pairing is, asked by its device code.
+message PollPairingRequest {
+  // The device code of `PairingStarted`.
+  string device_code = 1;
+}
+
+// Where a pairing is.
+enum PairingStatus {
+  // Never sent.
+  PAIRING_STATUS_UNSPECIFIED = 0;
+  // No person has answered yet.
+  PAIRING_STATUS_PENDING = 1;
+  // Approved: the answer carries the daemon's id and token.
+  PAIRING_STATUS_APPROVED = 2;
+  // A person refused it.
+  PAIRING_STATUS_REFUSED = 3;
+  // Nobody answered in time, or its token was answered already.
+  PAIRING_STATUS_EXPIRED = 4;
+}
+
+// The answer to a poll.
+message PairingState {
+  // Where the pairing is.
+  PairingStatus status = 1;
+  // The daemon's id; set when approved.
+  string daemon_id = 2;
+  // The organisation's id; set when approved.
+  string org_id = 3;
+  // The organisation's name; set when approved.
+  string org_name = 4;
+  // The daemon's token (`pcxd_...`); set when approved, answered once.
+  string token = 5;
+}
+
+// What a connected daemon offers.
+enum Offer {
+  // Never sent.
+  OFFER_UNSPECIFIED = 0;
+  // Its board, memory, team and agent, to the organisation's people.
+  OFFER_SPACE = 1;
+  // Its tool modules, to a hosted tenant's agents.
+  OFFER_RUNNER = 2;
+}
+
+// A header of a request or an answer; its value may be any bytes.
+message Header {
+  // Its name, in lowercase.
+  string name = 1;
+  // Its value.
+  bytes value = 2;
+}
+
+// The daemon's first frame.
+message Hello {
+  // The daemon's version.
+  string version = 1;
+  // What it offers.
+  repeated Offer offers = 2;
+  // Its workspaces now, of which the organisation's owners choose those
+  // it sees.
+  repeated Workspace workspaces = 3;
+  // When it offers a runner: the manifests of the tool modules it lends
+  // (`[runner] modules`), which a hosted tenant's host runs as its own,
+  // their calls forwarded here (docs/connect.md section 7).
+  repeated pcx.module.v1.Manifest lent = 4;
+  // When it offers a runner: the directories the lent modules' grants
+  // reach (the union of their roots), among which a board's repository is
+  // chosen in the app.
+  repeated pcx.module.v1.SandboxRoot roots = 5;
+}
+
+// The gateway's first frame, the answer to `Hello`.
+message Welcome {
+  // The daemon's id.
+  string daemon_id = 1;
+  // The ids of the workspaces its space offers the organisation.
+  repeated string workspaces = 2;
+  // The body bytes of an exchange either side may send before a `Credit`.
+  uint32 window = 3;
+  // The exchanges open at once at most.
+  uint32 max_exchanges = 4;
+}
+
+// A request to the daemon begins (gateway to daemon).
+message Open {
+  // The exchange, numbered by the gateway.
+  uint64 exchange = 1;
+  // The HTTP method.
+  string method = 2;
+  // The path and query.
+  string path = 3;
+  // The request's headers.
+  repeated Header headers = 4;
+}
+
+// The answer begins (daemon to gateway).
+message Head {
+  // The exchange.
+  uint64 exchange = 1;
+  // The HTTP status.
+  uint32 status = 2;
+  // The answer's headers.
+  repeated Header headers = 3;
+}
+
+// The next bytes of a body, either way.
+message Data {
+  // The exchange.
+  uint64 exchange = 1;
+  // The bytes.
+  bytes data = 2;
+}
+
+// The body has ended, either way; an answer's trailers come with it.
+message End {
+  // The exchange.
+  uint64 exchange = 1;
+  // The answer's trailers (a gRPC status); none for a request.
+  repeated Header trailers = 2;
+}
+
+// The exchange ends early, either way: the request was canceled, or the
+// side cannot go on.
+message Reset {
+  // The exchange.
+  uint64 exchange = 1;
+  // Why.
+  string reason = 2;
+}
+
+// The receiver consumed `bytes` of an exchange's body: the sender may send
+// that much more.
+message Credit {
+  // The exchange.
+  uint64 exchange = 1;
+  // How many bytes more.
+  uint32 bytes = 2;
+}
+
+// Liveness, either way; answered with a `Pong` of the same nonce.
+message Ping {
+  // Echoed by the `Pong`.
+  uint64 nonce = 1;
+}
+
+// The answer to a `Ping`.
+message Pong {
+  // The `Ping`'s nonce.
+  uint64 nonce = 1;
+}
+
+// A frame from the daemon.
+message DaemonFrame {
+  // Which.
+  oneof frame {
+    // The first frame.
+    Hello hello = 1;
+    // An answer begins.
+    Head head = 2;
+    // An answer's bytes.
+    Data data = 3;
+    // An answer ends.
+    End end = 4;
+    // An exchange ends early.
+    Reset reset = 5;
+    // More of a request's body may come.
+    Credit credit = 6;
+    // Liveness.
+    Ping ping = 7;
+    // The answer to the gateway's `Ping`.
+    Pong pong = 8;
+  }
+}
+
+// A frame from the gateway.
+message GatewayFrame {
+  // Which.
+  oneof frame {
+    // The first frame.
+    Welcome welcome = 1;
+    // A request begins.
+    Open open = 2;
+    // A request's bytes.
+    Data data = 3;
+    // A request's body ends.
+    End end = 4;
+    // An exchange ends early.
+    Reset reset = 5;
+    // More of an answer's body may come.
+    Credit credit = 6;
+    // Liveness.
+    Ping ping = 7;
+    // The answer to the daemon's `Ping`.
+    Pong pong = 8;
+  }
+}

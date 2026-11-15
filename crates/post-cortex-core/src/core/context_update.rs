@@ -26,8 +26,10 @@ use serde::{Deserialize, Serialize};
 
 use uuid::Uuid;
 
+use crate::core::wire::wire_names;
+
 /// The type of context update recorded during a session
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UpdateType {
     /// A question-answer pair was completed
     QuestionAnswered,
@@ -93,7 +95,7 @@ pub struct ContextUpdate {
     pub derived_from: Vec<String>,
 
     /// What the writer stated about the record's validity and trust, and
-    /// whether it was retired (ROADMAP Phase 3 items 7-9).
+    /// whether it was retired.
     #[serde(default)]
     pub meta: UpdateMeta,
 }
@@ -124,6 +126,18 @@ pub struct UpdateMeta {
     pub retired_at: Option<DateTime<Utc>>,
 }
 
+/// Confidence of a record whose writer stated none: fully trusted, as in
+/// search, which only discounts records with a stated confidence.
+pub const UNSTATED_CONFIDENCE: f32 = 1.0;
+
+impl UpdateMeta {
+    /// The stated confidence clamped to [0, 1], else [`UNSTATED_CONFIDENCE`].
+    pub fn confidence_or_unstated(&self) -> f32 {
+        self.confidence
+            .map_or(UNSTATED_CONFIDENCE, |c| c.clamp(0.0, 1.0))
+    }
+}
+
 /// Structured content payload for a context update
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct UpdateContent {
@@ -144,9 +158,10 @@ pub struct UpdateContent {
 pub struct CodeReference {
     /// Absolute or workspace-relative file path
     pub file_path: String,
-    /// Starting line number (1-based)
+    /// Starting line number (1-based); 0 when the reference names the
+    /// whole file (a path without lines).
     pub start_line: u32,
-    /// Ending line number (inclusive)
+    /// Ending line number (inclusive); 0 for the whole file.
     pub end_line: u32,
     /// The literal code text at this location
     pub code_snippet: String,
@@ -172,7 +187,7 @@ pub struct EntityRelationship {
 }
 
 /// The kind of directed relationship between two entities
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RelationType {
     /// A is required by B
     RequiredBy,
@@ -192,49 +207,36 @@ pub enum RelationType {
     Solves,
 }
 
-impl UpdateType {
-    /// Wire name, as the `interaction_type` of the tools ("decision_made").
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            UpdateType::QuestionAnswered => "qa",
-            UpdateType::ProblemSolved => "problem_solved",
-            UpdateType::CodeChanged => "code_change",
-            UpdateType::DecisionMade => "decision_made",
-            UpdateType::ConceptDefined => "concept_defined",
-            UpdateType::RequirementAdded => "requirement_added",
-        }
-    }
-}
+wire_names!(UpdateType, "update type", {
+    QuestionAnswered => "qa",
+    ProblemSolved => "problem_solved",
+    CodeChanged => "code_change",
+    DecisionMade => "decision_made",
+    ConceptDefined => "concept_defined",
+    RequirementAdded => "requirement_added",
+});
 
-impl EntityType {
-    /// Wire name, as the `entity_type` of the tools ("code_component").
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            EntityType::Technology => "technology",
-            EntityType::Concept => "concept",
-            EntityType::Problem => "problem",
-            EntityType::Solution => "solution",
-            EntityType::Decision => "decision",
-            EntityType::CodeComponent => "code_component",
-        }
-    }
-}
+wire_names!(EntityType, "entity type", {
+    Technology => "technology",
+    Concept => "concept",
+    Problem => "problem",
+    Solution => "solution",
+    Decision => "decision",
+    CodeComponent => "code_component",
+});
+
+wire_names!(RelationType, "relation type", {
+    RequiredBy => "required_by",
+    LeadsTo => "leads_to",
+    RelatedTo => "related_to",
+    ConflictsWith => "conflicts_with",
+    DependsOn => "depends_on",
+    Implements => "implements",
+    CausedBy => "caused_by",
+    Solves => "solves",
+});
 
 impl RelationType {
-    /// Wire name, as the `relation_type` of the tools ("depends_on").
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            RelationType::RequiredBy => "required_by",
-            RelationType::LeadsTo => "leads_to",
-            RelationType::RelatedTo => "related_to",
-            RelationType::ConflictsWith => "conflicts_with",
-            RelationType::DependsOn => "depends_on",
-            RelationType::Implements => "implements",
-            RelationType::CausedBy => "caused_by",
-            RelationType::Solves => "solves",
-        }
-    }
-
     /// How strongly the relation ties its entities together, in (0, 1]:
     /// causal and structural links count fully, `related_to` (the catch-all)
     /// least. Used by centrality, communities and graph expansion. Defaults,
@@ -252,27 +254,8 @@ impl RelationType {
     }
 }
 
-/// Parses a `RelationType` from its string representation
-impl std::str::FromStr for RelationType {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "RequiredBy" => Ok(RelationType::RequiredBy),
-            "LeadsTo" => Ok(RelationType::LeadsTo),
-            "RelatedTo" => Ok(RelationType::RelatedTo),
-            "ConflictsWith" => Ok(RelationType::ConflictsWith),
-            "DependsOn" => Ok(RelationType::DependsOn),
-            "Implements" => Ok(RelationType::Implements),
-            "CausedBy" => Ok(RelationType::CausedBy),
-            "Solves" => Ok(RelationType::Solves),
-            _ => Err(format!("Unknown RelationType: {}", s)),
-        }
-    }
-}
-
 /// Semantic category of a tracked entity
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EntityType {
     /// A technology or tool (Rust, PostgreSQL, etc.)
     Technology,

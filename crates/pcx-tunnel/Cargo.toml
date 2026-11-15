@@ -1,0 +1,38 @@
+[package]
+name = "pcx-tunnel"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "A daemon's tunnel to the cloud's gateway (docs/connect.md): HTTP exchanges over one outbound gRPC stream, the daemon's side and the gateway's."
+publish = false
+
+[dependencies]
+post-cortex-proto.workspace = true
+bytes.workspace = true
+futures.workspace = true
+http.workspace = true
+http-body.workspace = true
+parking_lot.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
+tokio-stream.workspace = true
+tokio-util.workspace = true
+tonic = { workspace = true, features = ["tls-ring", "tls-native-roots"] }
+tower = { workspace = true, features = ["util"] }
+tracing.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+http-body-util.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = { workspace = true, features = ["net"] }
+tonic = { workspace = true, features = ["server"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,44 @@
+{
+  "id": "post-cortex",
+  "name": "post-cortex",
+  "description": "Long-term memory from post-cortex: user and project cards in every prompt, related records for the request, optional turn capture, and the post-cortex MCP tools",
+  "version": "0.1.0",
+  "categories": ["memory"],
+  "activation": {
+    "onStartup": true
+  },
+  "mcpServers": {
+    "post-cortex": {
+      "transport": "stdio",
+      "command": "pcx",
+      "args": ["mcp", "--author", "openclaw"]
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "profile": {
+        "type": "string",
+        "description": "Backend profile from ~/.post-cortex/config.json (default: PC_PROFILE, else the active one, else cloud)"
+      },
+      "enabled": {
+        "type": "boolean",
+        "description": "Turn post-cortex off for OpenClaw"
+      },
+      "capture": {
+        "type": "boolean",
+        "description": "Store finished turns in the project's message stream (default false)"
+      },
+      "workspace": {
+        "type": "string",
+        "description": "Workspace name a newly resolved project goes into"
+      }
+    }
+  },
+  "uiHints": {
+    "profile": { "label": "Profile", "placeholder": "cloud" },
+    "capture": { "label": "Capture turns" },
+    "workspace": { "label": "Workspace name" }
+  }
+}

@@ -1,0 +1,40 @@
+[package]
+name = "pcx-observe"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The pcx observe module: reads a running system (Prometheus, Loki, Alertmanager, Kubernetes) per environment, never changes it."
+keywords = ["pcx", "observability", "prometheus", "kubernetes"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-observe"
+
+[dependencies]
+pcx-module-api.workspace = true
+pcx-kube.workspace = true
+pcx-nomad.workspace = true
+# Its package, pcx.observe.v1, with the outside APIs mirrored.
+post-cortex-proto.workspace = true
+pbjson-types.workspace = true
+prost.workspace = true
+tonic.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
+chrono.workspace = true
+# The APIs' JSON, decoded by their mirror messages' proto3 JSON mapping.
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tokio-util.workspace = true
+pcx-host.workspace = true
+pcx-sandbox.workspace = true
+tempfile.workspace = true
+axum.workspace = true
+reqwest.workspace = true
+
+[lints]
+workspace = true

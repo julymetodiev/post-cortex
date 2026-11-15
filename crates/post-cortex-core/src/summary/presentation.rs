@@ -38,8 +38,10 @@ pub struct StructuredSummaryView {
     // From StructuredContext
     /// Key decisions made during the session
     pub key_decisions: Vec<DecisionSummary>,
-    /// Open (unresolved) questions tracked in the session
-    pub open_questions: Vec<QuestionSummary>,
+    /// The session's answered questions (its Q&A records). Serialized as
+    /// `open_questions`, the name clients read.
+    #[serde(rename = "open_questions")]
+    pub answered_questions: Vec<QuestionSummary>,
     /// Key concepts defined during the session
     pub key_concepts: Vec<ConceptSummary>,
 
@@ -112,9 +114,9 @@ pub struct QuestionSummary {
 }
 
 impl QuestionSummary {
-    /// Convert a raw `QuestionItem` into a presentation `QuestionSummary`.
-    pub fn from_question_item(question: &QuestionItem) -> Self {
-        let now = Utc::now();
+    /// Convert a raw `QuestionItem` into a presentation `QuestionSummary`,
+    /// its age measured at `now`.
+    pub fn from_question_item(question: &QuestionItem, now: DateTime<Utc>) -> Self {
         let days_open = (now - question.timestamp).num_days();
 
         let urgency_level = match (&question.status, days_open) {
@@ -197,17 +199,11 @@ pub struct EntitySummary {
 }
 
 impl EntitySummary {
-    /// Convert a raw `EntityAnalysis` into a presentation `EntitySummary`.
-    pub fn from_entity_analysis(analysis: &EntityAnalysis) -> Self {
-        let importance_level = match analysis.importance_score {
-            score if score >= 2.0 => ImportanceLevel::Critical,
-            score if score >= 1.5 => ImportanceLevel::High,
-            score if score >= 1.0 => ImportanceLevel::Medium,
-            score if score >= 0.5 => ImportanceLevel::Low,
-            _ => ImportanceLevel::Minimal,
-        };
+    /// Convert a raw `EntityAnalysis` into a presentation `EntitySummary`,
+    /// its recency measured at `now`.
+    pub fn from_entity_analysis(analysis: &EntityAnalysis, now: DateTime<Utc>) -> Self {
+        let importance_level = crate::graph::analytics::importance_level(analysis.importance_score);
 
-        let now = Utc::now();
         let days_since_last_seen = (now - analysis.last_seen).num_days();
         let recency_level = match days_since_last_seen {
             0 => RecencyLevel::Today,
@@ -400,18 +396,20 @@ pub enum ComplexityLevel {
     High,
 }
 
-/// Importance level for entities
-#[derive(Serialize, Deserialize, Clone, Debug)]
+/// Importance level of an entity, on the `(0, 1]` scale of
+/// [`importance`](crate::graph::analytics::importance) (see
+/// [`importance_level`](crate::graph::analytics::importance_level)).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum ImportanceLevel {
-    /// Importance score below 0.5
+    /// Importance below 0.1
     Minimal,
-    /// Importance score 0.5 – 1.0
+    /// Importance 0.1 to 0.25
     Low,
-    /// Importance score 1.0 – 1.5
+    /// Importance 0.25 to 0.5
     Medium,
-    /// Importance score 1.5 – 2.0
+    /// Importance 0.5 to 0.8
     High,
-    /// Importance score 2.0 or above
+    /// Importance 0.8 or above
     Critical,
 }
 
@@ -459,50 +457,4 @@ pub enum ActivityLevel {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_confidence_level_mapping() {
-        let decision = DecisionItem {
-            description: "Test decision".to_string(),
-            context: "Test context".to_string(),
-            alternatives: vec![],
-            confidence: 0.9,
-            timestamp: Utc::now(),
-        };
-
-        let summary = DecisionSummary::from_decision_item(&decision);
-        assert!(matches!(summary.confidence_level, ConfidenceLevel::High));
-    }
-
-    #[test]
-    fn test_urgency_level_calculation() {
-        let old_timestamp = Utc::now() - chrono::Duration::days(10);
-        let question = QuestionItem {
-            question: "Test question".to_string(),
-            context: "Test context".to_string(),
-            status: QuestionStatus::Open,
-            timestamp: old_timestamp,
-            last_updated: old_timestamp,
-        };
-
-        let summary = QuestionSummary::from_question_item(&question);
-        assert!(summary.days_open >= 10);
-        assert!(matches!(summary.urgency_level, UrgencyLevel::High));
-    }
-
-    #[test]
-    fn test_session_duration_calculation() {
-        let created = Utc::now() - chrono::Duration::hours(3);
-        let updated = Utc::now();
-
-        let stats = SessionStatsBuilder::new(Uuid::new_v4(), created, updated)
-            .with_context_sizes(10, 5, 2)
-            .with_counts(15, 20, 3)
-            .with_references(2, 5, 1)
-            .build();
-
-        assert!(matches!(stats.session_duration, SessionDuration::Medium));
-    }
-}
+mod tests;

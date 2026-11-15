@@ -1,0 +1,195 @@
+syntax = "proto3";
+package pcx.tools.fs.v1;
+
+// Files under the module's roots: read, write and edit them, list
+// directories, find files and search their contents.
+service Files {
+  // Read a text file with line numbers; for a large file, read a range
+  // with offset and limit.
+  rpc Read(ReadRequest) returns (ReadResponse);
+  // Write a whole file (created with its directories, or replaced),
+  // atomically.
+  rpc Write(WriteRequest) returns (WriteResponse);
+  // Replace one exact occurrence of old_text by new_text in a file.
+  rpc Edit(EditRequest) returns (EditResponse);
+  // List a directory: directories first, then files with their sizes.
+  rpc ListDir(ListDirRequest) returns (ListDirResponse);
+  // Find files by glob pattern (e.g. **/*.rs), skipping hidden and
+  // .gitignore'd ones.
+  rpc Glob(GlobRequest) returns (GlobResponse);
+  // Search file contents by regex (or literal text), with optional
+  // context lines and a glob filter.
+  rpc Grep(GrepRequest) returns (GrepResponse);
+}
+
+// Read a file.
+message ReadRequest {
+  // The file, relative to the root or absolute under a root.
+  string path = 1;
+  // The root the path is relative to (one of the module's roots); empty:
+  // the first root.
+  string root = 2;
+  // First line (1-based); 0: the first.
+  uint64 offset = 3;
+  // Most lines; 0: as many as fit.
+  uint64 limit = 4;
+}
+
+// Lines of a file.
+message ReadResponse {
+  // The file.
+  string path = 1;
+  // The number of the first line read.
+  uint64 first_line = 2;
+  // The lines read, in order.
+  repeated string lines = 3;
+  // Lines in the file; more than were read: continue from first_line plus
+  // the lines read.
+  uint64 total_lines = 4;
+}
+
+// Write a file.
+message WriteRequest {
+  // The file.
+  string path = 1;
+  // The root the path is relative to; empty: the first root.
+  string root = 2;
+  // Its new content.
+  string content = 3;
+}
+
+// A file written.
+message WriteResponse {
+  // The file.
+  string path = 1;
+  // Its size.
+  uint64 bytes = 2;
+  // Its lines.
+  uint64 lines = 3;
+}
+
+// Edit a file.
+message EditRequest {
+  // The file.
+  string path = 1;
+  // The root the path is relative to; empty: the first root.
+  string root = 2;
+  // Text that appears once in the file.
+  string old_text = 3;
+  // What replaces it.
+  string new_text = 4;
+}
+
+// A file edited.
+message EditResponse {
+  // The file.
+  string path = 1;
+  // The line where the replaced text began.
+  uint64 line = 2;
+}
+
+// List a directory.
+message ListDirRequest {
+  // The directory; empty: the root.
+  string path = 1;
+  // The root the path is relative to; empty: the first root.
+  string root = 2;
+}
+
+// What an entry of a directory is.
+enum EntryKind {
+  // Not known.
+  ENTRY_KIND_OTHER = 0;
+  // A file.
+  ENTRY_KIND_FILE = 1;
+  // A directory.
+  ENTRY_KIND_DIR = 2;
+  // A symbolic link.
+  ENTRY_KIND_SYMLINK = 3;
+}
+
+// An entry of a directory.
+message Entry {
+  // Its name.
+  string name = 1;
+  // What it is.
+  EntryKind kind = 2;
+  // Its size in bytes.
+  uint64 size = 3;
+}
+
+// A directory: directories first, then files.
+message ListDirResponse {
+  // The directory.
+  string path = 1;
+  // Its entries.
+  repeated Entry entries = 2;
+}
+
+// Find files.
+message GlobRequest {
+  // The glob pattern.
+  string pattern = 1;
+  // Where to search; empty: the root.
+  string path = 2;
+  // The root the path is relative to; empty: the first root.
+  string root = 3;
+  // Most files; 0: 1000.
+  uint64 limit = 4;
+}
+
+// Files found.
+message GlobResponse {
+  // The files, at most the limit.
+  repeated string files = 1;
+  // Files that match in all.
+  uint64 total = 2;
+  // Whether the search stopped after the most entries it visits: narrow
+  // the path.
+  bool cut = 3;
+}
+
+// Search file contents.
+message GrepRequest {
+  // The regex, or literal text with literal.
+  string pattern = 1;
+  // Where to search; empty: the root.
+  string path = 2;
+  // The root the path is relative to; empty: the first root.
+  string root = 3;
+  // Only files matching this glob; empty: every file.
+  string glob = 4;
+  // Ignore case.
+  bool ignore_case = 5;
+  // The pattern is literal text.
+  bool literal = 6;
+  // Lines around each match.
+  uint64 context = 7;
+  // Most matches; 0: 100.
+  uint64 limit = 8;
+}
+
+// A line of a search's answer.
+message GrepLine {
+  // Its file.
+  string file = 1;
+  // Its number.
+  uint64 number = 2;
+  // Its text (clipped when long).
+  string text = 3;
+  // Whether it matches (else it is context).
+  bool matched = 4;
+}
+
+// What a search found.
+message GrepResponse {
+  // The lines: matches and their context.
+  repeated GrepLine lines = 1;
+  // Matches in all.
+  uint64 matches = 2;
+  // Whether there were more matches than the limit: narrow the pattern or
+  // the path.
+  bool more = 3;
+  // Whether the search stopped after the most entries it visits.
+  bool cut = 4;
+}

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "post-cortex": {
+      "type": "http",
+      "url": "${user_config.url}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${user_config.api_key}",
+        "X-PCX-Author": "claude-code"
+      }
+    }
+  }
+}

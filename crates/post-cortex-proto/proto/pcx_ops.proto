@@ -1,0 +1,466 @@
+syntax = "proto3";
+package pcx.ops.v1;
+
+import "google/protobuf/timestamp.proto";
+import "pcx_module.proto";
+
+// Changing a running system, only through typed actions, each decided on
+// the board (ARCHITECTURE section 8, operations, W31): an action is
+// recorded as a decision with risk operations on its task, and runs when
+// the team's trust approves it at once or a person approves it, checked
+// again before it runs and held by brakes. What no team may do alone
+// (deleting data, a migration) is no action here.
+service Ops {
+  // Restart a deployment's pods (a rollout).
+  rpc Restart(TargetRequest) returns (ActionAnswer);
+  // Delete a pod that a controller makes again (never a database's).
+  rpc DeletePod(TargetRequest) returns (ActionAnswer);
+  // Delete a namespace's failed jobs.
+  rpc CleanJobs(NamespaceRequest) returns (ActionAnswer);
+  // Set a deployment's replicas, within its environment's bounds.
+  rpc Scale(ScaleRequest) returns (ActionAnswer);
+  // Grow a volume claim, at most to twice its size.
+  rpc ResizeVolume(ResizeRequest) returns (ActionAnswer);
+  // In a Nomad environment: stop a service job's running allocation, so
+  // Nomad places a new one (never a restart in place).
+  rpc NewAllocation(AllocationRequest) returns (ActionAnswer);
+  // In a Nomad environment: launch a periodic job once now.
+  rpc RunPeriodic(JobRequest) returns (ActionAnswer);
+  // In a Nomad environment: take service jobs back, each to the version
+  // before the one it runs. Only a person approves it.
+  rpc RevertJobs(RevertRequest) returns (ActionAnswer);
+  // The actions asked, the newest first.
+  rpc ListActions(ListActionsRequest) returns (ActionList);
+}
+
+// ------------------------------------------------------------- settings
+
+// The settings.
+message OpsConfig {
+  // The workspace its actions are kept in.
+  string workspace_id = 1 [(pcx.module.v1.setting) = { title: "Workspace", required: true, workspace: true }];
+  // The environments it acts in, by name.
+  repeated Environment environments = 2 [(pcx.module.v1.setting) = { title: "Environments" }];
+  // Minutes before the same target is acted on again; 0: 30.
+  uint32 per_target_minutes = 3 [(pcx.module.v1.setting) = { title: "Minutes between actions on one target" }];
+  // Most actions an hour in one environment; 0: 6.
+  uint32 per_hour = 4 [(pcx.module.v1.setting) = { title: "Actions an hour" }];
+  // The channel destination told how an action ended; empty: none.
+  string notify = 5 [(pcx.module.v1.setting) = { title: "Tell", pattern: "([a-z0-9-]{1,64}/)?[a-z0-9-]{1,64}", example: "telegram/ops" }];
+  // Minutes an action waits for a person before the channel is told once
+  // that it still waits; 0: 30.
+  uint32 remind_minutes = 6 [(pcx.module.v1.setting) = { title: "Minutes until a waiting action is said again" }];
+  // Minutes an action waits for a person before it is given up (its
+  // decision withdrawn, its target free); more than the reminder's; 0: 240.
+  uint32 give_up_minutes = 7 [(pcx.module.v1.setting) = { title: "Minutes until a waiting action is given up" }];
+}
+
+// An environment it acts in: its cluster (a Kubernetes API or a Nomad
+// API, never both) and the files of credentials (an account whose rights
+// are the actions', read through the sandbox at each call, apart from
+// observe's).
+message Environment {
+  // Its name, e.g. prod.
+  string name = 1 [(pcx.module.v1.setting) = { title: "Name", required: true, pattern: "[a-z0-9-]{1,64}", example: "prod" }];
+  // The Kubernetes API server's URL; empty: a Nomad environment.
+  string kube_api = 2 [(pcx.module.v1.setting) = { title: "Kubernetes API URL", pattern: "https?://\\S+", example: "https://10.0.0.1:6443" }];
+  // A file holding the account's token.
+  string kube_token_file = 3 [(pcx.module.v1.setting) = { title: "Token's file" }];
+  // A file holding the cluster's CA (PEM); empty: the system's.
+  string kube_ca_file = 4 [(pcx.module.v1.setting) = { title: "CA file" }];
+  // Most replicas `Scale` sets; 0: 3.
+  uint32 max_replicas = 5 [(pcx.module.v1.setting) = { title: "Most replicas" }];
+  // The name the API server's certificate is verified against when it
+  // does not name the URL's host, as a kubeconfig's tls-server-name (a DNS
+  // name or an IP address); needs the CA file; empty: the URL's host.
+  string kube_tls_server_name = 6 [(pcx.module.v1.setting) = { title: "TLS server name" }];
+  // Nomad's API URL (https); empty: a Kubernetes environment.
+  string nomad_api = 7 [(pcx.module.v1.setting) = { title: "Nomad API URL", pattern: "https://\\S+", example: "https://nomad.example.com:4646" }];
+  // A file holding the Nomad ACL token of the actions (read-job,
+  // alloc-lifecycle, dispatch-job, submit-job).
+  string nomad_token_file = 8 [(pcx.module.v1.setting) = { title: "Nomad token's file" }];
+  // A file holding Nomad's CA certificate (PEM); empty: the system's.
+  string nomad_ca_file = 9 [(pcx.module.v1.setting) = { title: "Nomad CA file" }];
+  // The name Nomad's certificate is verified against when it does not
+  // name the URL's host; needs the CA file; empty: the URL's host.
+  string nomad_tls_server_name = 10 [(pcx.module.v1.setting) = { title: "Nomad TLS server name" }];
+  // The Nomad jobs its actions act on, by name; a Nomad environment names
+  // at least one, and an action on any other job is refused (the token's
+  // rights are the namespace's, so this is what keeps a database's job a
+  // person's).
+  repeated string nomad_jobs = 11 [(pcx.module.v1.setting) = { title: "Nomad jobs", pattern: "[^\\s,]{1,128}", example: "pcx-app" }];
+}
+
+// ------------------------------------------------------------- documents
+
+// What an action is.
+enum Kind {
+  // Not given.
+  KIND_UNSPECIFIED = 0;
+  // A deployment restarted.
+  KIND_RESTART = 1;
+  // A pod deleted.
+  KIND_DELETE_POD = 2;
+  // A namespace's failed jobs deleted.
+  KIND_CLEAN_JOBS = 3;
+  // A deployment scaled.
+  KIND_SCALE = 4;
+  // A volume claim grown.
+  KIND_RESIZE_VOLUME = 5;
+  // A Nomad allocation stopped, a new one placed.
+  KIND_NEW_ALLOCATION = 6;
+  // A periodic Nomad job launched once.
+  KIND_RUN_PERIODIC = 7;
+  // Nomad service jobs taken back to their versions before.
+  KIND_REVERT_JOBS = 8;
+}
+
+// Where an action is.
+enum State {
+  // Not given.
+  STATE_UNSPECIFIED = 0;
+  // Its decision waits for a person.
+  STATE_WAITING = 1;
+  // It runs.
+  STATE_RUNNING = 2;
+  // It was done.
+  STATE_DONE = 3;
+  // It failed, or its target changed so it was not done.
+  STATE_FAILED = 4;
+  // A person declined its decision, or who asked it withdrew it (ops
+  // itself, in the asker's name, when no one answered in time): not done,
+  // and its target is free for another action.
+  STATE_DECLINED = 5;
+}
+
+// An action asked (document ops/action, titled by what).
+message Action {
+  // What kind.
+  Kind kind = 1;
+  // What it does, for a person: e.g. "restart deployment equal-rust/svc-music".
+  string what = 2;
+  // The environment.
+  string environment = 3;
+  // Its target, namespace/name (a namespace alone for jobs); in a Nomad
+  // environment the job, and for a revert its jobs, `a, b`.
+  string target = 4;
+  // For a scale: the replicas; for a resize: the gibibytes; else 0.
+  uint32 amount = 5;
+  // Why, with the evidence.
+  string why = 6;
+  // The workspace of its task.
+  string workspace_id = 7;
+  // Its task, by id.
+  string task = 8;
+  // Its decision on the task, by id.
+  string decision = 9;
+  // Who asked.
+  string asked_by = 10;
+  // Where it is.
+  State state = 11;
+  // What it did, or why it failed.
+  string result = 12;
+  // When it was asked.
+  google.protobuf.Timestamp asked = 13;
+  // When it ran; unset: not yet.
+  google.protobuf.Timestamp ran = 14;
+  // When the channel was told that it still waits; unset: not yet.
+  google.protobuf.Timestamp reminded = 15;
+  // For a revert: each job with the version it ran and the one it goes
+  // back to, as they were when it was asked, in the order they run.
+  repeated Revert reverts = 16;
+  // For a new allocation: the allocation stopped, by id.
+  string allocation = 17;
+}
+
+// One job of a revert.
+message Revert {
+  // The job.
+  string job = 1;
+  // The version it ran when the revert was asked.
+  uint32 from = 2;
+  // The version it goes back to.
+  uint32 to = 3;
+}
+
+// ---------------------------------------------------------------- calls
+
+// What every action asks.
+message Ask {
+  // The environment.
+  string environment = 1;
+  // The workspace of its task.
+  string workspace_id = 2;
+  // Its task, by id: the decision is recorded there.
+  string task = 3;
+  // Why, with the evidence (queries and what they showed).
+  string why = 4;
+  // Only say what it would do and how the target is now.
+  bool dry_run = 5;
+}
+
+// An action on a deployment or a pod.
+message TargetRequest {
+  // What every action asks.
+  Ask ask = 1;
+  // The namespace.
+  string namespace = 2;
+  // The deployment or pod.
+  string name = 3;
+}
+
+// An action on a namespace.
+message NamespaceRequest {
+  // What every action asks.
+  Ask ask = 1;
+  // The namespace.
+  string namespace = 2;
+}
+
+// A scale.
+message ScaleRequest {
+  // What every action asks.
+  Ask ask = 1;
+  // The namespace.
+  string namespace = 2;
+  // The deployment.
+  string name = 3;
+  // The replicas it is to have.
+  uint32 replicas = 4;
+}
+
+// A volume claim grown.
+message ResizeRequest {
+  // What every action asks.
+  Ask ask = 1;
+  // The namespace.
+  string namespace = 2;
+  // The claim.
+  string name = 3;
+  // Its new size in gibibytes.
+  uint32 gibibytes = 4;
+}
+
+// An action on a Nomad allocation.
+message AllocationRequest {
+  // What every action asks.
+  Ask ask = 1;
+  // The allocation: its id, or the first 8 characters or more of it.
+  string allocation = 2;
+}
+
+// An action on a Nomad job.
+message JobRequest {
+  // What every action asks.
+  Ask ask = 1;
+  // The job.
+  string job = 2;
+}
+
+// A revert of Nomad jobs.
+message RevertRequest {
+  // What every action asks.
+  Ask ask = 1;
+  // The jobs, 1 to 5, in the order they are reverted.
+  repeated string jobs = 2;
+}
+
+// What an action did, or would do.
+message ActionAnswer {
+  // Its document's id; empty for a dry run.
+  string id = 1;
+  // The action.
+  Action action = 2;
+  // For a dry run: what it would do and how its target is now.
+  string would = 3;
+}
+
+// The actions asked.
+message ListActionsRequest {
+  // At most this many; 0: 20.
+  uint32 limit = 1;
+}
+
+// Actions.
+message ActionList {
+  // The actions, the newest first.
+  repeated ActionAnswer actions = 1;
+}
+
+// ------------------------------------ the Kubernetes API (its JSON, mirrored)
+
+// A merge patch of a deployment: a restart's annotation, or its replicas.
+message DeploymentPatch {
+  // Its spec.
+  PatchSpec spec = 1;
+}
+
+// A deployment's spec, patched.
+message PatchSpec {
+  // Its pod template.
+  PatchTemplate template = 1;
+  // Its replicas; unset: unchanged.
+  optional uint32 replicas = 2;
+}
+
+// A pod template, patched.
+message PatchTemplate {
+  // Its metadata.
+  PatchMeta metadata = 1;
+}
+
+// Metadata, patched.
+message PatchMeta {
+  // Its annotations.
+  map<string, string> annotations = 1;
+}
+
+// A merge patch of a volume claim's size.
+message ClaimPatch {
+  // Its spec.
+  ClaimSpec spec = 1;
+}
+
+// A claim's spec.
+message ClaimSpec {
+  // What it asks for.
+  ClaimResources resources = 1;
+}
+
+// A claim's resources.
+message ClaimResources {
+  // Its requests: storage, e.g. "20Gi".
+  map<string, string> requests = 1;
+}
+
+// A Kubernetes object as ops reads it before acting.
+message KubeThing {
+  // Its metadata.
+  ThingMeta metadata = 1;
+  // A deployment's or a claim's spec.
+  ThingSpec spec = 2;
+  // A job's or a claim's status.
+  ThingStatus status = 3;
+}
+
+// An object's metadata.
+message ThingMeta {
+  // Its name.
+  string name = 1;
+  // Its labels.
+  map<string, string> labels = 2;
+  // What owns it.
+  repeated OwnerRef owner_references = 3 [json_name = "ownerReferences"];
+}
+
+// An owner of an object.
+message OwnerRef {
+  // Its kind.
+  string kind = 1;
+  // Whether it is the object's controller.
+  bool controller = 2;
+}
+
+// A deployment's or a claim's spec.
+message ThingSpec {
+  // A deployment's replicas.
+  uint32 replicas = 1;
+  // A claim's resources.
+  ClaimResources resources = 2;
+}
+
+// A job's or a claim's status.
+message ThingStatus {
+  // Its pods that failed.
+  uint32 failed = 1;
+  // Its pods that succeeded.
+  uint32 succeeded = 2;
+  // A claim's capacity: storage, e.g. "10Gi" (its volume may be larger
+  // than its claim asked for).
+  map<string, string> capacity = 3;
+}
+
+// A Kubernetes list as ops reads it.
+message ThingList {
+  // Its items.
+  repeated KubeThing items = 1;
+}
+
+// ----------------------------------------- Nomad's API (its JSON, mirrored)
+//
+// The fields are named as Nomad names them, so each message reads and
+// writes Nomad's JSON as it is. Nomad writes an empty list, map or time as
+// null: the reader drops nulls first (`pcx-nomad`).
+
+// A job as ops reads it before acting: one of its versions.
+message NomadJob {
+  // Its name.
+  string ID = 1;
+  // Its type: service, batch, system, sysbatch.
+  string Type = 2;
+  // Whether it is stopped.
+  bool Stop = 3;
+  // The version.
+  uint32 Version = 4;
+  // Whether the version is stable (its deployment was healthy).
+  bool Stable = 5;
+  // When the version was submitted, nanoseconds since the epoch.
+  int64 SubmitTime = 6;
+  // Its schedule, for a periodic job.
+  NomadPeriodic Periodic = 7;
+}
+
+// A periodic job's schedule, as far as ops reads it.
+message NomadPeriodic {
+  // Whether it is launched at all.
+  bool Enabled = 1;
+}
+
+// A job's versions Nomad keeps.
+message NomadVersions {
+  // The versions, the newest first.
+  repeated NomadJob Versions = 1;
+}
+
+// A job's summary, as far as ops reads it.
+message NomadSummary {
+  // Its launches, for a periodic job.
+  NomadChildren Children = 1;
+}
+
+// How many launches of a periodic job are where.
+message NomadChildren {
+  // Those that wait to run.
+  int64 Pending = 1;
+  // Those that run.
+  int64 Running = 2;
+}
+
+// A job's latest deployment.
+message NomadDeployment {
+  // running, pending, paused, successful, failed, cancelled, ...
+  string Status = 1;
+}
+
+// An allocation as ops reads it before acting.
+message NomadAlloc {
+  // Its id.
+  string ID = 1;
+  // Its job.
+  string JobID = 2;
+  // Its job's type.
+  string JobType = 3;
+  // Its state on the node: pending, running, complete, failed, lost.
+  string ClientStatus = 4;
+}
+
+// What a revert sends: the job, the version it goes back to, and the
+// version it must still run for the revert to be done.
+message NomadRevert {
+  // The job.
+  string JobID = 1;
+  // The version it goes back to.
+  uint32 JobVersion = 2;
+  // The version it runs; Nomad refuses the revert when it runs another.
+  uint32 EnforcePriorVersion = 3;
+}

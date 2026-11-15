@@ -18,38 +18,40 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-//! HTTP daemon server for multi-client access to Post-Cortex
-//!
-//! Provides lock-free HTTP/SSE transport for MCP JSON-RPC, enabling multiple
-//! Claude Code instances to share a single RocksDB instance.
+//! The Post-Cortex daemon: one process that owns the storage and serves MCP
+//! (streamable HTTP and stdio), gRPC and REST to every client.
 
-pub(crate) mod assembly_scope;
 pub mod auth;
-pub mod coerce;
+pub mod bootstrap;
 pub mod config;
-pub mod format_helpers;
-pub mod grpc_service;
-pub mod host_allowlist;
-pub mod mcp_service;
-pub mod observability;
-pub mod rmcp_server;
-pub mod server;
-pub mod sse;
-pub mod stdio_proxy;
-pub mod validate;
-
-/// Serialises tests that swap the MCP tools' global memory system
-/// (`post_cortex_mcp::inject_memory_system`).
+mod connect;
 #[cfg(test)]
-pub(crate) static MCP_GLOBAL_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+mod connect_runner_tests;
+#[cfg(test)]
+mod connect_tests;
+mod grpc_server;
+#[cfg(test)]
+mod grpc_tests;
+pub mod host_allowlist;
+#[cfg(test)]
+mod mcp_prompts_tests;
+#[cfg(test)]
+mod mcp_tests;
+pub mod observability;
+pub mod pidfile;
+mod proxies;
+mod reload;
+pub mod rmcp_server;
+#[cfg(test)]
+mod router_tests;
+mod settings_file;
+mod settings_grants;
+#[cfg(test)]
+mod test_client;
 
-pub use config::DaemonConfig;
-pub use grpc_service::start_grpc_server;
-pub use mcp_service::PostCortexService;
+pub use bootstrap::start_rmcp_daemon;
+pub use config::{ConfigError, DaemonConfig};
+pub use grpc_server::start_grpc_server;
 pub use observability::{
     TracingInitError, init as init_observability, shutdown as shutdown_observability,
 };
-pub use rmcp_server::start_rmcp_daemon;
-pub use server::DaemonServer;
-pub use sse::SSEBroadcaster;
-pub use stdio_proxy::{ensure_daemon_running, is_daemon_running, run_stdio_proxy};

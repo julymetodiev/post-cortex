@@ -24,19 +24,19 @@ post-cortex-core = "0.4"
 | `core::error` | `SystemError` enum, `Result<T>` alias — `thiserror`-derived (re-exported at the crate root) |
 | `core::context_update` | `ContextUpdate`, `UpdateContent`, `UpdateType`, `EntityData`, `EntityType`, `EntityRelationship`, `RelationType`, `CodeReference` |
 | `core::structured_context` | `StructuredContext` projection types |
-| `core::cache` | Lock-free LRU-style cache primitives (DashMap + atomic metrics) |
-| `core::timeout_utils` | Retry + timeout helpers |
+| `core::cache` | `SessionCache`: the LRU-style session cache (DashMap + atomic hit/miss counters) |
+| `core::timeout_utils` | Default deadlines for MCP and storage operations |
 | `session` | `ActiveSession` + components |
-| `graph` | `EntityGraph` (petgraph-backed) + GraphRAG |
+| `graph` | `SimpleEntityGraph` (petgraph-backed), retrieval graph, temporal views, analytics |
 | `workspace` | `WorkspaceManager`, `Workspace`, `SessionRole` |
 | `summary` | `StructuredSummaryView`, `SummaryGenerator` |
-| `services` | `PostCortexService` trait (canonical service interface) + request/response types |
+| `services` | Request and response DTOs of the memory capability services (`post_cortex_memory::capabilities`) |
 | `redact` | `Redactor` / `RedactionConfig` — replaces credentials, e-mail addresses, phone numbers and public IPv4 addresses with `[REDACTED:<kind>]` |
 | `proto` | Re-export of `post_cortex_proto` |
 
 ## Example
 
-A canonical write request, as every transport (MCP, gRPC) builds it before handing it to `PostCortexService::update_context`:
+A write request, as every transport (MCP, gRPC, REST) builds it before handing it to `Records::write` in `post-cortex-memory`:
 
 ```rust,no_run
 use post_cortex_core::core::context_update::{
@@ -82,52 +82,17 @@ let request = UpdateContextRequest {
 println!("update for session {}", request.session_id);
 ```
 
-Redaction runs on that request inside the canonical service; it can also be applied directly:
+Redaction runs on that request inside `Records::write`; it can also be applied directly:
 
 ```rust,no_run
 use post_cortex_core::redact::{RedactionConfig, RedactionCounts, Redactor};
 
-let (redactor, invalid_patterns) = Redactor::new(&RedactionConfig::default());
-assert!(invalid_patterns.is_empty());
+let redactor = Redactor::new(&RedactionConfig::default())?;
 
 let mut counts = RedactionCounts::new();
 let clean = redactor.redact_str("mail ops@example.com", &mut counts);
 println!("{clean} ({counts:?})"); // mail [REDACTED:email] ...
-```
-
-## Implementing a custom service
-
-Implement the `PostCortexService` trait against your own storage + embeddings stack and the rest of the post-cortex ecosystem (MCP tools, gRPC clients, summary view) will work unchanged:
-
-```rust,no_run
-use async_trait::async_trait;
-use post_cortex_core::SystemError;
-use post_cortex_core::services::*;
-
-struct MyService;
-
-#[async_trait]
-impl PostCortexService for MyService {
-    async fn health(&self) -> Result<HealthReport, SystemError> {
-        Ok(HealthReport {
-            status: "ok".into(),
-            active_sessions: 0,
-            memory_usage_bytes: 0,
-            pipeline_backlog: 0,
-            uptime_seconds: 0,
-        })
-    }
-    async fn update_context(&self, _: UpdateContextRequest) -> Result<UpdateContextResponse, SystemError> { todo!() }
-    async fn bulk_update_context(&self, _: BulkUpdateContextRequest) -> Result<BulkUpdateContextResponse, SystemError> { todo!() }
-    async fn semantic_search(&self, _: SemanticSearchRequest) -> Result<SemanticSearchResponse, SystemError> { todo!() }
-    async fn query_context(&self, _: QueryContextRequest) -> Result<QueryContextResponse, SystemError> { todo!() }
-    async fn assemble_context(&self, _: AssembleContextRequest) -> Result<AssembleContextResponse, SystemError> { todo!() }
-    async fn manage_session(&self, _: ManageSessionRequest) -> Result<ManageSessionResponse, SystemError> { todo!() }
-    async fn manage_workspace(&self, _: ManageWorkspaceRequest) -> Result<ManageWorkspaceResponse, SystemError> { todo!() }
-    async fn manage_entity(&self, _: ManageEntityRequest) -> Result<ManageEntityResponse, SystemError> { todo!() }
-    async fn get_structured_summary(&self, _: StructuredSummaryRequest) -> Result<StructuredSummaryResponse, SystemError> { todo!() }
-    async fn admin(&self, _: AdminRequest) -> Result<AdminResponse, SystemError> { todo!() }
-}
+# Ok::<(), post_cortex_core::redact::RedactError>(())
 ```
 
 ## MSRV

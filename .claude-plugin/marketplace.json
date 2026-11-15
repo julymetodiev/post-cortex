@@ -1,0 +1,16 @@
+{
+  "name": "post-cortex",
+  "description": "post-cortex: long-term, searchable project memory for coding agents",
+  "owner": {
+    "name": "Julius ML",
+    "url": "https://github.com/julymetodiev"
+  },
+  "plugins": [
+    {
+      "name": "post-cortex",
+      "source": "./integrations/claude-code",
+      "description": "post-cortex MCP server, the post-cortex-memory skill and the memory hooks",
+      "category": "productivity"
+    }
+  ]
+}

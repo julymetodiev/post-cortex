@@ -1,0 +1,64 @@
+// example.greet.v1: the greet module's API, as a third-party module ships
+// its own (ARCHITECTURE section 7, everything gRPC). Its manifest names the
+// service and carries these descriptors; its comments are what agents and
+// people read.
+syntax = "proto3";
+package example.greet.v1;
+
+// The settings option of the module API (pcx.module.v1), which a module
+// ships with its own protos.
+import "pcx_module.proto";
+
+// Greets people with the greeting its organisation configured, and keeps
+// who it greeted.
+service Greeter {
+  // Greets someone with the greeting this organisation configured.
+  rpc Greet(GreetRequest) returns (Greeting);
+  // The greetings given, newest first, and how many.
+  rpc ListGreetings(ListGreetingsRequest) returns (Greetings);
+  // Forgets every greeting given.
+  rpc Forget(ForgetRequest) returns (Forgotten);
+}
+
+// Whom to greet.
+message GreetRequest {
+  // Who to greet; empty: nobody in particular (not kept).
+  string name = 1;
+}
+
+// One greeting.
+message Greeting {
+  // Whom it greeted; empty: nobody in particular.
+  string name = 1;
+  // What it said.
+  string text = 2;
+}
+
+// The greetings.
+message ListGreetingsRequest {}
+
+// The greetings given.
+message Greetings {
+  // How many.
+  uint64 count = 1;
+  // Newest first.
+  repeated Greeting greetings = 2;
+}
+
+// Forget them.
+message ForgetRequest {}
+
+// How many were forgotten.
+message Forgotten {
+  // The greetings forgotten.
+  uint64 forgotten = 1;
+}
+
+// The module's settings (ARCHITECTURE section 7, settings).
+message GreetConfig {
+  // What the greet tool says, like Hello.
+  string greeting = 1 [(pcx.module.v1.setting) = { title: "Greeting", required: true }];
+  // Said after each greeting to someone, like "- Ana"; a secret, which
+  // the settings never show once set. Empty: none.
+  string signature = 2 [(pcx.module.v1.setting) = { title: "Signature", secret: true }];
+}

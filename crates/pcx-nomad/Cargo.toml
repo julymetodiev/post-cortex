@@ -1,0 +1,19 @@
+[package]
+name = "pcx-nomad"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Nomad's HTTP API as pcx modules call it: its names, its paths and an environment's settings."
+keywords = ["pcx", "nomad", "operations"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-nomad"
+
+[dependencies]
+# The calls themselves and their TLS (a bearer token's file, a CA, a server name).
+pcx-kube.workspace = true
+
+[lints]
+workspace = true

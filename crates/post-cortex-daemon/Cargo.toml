@@ -14,19 +14,56 @@ documentation = "https://docs.rs/post-cortex-daemon"
 
 [dependencies]
 post-cortex-core.workspace = true
+post-cortex-ports.workspace = true
 post-cortex-proto.workspace = true
 post-cortex-memory.workspace = true
 post-cortex-storage.workspace = true
-post-cortex-embeddings.workspace = true
-post-cortex-mcp.workspace = true
+# Memory's blobs on S3 (`[blobs]`, W24).
+post-cortex-blobs.workspace = true
+# model2vec (the default embedding backend) is always on; the heavy BERT
+# stack (candle + tokenizers) is opt-in via the `bert` feature.
+post-cortex-embeddings = { workspace = true, features = ["model2vec"] }
+post-cortex-transport.workspace = true
+# The module host the daemon composes with the memory module (section 7).
+pcx-host.workspace = true
+# The sandbox and the built-in modules (`[[builtins]]`).
+pcx-agent.workspace = true
+pcx-board.workspace = true
+pcx-chief.workspace = true
+pcx-context.workspace = true
+pcx-models.workspace = true
+pcx-sandbox.workspace = true
+pcx-module-launcher.workspace = true
+pcx-dynamic.workspace = true
+pcx-skills.workspace = true
+pcx-webhooks.workspace = true
+pcx-scheduler.workspace = true
+pcx-mail.workspace = true
+pcx-http.workspace = true
+pcx-workflow.workspace = true
+pcx-telegram.workspace = true
+pcx-discord.workspace = true
+pcx-observe.workspace = true
+pcx-ops.workspace = true
+pcx-team.workspace = true
+pcx-tools-fs.workspace = true
+pcx-tools-git.workspace = true
+pcx-tools-shell.workspace = true
+pcx-module-api.workspace = true
+pcx-tunnel.workspace = true
+# The client commands of the `pcx` binary.
+post-cortex-cli.workspace = true
 
 # HTTP / gRPC / SSE
 axum.workspace = true
 tower.workspace = true
 tower-http.workspace = true
+# gRPC-Web over the gRPC routes for browsers (compose::routes).
+tonic-web.workspace = true
 hyper.workspace = true
 tonic.workspace = true
 prost.workspace = true
+pbjson-types.workspace = true
 prost-types.workspace = true
 
 # rmcp (Model Context Protocol server)
@@ -37,6 +74,7 @@ clap.workspace = true
 dialoguer.workspace = true
 dirs.workspace = true
 toml.workspace = true
+toml_edit.workspace = true
 reqwest.workspace = true
 
 # Compression for export/import (pcx export / import)
@@ -54,6 +92,7 @@ uuid.workspace = true
 thiserror.workspace = true
 futures.workspace = true
 regex.workspace = true
+sha2.workspace = true
 
 # Concurrency
 tokio.workspace = true
@@ -69,27 +108,39 @@ tracing-appender.workspace = true
 log.workspace = true
 env_logger.workspace = true
 
-[dev-dependencies]
-tokio-test.workspace = true
+# `pcx migrate` passes its archive through a temporary file.
 tempfile.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# `pcx stop` asks the daemon's process to end.
+nix = { workspace = true, features = ["signal"] }
+
+[dev-dependencies]
+# `ExportData`, a whole archive in memory, to build and inspect archives.
+post-cortex-core = { workspace = true, features = ["test-support"] }
+# The SearchIndex conformance suite, run over the composed adapters.
+post-cortex-ports = { workspace = true, features = ["conformance"] }
+tokio-test.workspace = true
 serial_test.workspace = true
 portpicker.workspace = true
-tokio-stream.workspace = true
+tokio-stream = { workspace = true, features = ["net"] }
+http-body-util.workspace = true
+bytes.workspace = true
 
 [[bin]]
 name = "pcx"
-path = "src/bin/pcx.rs"
+path = "src/bin/pcx/main.rs"
 
 [features]
-default = ["embeddings"]
-embeddings = ["post-cortex-memory/embeddings", "post-cortex-mcp/embeddings"]
-surrealdb-storage = ["post-cortex-memory/surrealdb-storage"]
-# Opt-in BERT embedding backend (see post-cortex-memory's `bert` feature).
-bert = ["post-cortex-memory/bert"]
+default = []
+surrealdb-storage = ["post-cortex-storage/surrealdb-storage", "post-cortex-cli/surrealdb-storage"]
+# Opt-in BERT embedding backend (MiniLM / MultilingualMiniLM / TinyBERT /
+# BGESmall); selecting a BERT model without it fails at engine load.
+bert = ["post-cortex-embeddings/bert"]
 # Local cross-encoder reranking (`reranker_model` in daemon.toml).
-rerank = ["post-cortex-memory/rerank"]
+rerank = ["post-cortex-embeddings/rerank"]
 # Voyage AI reranking (`voyage_api_key` in daemon.toml or VOYAGE_API_KEY).
-rerank-voyage = ["post-cortex-memory/rerank-voyage"]
+rerank-voyage = ["post-cortex-embeddings/rerank-voyage"]
 surrealdb-tikv = ["surrealdb-storage", "post-cortex-storage/surrealdb-tikv"]
 # Wires the OpenTelemetry OTLP exporter into observability::init().
 # Forwards to post-cortex-memory so trait-method spans are also

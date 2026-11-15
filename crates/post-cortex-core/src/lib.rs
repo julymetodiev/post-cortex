@@ -12,56 +12,45 @@
 //!
 //! | Concern | Crate |
 //! |--------|-------|
-//! | gRPC wire types | [`post_cortex_proto`] |
+//! | gRPC wire types | `post-cortex-proto` |
+//! | Port traits and the types they speak | `post-cortex-ports` |
 //! | Storage backends (RocksDB, SurrealDB) | `post-cortex-storage` |
 //! | Embeddings + HNSW | `post-cortex-embeddings` |
 //! | Conversation memory orchestrator | `post-cortex-memory` |
-//! | MCP tool library | `post-cortex-mcp` |
+//! | Operation table, MCP server | `post-cortex-transport` |
 //! | rmcp + axum + tonic daemon | `post-cortex-daemon` |
 //!
 //! Library users embedding post-cortex into their own Rust applications
 //! depend on `post-cortex-core` if they want the type system only, or
 //! on `post-cortex-memory` (which transitively pulls core + storage +
 //! embeddings) if they want a ready-to-use memory system.
-//!
-//! See `/Users/julius/.claude/plans/stateful-hugging-hopper.md` for the
-//! migration plan that produced this layout.
 
 // candle's `from_mmaped_safetensors` requires `unsafe` at a single call
 // site in post-cortex-embeddings; this crate is otherwise unsafe-free.
 #![deny(unsafe_code)]
-// Cosmetic clippy suggestions silenced workspace-wide — see other
-// crates' lib.rs for the same rationale.
-#![allow(clippy::result_large_err)]
-#![allow(clippy::type_complexity)]
-#![allow(clippy::field_reassign_with_default)]
-#![allow(clippy::manual_div_ceil)]
-// `sort_by` with .cmp() is sometimes clearer than the suggested
-// `sort_by_key(|x| x.field)` when the key involves multiple fields.
-#![allow(clippy::unnecessary_sort_by)]
-// Doc lists with indentation drift in legacy code; cleanup is Phase 12
-// follow-up.
-#![allow(clippy::doc_lazy_continuation)]
+
+/// The export archive: plain data of an export, its options and outcome.
+pub mod archive;
+/// Collections a session shares between its versions.
+pub mod collections;
 
 /// Cross-cutting primitives shared by every post-cortex crate.
 ///
-/// Hosts the [`cache`][core::cache] LRU helpers, the
-/// [`context_update`][core::context_update] data model, the
-/// [`error`][core::error] hierarchy ([`SystemError`] + [`Result`]),
-/// the [`structured_context`][core::structured_context] projection
-/// types, and the [`timeout_utils`][core::timeout_utils] retry helpers.
+/// Hosts the [`context_update`][core::context_update] data model, the
+/// [`content`][core::content] kinds, the
+/// [`structured_context`][core::structured_context] derivation and the
+/// [`wire`][core::wire] enum codec.
 pub mod core;
 
-/// Entity graph + GraphRAG types — `petgraph`-backed knowledge graph
+/// Entity graph types — the knowledge graph of a session
 /// used to enrich semantic search with relationship traversal.
 pub mod graph;
 
 /// Secret and personal-data redaction applied on the canonical write path.
 pub mod redact;
 
-/// Canonical [`services::PostCortexService`] trait. Every transport
-/// (gRPC, MCP, REST) delegates to the same single implementation in
-/// `post-cortex-memory`.
+/// Request and response DTOs of the memory capability services
+/// (`post_cortex_memory::capabilities`).
 pub mod services;
 
 /// `ActiveSession` and session-component types — the hot-context cache
@@ -72,14 +61,16 @@ pub mod session;
 /// timeline) consumed by MCP `get_structured_summary` and the gRPC
 /// equivalent.
 pub mod summary;
+/// The tokenizer every lexical (BM25) index shares.
+pub mod text;
 
-/// Workspace types — `WorkspaceManager`, `SessionRole`, the entities
+/// Slugs of workspaces (and the cloud's organisations): made once from the
+/// name, kept after a rename.
+pub mod slug;
+
+/// Reading times callers write.
+pub mod time;
+
+/// Workspace types — `Workspace`, `SessionRole`, the entities
 /// that group multiple sessions for cross-session search.
 pub mod workspace;
-
-pub use crate::core::error::{Result, SystemError};
-
-/// Re-export of the gRPC wire-types crate so consumers can reach freshness /
-/// source-reference types as `post_cortex_core::proto::FreshnessEntry` —
-/// matches the convenience export of the legacy single-crate layout.
-pub use post_cortex_proto as proto;

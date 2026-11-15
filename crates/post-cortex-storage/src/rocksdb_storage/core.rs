@@ -12,18 +12,18 @@
 
 //! Constructor and global database utilities for [`RealRocksDBStorage`].
 
-use anyhow::Result;
+use crate::port_error::Result;
 use parking_lot::{Mutex, MutexGuard};
 use rocksdb::{
     BlockBasedOptions, Cache, DB, DBCompressionType, DBIteratorWithThreadMode, Direction,
-    IteratorMode, Options, ReadOptions,
+    IteratorMode, Options, ReadOptions, SnapshotWithThreadMode,
 };
 use std::path::Path;
 use std::sync::Arc;
 use tracing::info;
 use uuid::Uuid;
 
-use super::RealRocksDBStorage;
+use crate::rocksdb_storage::RealRocksDBStorage;
 
 /// Block cache shared by all SST readers (data, index and filter blocks).
 const BLOCK_CACHE_BYTES: usize = 64 * 1024 * 1024;
@@ -36,7 +36,7 @@ const SESSION_LOCK_STRIPES: usize = 64;
 /// Held (inside `spawn_blocking`) around read-modify-write sequences on one
 /// session's records, e.g. diffing the stored update index against a new
 /// snapshot. Different sessions rarely share a stripe.
-pub(crate) struct SessionLocks {
+pub struct SessionLocks {
     stripes: Vec<Mutex<()>>,
 }
 
@@ -48,7 +48,7 @@ impl SessionLocks {
     }
 
     /// Lock the stripe that owns `session_id`.
-    pub(crate) fn lock(&self, session_id: Uuid) -> MutexGuard<'_, ()> {
+    pub fn lock(&self, session_id: Uuid) -> MutexGuard<'_, ()> {
         let stripe = (session_id.as_u128() % SESSION_LOCK_STRIPES as u128) as usize;
         self.stripes[stripe].lock()
     }
@@ -56,7 +56,7 @@ impl SessionLocks {
 
 /// Smallest key greater than every key that starts with `prefix`, or `None`
 /// when no such bound exists (the prefix is all `0xFF`).
-pub(super) fn prefix_upper_bound(prefix: &[u8]) -> Option<Vec<u8>> {
+pub fn prefix_upper_bound(prefix: &[u8]) -> Option<Vec<u8>> {
     let mut bound = prefix.to_vec();
     while let Some(last) = bound.pop() {
         if last < u8::MAX {
@@ -73,7 +73,7 @@ pub(super) fn prefix_upper_bound(prefix: &[u8]) -> Option<Vec<u8>> {
 /// entries in the bloom filters) only cover keys that share the seek key's
 /// first 16 bytes, while many scans here cross that boundary. The upper bound
 /// stops the iterator at the end of the prefix instead of reading on.
-pub(super) fn prefix_read_opts(prefix: &[u8]) -> ReadOptions {
+pub fn prefix_read_opts(prefix: &[u8]) -> ReadOptions {
     let mut opts = ReadOptions::default();
     opts.set_total_order_seek(true);
     if let Some(upper) = prefix_upper_bound(prefix) {
@@ -84,15 +84,26 @@ pub(super) fn prefix_read_opts(prefix: &[u8]) -> ReadOptions {
 
 /// Iterate over all `(key, value)` pairs whose key starts with `prefix`, in
 /// key order.
-pub(super) fn scan_prefix<'a>(db: &'a DB, prefix: &[u8]) -> DBIteratorWithThreadMode<'a, DB> {
+pub fn scan_prefix<'a>(db: &'a DB, prefix: &[u8]) -> DBIteratorWithThreadMode<'a, DB> {
     db.iterator_opt(
         IteratorMode::From(prefix, Direction::Forward),
         prefix_read_opts(prefix),
     )
 }
 
+/// [`scan_prefix`] in `snapshot`.
+pub fn scan_snapshot_prefix<'a>(
+    snapshot: &'a SnapshotWithThreadMode<'a, DB>,
+    prefix: &[u8],
+) -> DBIteratorWithThreadMode<'a, DB> {
+    snapshot.iterator_opt(
+        IteratorMode::From(prefix, Direction::Forward),
+        prefix_read_opts(prefix),
+    )
+}
+
 /// Collect the keys of every record starting with `prefix`.
-pub(super) fn keys_with_prefix(db: &DB, prefix: &[u8]) -> Result<Vec<Box<[u8]>>> {
+pub fn keys_with_prefix(db: &DB, prefix: &[u8]) -> Result<Vec<Box<[u8]>>> {
     let mut keys = Vec::new();
     for item in scan_prefix(db, prefix) {
         let (key, _) = item?;
@@ -102,14 +113,12 @@ pub(super) fn keys_with_prefix(db: &DB, prefix: &[u8]) -> Result<Vec<Box<[u8]>>>
 }
 
 /// Run blocking RocksDB work off the async runtime.
-pub(super) async fn blocking<T, F>(f: F) -> Result<T>
+pub async fn blocking<T, F>(f: F) -> Result<T>
 where
     F: FnOnce() -> Result<T> + Send + 'static,
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
+    tokio::task::spawn_blocking(f).await?
 }
 
 impl RealRocksDBStorage {
@@ -133,60 +142,43 @@ impl RealRocksDBStorage {
         Self::open(path.as_ref(), dimension).await
     }
 
-    async fn open(path: &Path, vector_dimension: Option<usize>) -> Result<Self> {
-        let data_dir = path.to_path_buf();
-
-        // Create directory if it doesn't exist
-        if !data_dir.exists() {
-            std::fs::create_dir_all(&data_dir)?;
+    /// Open the database in `path` to read it while another process (the
+    /// daemon) may hold it open for writing: no lock is taken, nothing is
+    /// migrated or written. A database that still needs a migration is
+    /// refused (a write open, such as starting the daemon, migrates it).
+    ///
+    /// # Errors
+    /// The database could not be opened or is at another data version.
+    pub async fn open_read_only<P: AsRef<Path>>(path: P, vector_dimension: usize) -> Result<Self> {
+        let db_path = path.as_ref().join("rocksdb");
+        let db = DB::open_for_read_only(&db_options(), &db_path, false)?;
+        let version = crate::rocksdb_storage::migrate::data_version(&db)?;
+        if version != crate::rocksdb_storage::migrate::DATA_VERSION {
+            return Err(post_cortex_ports::PortError::unavailable(format!(
+                "the database at {} is at data version {version}, this build reads {}: \
+                 open it once for writing (start the daemon) to migrate it",
+                db_path.display(),
+                crate::rocksdb_storage::migrate::DATA_VERSION
+            ))
+            .into());
         }
+        info!(
+            "RealRocksDBStorage: Opened RocksDB at {} read-only",
+            db_path.display()
+        );
+        Ok(Self {
+            db: Arc::new(db),
+            vector_dimension: (vector_dimension > 0).then_some(vector_dimension),
+            session_locks: Arc::new(SessionLocks::new()),
+            bus_lock: Arc::default(),
+            breaker: Arc::default(),
+        })
+    }
 
-        let db_path = data_dir.join("rocksdb");
-
-        // Configure RocksDB options for balanced performance and safety
-        let mut opts = Options::default();
-        opts.create_if_missing(true);
-        opts.create_missing_column_families(true);
-
-        // Memory settings - balanced for daemon use (max ~512MB for write buffers)
-        opts.set_max_open_files(1000); // Reduced from 10000 - most systems have lower limits
-        opts.set_write_buffer_size(64 * 1024 * 1024); // 64MB per buffer (was 512MB)
-        opts.set_max_write_buffer_number(6); // Max 384MB for write buffers (was 32 = 16GB!)
-        opts.set_min_write_buffer_number_to_merge(2); // Merge sooner (was 4)
-        opts.set_target_file_size_base(64 * 1024 * 1024); // 64MB SST files (was 1GB)
-
-        // Write throttling - prevent memory exhaustion
-        opts.set_level_zero_slowdown_writes_trigger(20); // Enable throttling (was 0 = disabled)
-        opts.set_level_zero_stop_writes_trigger(36); // Reduced from 2000
-
-        // Durability settings - balanced for daemon use
-        opts.set_use_fsync(false); // fdatasync is sufficient for most cases
-        opts.set_bytes_per_sync(1024 * 1024); // Sync every 1MB (was 0 = never)
-
-        // Compaction settings. The bottommost level holds most of the data
-        // and is rewritten least often, so it gets the stronger codec; SST
-        // files record their own codec, so existing files stay readable.
-        opts.set_compaction_style(rocksdb::DBCompactionStyle::Universal);
-        opts.set_bottommost_compression_type(DBCompressionType::Zstd);
-
-        // Fixed 16-byte prefix extractor (kept for on-disk compatibility).
-        // Scans use total-order seek with an upper bound (`scan_prefix`), so
-        // they are correct for any prefix length.
-        opts.set_prefix_extractor(rocksdb::SliceTransform::create_fixed_prefix(16));
-
-        // Table format: full-key bloom filters let point lookups (sessions,
-        // update rows, source refs, ...) skip SST files without the key, and
-        // a bounded LRU block cache holds data, index and filter blocks.
-        let mut table_opts = BlockBasedOptions::default();
-        table_opts.set_bloom_filter(10.0, false);
-        table_opts.set_whole_key_filtering(true);
-        let cache = Cache::new_lru_cache(BLOCK_CACHE_BYTES);
-        table_opts.set_block_cache(&cache);
-        table_opts.set_cache_index_and_filter_blocks(true);
-        table_opts.set_pin_l0_filter_and_index_blocks_in_cache(true);
-        opts.set_block_based_table_factory(&table_opts);
-
-        let db = DB::open(&opts, &db_path)?;
+    async fn open(path: &Path, vector_dimension: Option<usize>) -> Result<Self> {
+        std::fs::create_dir_all(path)?;
+        let db_path = path.join("rocksdb");
+        let db = DB::open(&db_options(), &db_path)?;
         let db = Arc::new(db);
 
         info!(
@@ -196,68 +188,61 @@ impl RealRocksDBStorage {
 
         let storage = Self {
             db,
-            data_dir,
             vector_dimension,
             session_locks: Arc::new(SessionLocks::new()),
+            bus_lock: Arc::default(),
+            breaker: Arc::default(),
         };
-        storage.ensure_source_file_index().await?;
+        let db = storage.db.clone();
+        blocking(move || crate::rocksdb_storage::migrate::migrate(&db)).await?;
         Ok(storage)
     }
+}
 
-    /// Get database statistics
-    pub async fn get_stats(&self) -> Result<String> {
-        let db = self.db.clone();
+/// RocksDB options for balanced performance and safety.
+fn db_options() -> Options {
+    let mut opts = Options::default();
+    opts.create_if_missing(true);
+    opts.create_missing_column_families(true);
 
-        tokio::task::spawn_blocking(move || -> Result<String> {
-            let stats = db
-                .property_value(rocksdb::properties::STATS)?
-                .unwrap_or_else(|| "No stats available".to_string());
+    // Memory settings - balanced for daemon use (max ~512MB for write buffers)
+    opts.set_max_open_files(1000); // Reduced from 10000 - most systems have lower limits
+    opts.set_write_buffer_size(64 * 1024 * 1024); // 64MB per buffer (was 512MB)
+    opts.set_max_write_buffer_number(6); // Max 384MB for write buffers (was 32 = 16GB!)
+    opts.set_min_write_buffer_number_to_merge(2); // Merge sooner (was 4)
+    opts.set_target_file_size_base(64 * 1024 * 1024); // 64MB SST files (was 1GB)
 
-            Ok(stats)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
-    }
+    // Write throttling - prevent memory exhaustion
+    opts.set_level_zero_slowdown_writes_trigger(20); // Enable throttling (was 0 = disabled)
+    opts.set_level_zero_stop_writes_trigger(36); // Reduced from 2000
 
-    /// Force database compaction
-    pub async fn compact(&self) -> Result<()> {
-        let db = self.db.clone();
+    // Durability settings - balanced for daemon use
+    opts.set_use_fsync(false); // fdatasync is sufficient for most cases
+    opts.set_bytes_per_sync(1024 * 1024); // Sync every 1MB (was 0 = never)
 
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            db.compact_range(None::<&[u8]>, None::<&[u8]>);
-            info!("RealRocksDBStorage: Database compacted");
-            Ok(())
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
-    }
+    // Compaction settings. The bottommost level holds most of the data
+    // and is rewritten least often, so it gets the stronger codec; SST
+    // files record their own codec, so existing files stay readable.
+    opts.set_compaction_style(rocksdb::DBCompactionStyle::Universal);
+    opts.set_bottommost_compression_type(DBCompressionType::Zstd);
 
-    /// Get estimated number of keys in database (O(1) using RocksDB property)
-    pub async fn get_key_count(&self) -> Result<usize> {
-        let db = self.db.clone();
+    // Fixed 16-byte prefix extractor (kept for on-disk compatibility).
+    // Scans use total-order seek with an upper bound (`scan_prefix`), so
+    // they are correct for any prefix length.
+    opts.set_prefix_extractor(rocksdb::SliceTransform::create_fixed_prefix(16));
 
-        tokio::task::spawn_blocking(move || -> Result<usize> {
-            // Use RocksDB's estimate-num-keys property for O(1) performance
-            // This is an approximation but avoids full table scan
-            if let Some(count_str) = db.property_value(rocksdb::properties::ESTIMATE_NUM_KEYS)?
-                && let Ok(count) = count_str.parse::<usize>()
-            {
-                return Ok(count);
-            }
-
-            // Fallback to counting if property not available (shouldn't happen)
-            let mut count = 0;
-            let iter = db.iterator(rocksdb::IteratorMode::Start);
-            for item in iter {
-                let _ = item?;
-                count += 1;
-            }
-
-            Ok(count)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
-    }
+    // Table format: full-key bloom filters let point lookups (sessions,
+    // update rows, source refs, ...) skip SST files without the key, and
+    // a bounded LRU block cache holds data, index and filter blocks.
+    let mut table_opts = BlockBasedOptions::default();
+    table_opts.set_bloom_filter(10.0, false);
+    table_opts.set_whole_key_filtering(true);
+    let cache = Cache::new_lru_cache(BLOCK_CACHE_BYTES);
+    table_opts.set_block_cache(&cache);
+    table_opts.set_cache_index_and_filter_blocks(true);
+    table_opts.set_pin_l0_filter_and_index_blocks_in_cache(true);
+    opts.set_block_based_table_factory(&table_opts);
+    opts
 }
 
 #[cfg(test)]

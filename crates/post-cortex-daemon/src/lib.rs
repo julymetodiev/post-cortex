@@ -1,62 +1,99 @@
 // Copyright (c) 2025, 2026 Julius ML
 // Licensed under the MIT License. See LICENSE at the workspace root.
 
-//! HTTP / gRPC / SSE / stdio daemon for post-cortex.
+//! HTTP / gRPC / stdio daemon for post-cortex.
 //!
 //! Hosts:
 //!
 //! - the **rmcp Model Context Protocol** surface (streaming-HTTP +
-//!   stdio transports) via [`daemon::rmcp_server`] and
-//!   [`daemon::mcp_service`];
+//!   stdio transports) via [`daemon::rmcp_server`], serving
+//!   `post_cortex_transport::mcp::McpService` over the module host;
 //! - the **tonic gRPC API** (canonical post-cortex wire surface) via
-//!   [`daemon::grpc_service`];
-//! - the **axum HTTP server** with REST endpoints for the `pcx` CLI
-//!   client and the Server-Sent Events broadcast plumbing via
-//!   [`daemon::server`] and [`daemon::sse`];
-//! - the **stdio bridge** that lets MCP hosts spawn the daemon as a
-//!   child process via [`daemon::stdio_proxy`];
-//! - the unified **`pcx` CLI binary** (`[[bin]]`) under `src/bin/pcx`.
+//!   `post_cortex_transport::memory`, served by [`daemon::start_grpc_server`];
+//! - the **REST endpoints** (`/api/*`, `/health`) for the `pcx` CLI and
+//!   hooks (`post_cortex_transport::rest`), served by the same axum app as
+//!   MCP;
+//! - [`compose::routes`]: every route of a memory instance (MCP, REST and,
+//!   for browsers, gRPC-Web and archive transfer), served by the daemon and
+//!   by every hosted tenant;
+//! - the unified **`pcx` binary** (`[[bin]]`) under `src/bin/pcx`: the
+//!   daemon's own commands (start, stop, the admin commands, through the
+//!   running daemon or offline) and the client commands of
+//!   `post_cortex_cli` (setup, profiles, hooks, the stdio MCP bridge).
 //!
-//! The daemon owns no domain logic — every read / write / search /
-//! manage operation delegates downward into
-//! [`post_cortex_memory::ConversationMemorySystem`] (and, from Phase 7
-//! onwards, through the
-//! [`post_cortex_core::services::PostCortexService`] trait). Validation
-//! that was historically duplicated between the gRPC and MCP layers
-//! migrates to the trait impl in `post-cortex-memory::MemoryServiceImpl`.
+//! The daemon owns no domain logic: every operation is a method of the
+//! capability services ([`post_cortex_memory::Memory`]) or a tool of the
+//! module host (`pcx_host::Host` with `post_cortex_memory::MemoryModule`);
+//! the operation table, response shapes and error classification are in
+//! `post_cortex_memory::tools`.
 
-// rustdoc::broken_intra_doc_links is warned (not denied) for the daemon
-// because the migrated grpc_service / mcp_service files carry historical
-// `[private_item]` references; cleanup is Phase 12 follow-up after the
-// transport handlers migrate to call PostCortexService.
-#![warn(rustdoc::broken_intra_doc_links)]
 // The daemon's only unsafe is in two test cases that exercise env var
 // overrides for DaemonConfig (`set_var` / `remove_var` are `unsafe fn`
 // since Rust 1.85 because env mutation is racy in multi-threaded
 // programs). Both blocks are gated under #[cfg(test)] and serialised by
 // the test framework, so we relax `forbid` to `deny` and let those two
-// blocks opt in via `#[allow(unsafe_code)]`.
+// test blocks opt in to unsafe code.
 #![deny(unsafe_code)]
-// CoercionError carries rich context (path, expected type, hint, source)
-// so consumers can render actionable validation messages. The lint
-// flags every Result<_, CoercionError> as "Err variant very large", but
-// boxing it would defeat the design — accept the warning at crate level.
-#![allow(clippy::result_large_err)]
-// Some daemon types (CoerceFn signatures, gRPC handler tuples) are
-// intentionally complex; refactoring them into separate type aliases
-// would obscure the call site without changing behaviour.
-#![allow(clippy::type_complexity)]
-// gRPC handler match arms include a wildcard branch even when the
-// variants are exhaustive — leaving it in keeps the handlers
-// forward-compatible if new request types land.
-#![allow(clippy::wildcard_in_or_patterns)]
-#![allow(clippy::match_wildcard_for_single_variants)]
-// Some pcx CLI handlers take many tuple-shaped command-line args.
-#![allow(clippy::too_many_arguments)]
 
+pub mod compose;
 pub mod daemon;
 /// Error types for the daemon crate.
 pub mod error;
+
+#[cfg(test)]
+mod compose_agent_tests;
+#[cfg(test)]
+mod compose_board_tests;
+#[cfg(test)]
+mod compose_chief_tests;
+#[cfg(test)]
+mod compose_documents_tests;
+#[cfg(all(test, target_os = "macos"))]
+mod compose_dynamic_agent_tests;
+#[cfg(all(test, target_os = "macos"))]
+mod compose_dynamic_stack_tests;
+#[cfg(all(test, target_os = "macos"))]
+mod compose_dynamic_tests;
+#[cfg(test)]
+mod compose_events_tests;
+#[cfg(test)]
+mod compose_live_ticket_tests;
+#[cfg(test)]
+mod compose_mcp_silence_tests;
+#[cfg(test)]
+mod compose_modules_tests;
+#[cfg(test)]
+mod compose_ops_tests;
+#[cfg(test)]
+mod compose_reach_tests;
+#[cfg(test)]
+mod compose_resume_tests;
+#[cfg(test)]
+mod compose_routes_tests;
+#[cfg(test)]
+mod compose_runner_tests;
+#[cfg(test)]
+mod compose_scheduler_tests;
+#[cfg(test)]
+mod compose_scripted_tests;
+#[cfg(test)]
+mod compose_skills_tests;
+#[cfg(test)]
+mod compose_stop_turn_tests;
+#[cfg(test)]
+mod compose_store_tests;
+#[cfg(test)]
+mod compose_team_tests;
+#[cfg(test)]
+mod compose_telegram_tests;
+#[cfg(test)]
+mod compose_tests;
+#[cfg(test)]
+mod compose_webhooks_tests;
+#[cfg(test)]
+mod compose_workflow_tests;
+#[cfg(test)]
+mod memory_tests;
 
 pub use daemon::config::DaemonConfig;
 pub use error::{Error, Result};

@@ -1,0 +1,15 @@
+# @post-cortex/dsh bundle patch: one row, the plugin itself.
+#
+# Behaviour lives in ~/.post-cortex/config.json (the profile, and
+# `hosts.dsh` with enabled / capture / workspace), the file pcx and every
+# other post-cortex plugin read. The keys below override it for this dsh
+# profile only; leave them out in normal use.
+
+- insert:
+    - id: post-cortex
+      name: '@post-cortex/dsh'
+      config: {}
+        # profile: self       # backend profile (default: PC_PROFILE, else the active one, else cloud)
+        # capture: true       # store finished turns in the project's message stream
+        # workspace: team     # workspace name a newly resolved project goes into
+        # enabled: false      # turn post-cortex off for this dsh profile

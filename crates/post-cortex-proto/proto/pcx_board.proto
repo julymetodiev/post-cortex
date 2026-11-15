@@ -1,0 +1,629 @@
+syntax = "proto3";
+package pcx.board.v1;
+
+import "google/protobuf/timestamp.proto";
+import "pcx_team.proto";
+import "pcx_blob.proto";
+
+// The board (ARCHITECTURE section 8): boards, their tasks, the tasks'
+// discussion and decisions; a decision with a risk holds its task until
+// it is approved.
+service Boards {
+  // Create a board with its columns (in order); its tasks' branches are
+  // in repo, when given.
+  rpc CreateBoard(CreateBoardRequest) returns (BoardRecord);
+  // Rename a board or change its repository. Only a person changes a
+  // board.
+  rpc UpdateBoard(UpdateBoardRequest) returns (BoardRecord);
+  // The boards of the workspace, or one board.
+  rpc ListBoards(ListBoardsRequest) returns (BoardList);
+  // Add a task to a board, in its first column unless another is named; a
+  // key the board knows answers its task unchanged.
+  rpc AddTask(AddTaskRequest) returns (TaskRecord);
+  // Change a task's title, text, assignee, labels, priority, plan, the
+  // tasks it waits on, images, branch (links its commits) or pull request.
+  rpc UpdateTask(UpdateTaskRequest) returns (TaskRecord);
+  // Move a task to a column of its board, before a task of it (none: at
+  // the end), and to another plan, with a note kept as a comment; refused
+  // while a decision on it waits for approval. A move into a canceled
+  // column cancels the task; nothing is deleted.
+  rpc MoveTask(MoveTaskRequest) returns (TaskRecord);
+  // The tasks of a board, of one column when named.
+  rpc ListTasks(ListTasksRequest) returns (TaskList);
+  // One task with its comments and decisions.
+  rpc GetTask(GetTaskRequest) returns (Thread);
+  // Comment on a task, or answer a comment.
+  rpc AddComment(AddCommentRequest) returns (CommentRecord);
+  // Record a decision on a task: what and why, and what it risks. A risk
+  // other than none holds the task until it is approved: at once when the
+  // trust a person gave the team covers it (say what is at stake: amount
+  // and currency, branch, reversible), else by a person.
+  rpc Decide(DecideRequest) returns (DecisionRecord);
+  // Approve a decision that waits for approval, so its task moves again.
+  // Only a person approves.
+  rpc ApproveDecision(DecisionRequest) returns (DecisionRecord);
+  // Revoke a decision's approval (one a team's policy gave, or a person):
+  // it waits again and holds its task. Only a person revokes.
+  rpc RevokeApproval(DecisionRequest) returns (DecisionRecord);
+  // Decline a decision that waits for approval: it stays in its task's
+  // thread, declined, holds its task no more and waits for no one; who
+  // asked it gives up what it asked for. Only a person declines.
+  rpc DeclineDecision(DecisionRequest) returns (DecisionRecord);
+  // Withdraw a decision that waits for approval, with why: it stays in its
+  // task's thread, withdrawn, holds its task no more and waits for no one
+  // (it is no longer listed to approve). Only its author withdraws it: a
+  // workflow whose run ended withdraws the approval it waited on.
+  rpc WithdrawDecision(WithdrawDecisionRequest) returns (DecisionRecord);
+  // The workspace's decisions of every board that wait for a person or
+  // were approved, the newest first, each with its task and why the
+  // policy did not approve it. Only a person lists them.
+  rpc ListDecisions(ListDecisionsRequest) returns (DecisionList);
+}
+
+// What a decision risks: what may go wrong if it is wrong.
+enum Risk {
+  // Not given.
+  RISK_UNSPECIFIED = 0;
+  // Nothing: it needs no approval.
+  RISK_NONE = 1;
+  // Code.
+  RISK_CODE = 2;
+  // Money.
+  RISK_MONEY = 3;
+  // Data.
+  RISK_DATA = 4;
+  // Operations: an action on a running system (W31), approved by a team's
+  // trust in operations or a person.
+  RISK_OPERATIONS = 5;
+}
+
+// What a column means for its tasks (W26).
+enum Stage {
+  // Not given: a board written before W26 reads its last column as done,
+  // the others as open.
+  STAGE_UNSPECIFIED = 0;
+  // Work to do or under way.
+  STAGE_OPEN = 1;
+  // Finished.
+  STAGE_DONE = 2;
+  // Given up: waited on no longer, counted in no plan's progress.
+  STAGE_CANCELED = 3;
+}
+
+// ------------------------------------------------------------- documents
+
+// A board (document board/board, titled by name).
+message Board {
+  // Its name.
+  string name = 1;
+  // Its columns, in order: where tasks move.
+  repeated string columns = 2;
+  // The repository its tasks' branches are in (under tools-git's roots);
+  // unset: none.
+  optional string repo = 3;
+  // The session its decisions are recorded in.
+  string session_id = 4;
+  // Each column's stage, in the columns' order; empty: a board written
+  // before W26 (its last column done, the others open).
+  repeated Stage stages = 5;
+}
+
+// What a task links to in git.
+message Links {
+  // Its branch; unset: none.
+  optional string branch = 1;
+  // The commits of its branch, newest first: in a task's thread, read from
+  // the branch then (Thread.commits_unread says when they could not be);
+  // elsewhere, when it was last linked.
+  repeated string commits = 2;
+  // Its pull request; unset: none.
+  optional string pull_request = 3;
+}
+
+// A task (document board/task, titled by title); what it is about is the
+// document's text.
+message Task {
+  // Its title.
+  string title = 1;
+  // Its board's id.
+  string board = 2;
+  // Its column, one of its board's.
+  string column = 3;
+  // Who works on it; unset: no one.
+  optional string assignee = 4;
+  // Its labels.
+  repeated string labels = 5;
+  // Its priority; unset: none.
+  optional string priority = 6;
+  // What it links to in git.
+  Links links = 7;
+  // Its plan: a task of the same board that has no plan; unset: none.
+  optional string parent = 8;
+  // The tasks of the same board it waits on.
+  repeated string depends_on = 9;
+  // Where it sorts in its column: a fractional index between its
+  // neighbours; empty for a task written before W24 (after the ranked).
+  string rank = 10;
+  // Its images: blobs of its workspace.
+  repeated pcx.v1.Attachment attachments = 11;
+  // The key it was added with (e.g. an alert group's), unique on its
+  // board; empty: none (W27).
+  string key = 12;
+}
+
+// A comment on a task (document board/comment, titled by title); what it
+// says is the document's text.
+message Comment {
+  // Its task's id.
+  string task = 1;
+  // The comment it answers; unset: none.
+  optional string answers = 2;
+  // Its first line, as its title.
+  string title = 3;
+  // Its images: blobs of its workspace.
+  repeated pcx.v1.Attachment attachments = 4;
+}
+
+// A decision on a task (document board/decision, titled by what).
+message Decision {
+  // Its task's id.
+  string task = 1;
+  // What was decided.
+  string what = 2;
+  // Why.
+  string why = 3;
+  // Who decided.
+  string decided_by = 4;
+  // What it risks.
+  Risk risk = 5;
+  // Who approved it; unset: not approved (needed unless its risk is
+  // none). A team's policy approves as policy:<version>.
+  optional string approved_by = 6;
+  // What it puts at stake.
+  pcx.team.v1.Stakes stakes = 7;
+  // Why the team's policy did not approve it when it was made; unset: it
+  // needs no approval, or the policy approved it.
+  optional string held_because = 8;
+  // The note of the person who approved it; unset: none.
+  optional string approval_note = 9;
+  // Why its author withdrew it while it waited; unset: not withdrawn. A
+  // withdrawn decision holds nothing and waits for no one.
+  optional string withdrawn = 10;
+  // The person who declined it while it waited; unset: not declined. A
+  // declined decision holds nothing and waits for no one.
+  optional string declined_by = 11;
+  // The note of the person who declined it; unset: none.
+  optional string decline_note = 12;
+}
+
+// ------------------------------------------------------------------ calls
+
+// A board as the board keeps it.
+message BoardRecord {
+  // Its document's id.
+  string id = 1;
+  // Its version.
+  uint64 version = 2;
+  // The board.
+  Board board = 3;
+  // When it was last changed.
+  google.protobuf.Timestamp updated_at = 4;
+}
+
+// A task as the board keeps it.
+message TaskRecord {
+  // Its document's id.
+  string id = 1;
+  // Its version: a change names it.
+  uint64 version = 2;
+  // The task.
+  Task task = 3;
+  // What it is about.
+  string text = 4;
+  // When it was last changed.
+  google.protobuf.Timestamp updated_at = 5;
+  // Who changed it last; unset: unknown.
+  optional string author = 6;
+  // The tasks of its board that wait on it (worked out, not stored).
+  repeated string waited_on_by = 7;
+  // Whether every task it waits on is done or canceled.
+  bool ready = 8;
+  // For a plan (a task others name as their parent): its progress; unset:
+  // not a plan.
+  Progress progress = 9;
+  // How many comments it has.
+  uint32 comments = 10;
+  // What the decision that holds it decided (one with a risk that waits
+  // for approval); unset: none holds it.
+  optional string held_by = 11;
+  // For AddTask with a key: the board had a task with that key already,
+  // answered unchanged (W27).
+  bool existing = 12;
+}
+
+// A plan's progress: its done tasks, of those not canceled.
+message Progress {
+  // Its tasks in a done column.
+  uint32 done = 1;
+  // Its tasks not in a canceled column.
+  uint32 total = 2;
+}
+
+// A comment as the board keeps it.
+message CommentRecord {
+  // Its document's id.
+  string id = 1;
+  // The comment.
+  Comment comment = 2;
+  // What it says, in Markdown.
+  string text = 3;
+  // When it was written.
+  google.protobuf.Timestamp updated_at = 4;
+  // Who wrote it; unset: unknown.
+  optional string author = 5;
+}
+
+// A decision as the board keeps it.
+message DecisionRecord {
+  // Its document's id.
+  string id = 1;
+  // Its version: an approval names it.
+  uint64 version = 2;
+  // The decision.
+  Decision decision = 3;
+  // When it was last changed.
+  google.protobuf.Timestamp updated_at = 4;
+  // Whether it waits for approval, holding its task.
+  bool pending = 5;
+}
+
+// A task with its discussion.
+message Thread {
+  // The task.
+  TaskRecord task = 1;
+  // Its comments, oldest first.
+  repeated CommentRecord comments = 2;
+  // Its decisions, oldest first.
+  repeated DecisionRecord decisions = 3;
+  // Its plan; unset: none.
+  TaskRecord plan = 4;
+  // Its plan's tasks (or, for a plan, its own), in its board's order.
+  repeated TaskRecord plan_tasks = 5;
+  // The tasks it waits on.
+  repeated TaskRecord waits_on = 6;
+  // The tasks that wait on it.
+  repeated TaskRecord waited_on_by = 7;
+  // Why its branch's commits could not be read now (its runner offline,
+  // the branch gone), so task.links.commits are those of when it was last
+  // linked; empty: they are the branch's now, or it has no branch.
+  string commits_unread = 8;
+}
+
+// Create a board.
+message CreateBoardRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The board's name.
+  string name = 2;
+  // Its columns, in order, e.g. todo, doing, done.
+  repeated string columns = 3;
+  // The repository its tasks' branches are in (a path tools-git may use);
+  // unset: none.
+  optional string repo = 4;
+  // Each column's stage, in the columns' order; empty: the last column
+  // done, the others open.
+  repeated Stage stages = 5;
+}
+
+// Change a board.
+message UpdateBoardRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The board's id.
+  string board = 2;
+  // The version of the board you read: a change since then is a conflict.
+  uint64 version = 3;
+  // A new name; unset: unchanged.
+  optional string name = 4;
+  // The repository its tasks' branches are in (a path tools-git may use);
+  // unset: unchanged; empty: none.
+  optional string repo = 5;
+}
+
+// The boards of a workspace.
+message ListBoardsRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // Only this board, by id; empty: every board.
+  string board = 2;
+}
+
+// Boards.
+message BoardList {
+  // The boards.
+  repeated BoardRecord boards = 1;
+}
+
+// Add a task.
+message AddTaskRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The board's id.
+  string board = 2;
+  // The task's title.
+  string title = 3;
+  // What it is about.
+  string text = 4;
+  // Its column; unset: the board's first.
+  optional string column = 5;
+  // Who works on it; unset: no one.
+  optional string assignee = 6;
+  // Its labels.
+  repeated string labels = 7;
+  // Its priority; unset: none.
+  optional string priority = 8;
+  // Its plan, a task of the board (a short id too); unset: none.
+  optional string parent = 9;
+  // The tasks of the board it waits on (short ids too).
+  repeated string depends_on = 10;
+  // Its images: blobs put in the workspace.
+  repeated pcx.v1.Attachment attachments = 11;
+  // A key, unique on the board (at most 200 characters): a task of the
+  // board with it already is answered unchanged, so a sender that adds
+  // the same thing twice gets one task (W27); unset: none.
+  optional string key = 12;
+}
+
+// The labels of a task.
+message Labels {
+  // The labels.
+  repeated string labels = 1;
+}
+
+// The tasks a task waits on.
+message TaskIds {
+  // The tasks, by id.
+  repeated string tasks = 1;
+}
+
+// The images of a task.
+message Attachments {
+  // The images.
+  repeated pcx.v1.Attachment attachments = 1;
+}
+
+// Change a task.
+message UpdateTaskRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The task's id, or its short id: its first 8 characters or more, as
+  // the app shows it.
+  string task = 2;
+  // The version of the task you read: a change since then is a conflict.
+  uint64 version = 3;
+  // A new title; unset: unchanged.
+  optional string title = 4;
+  // A new text; unset: unchanged.
+  optional string text = 5;
+  // Who works on it; unset: unchanged; empty: no one.
+  optional string assignee = 6;
+  // Its labels; unset: unchanged.
+  Labels labels = 7;
+  // Its priority; unset: unchanged.
+  optional string priority = 8;
+  // Its branch in the board's repository (links its commits); unset:
+  // unchanged.
+  optional string branch = 9;
+  // Its pull request; unset: unchanged.
+  optional string pull_request = 10;
+  // Its plan (a short id too); unset: unchanged; empty: none.
+  optional string parent = 11;
+  // The tasks it waits on (short ids too); unset: unchanged.
+  TaskIds depends_on = 12;
+  // Its images; unset: unchanged.
+  Attachments attachments = 13;
+}
+
+// Move a task.
+message MoveTaskRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The task's id, or its short id: its first 8 characters or more, as
+  // the app shows it.
+  string task = 2;
+  // The version of the task you read: a change since then is a conflict.
+  uint64 version = 3;
+  // The column.
+  string column = 4;
+  // The task of that column it goes before (a short id too); unset: the
+  // end.
+  optional string before = 5;
+  // Its plan (a drop in another plan's lane); unset: unchanged; empty:
+  // none.
+  optional string parent = 6;
+  // Why it moves (e.g. why it is canceled), written as the mover's comment
+  // on the task; unset: no comment.
+  optional string note = 7;
+}
+
+// The tasks of a board.
+message ListTasksRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The board's id.
+  string board = 2;
+  // Only this column; empty: every column.
+  string column = 3;
+}
+
+// Tasks.
+message TaskList {
+  // The tasks.
+  repeated TaskRecord tasks = 1;
+  // The board's plans (the tasks others name as their parent), in the
+  // order their tasks are listed.
+  repeated Plan plans = 2;
+}
+
+// A plan, as the board's lanes group by it.
+message Plan {
+  // Its task's id.
+  string id = 1;
+  // Its task's title.
+  string title = 2;
+  // Its tasks in a done column.
+  uint32 done = 3;
+  // Its tasks not in a canceled column.
+  uint32 total = 4;
+  // Who owns it: its task's assignee (W25); unset: no one.
+  optional string assignee = 5;
+}
+
+// One task with its discussion.
+message GetTaskRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The task's id, or its short id: its first 8 characters or more, as
+  // the app shows it.
+  string task = 2;
+}
+
+// Comment on a task.
+message AddCommentRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The task's id, or its short id: its first 8 characters or more, as
+  // the app shows it.
+  string task = 2;
+  // The comment, in Markdown.
+  string text = 3;
+  // The comment it answers, by id; unset: none.
+  optional string answers = 4;
+  // Its images: blobs put in the workspace.
+  repeated pcx.v1.Attachment attachments = 5;
+}
+
+// Record a decision.
+message DecideRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The task's id, or its short id: its first 8 characters or more, as
+  // the app shows it.
+  string task = 2;
+  // What was decided.
+  string what = 3;
+  // Why.
+  string why = 4;
+  // What it risks if it is wrong.
+  Risk risk = 5;
+  // What it puts at stake: for money its amount (whole units) and
+  // currency, for code its branch, for data whether it can be undone.
+  pcx.team.v1.Stakes stakes = 6;
+}
+
+// Approve or decline a decision, or revoke its approval.
+message DecisionRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The decision's id.
+  string decision = 2;
+  // The version of the decision you read: a change since then is a
+  // conflict.
+  uint64 version = 3;
+  // For an approval or a refusal: a note for the record; unset: none.
+  optional string note = 4;
+}
+
+// Withdraw a decision that waits.
+message WithdrawDecisionRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The decision's id.
+  string decision = 2;
+  // Why it is withdrawn.
+  string why = 3;
+}
+
+// The decisions of a workspace.
+message ListDecisionsRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // Only those that wait for a person (true) or were approved (false);
+  // unset: both.
+  optional bool waiting = 2;
+}
+
+// A decision with what it holds.
+message DecisionEntry {
+  // The decision.
+  DecisionRecord decision = 1;
+  // Its task's title.
+  string task_title = 2;
+  // Its task's board, by id.
+  string board = 3;
+  // That board's name.
+  string board_name = 4;
+}
+
+// Decisions.
+message DecisionList {
+  // The decisions, the newest first.
+  repeated DecisionEntry decisions = 1;
+}
+
+// `board.task_created`: a task was added (docs/modules/board.md, events).
+message TaskCreated {
+  // The task.
+  string task = 1;
+  // Its board.
+  string board = 2;
+  // Its title.
+  string title = 3;
+  // Its column.
+  string column = 4;
+}
+
+// `board.task_moved`: a task changed column.
+message TaskMoved {
+  // The task.
+  string task = 1;
+  // Its board.
+  string board = 2;
+  // The column it left.
+  string from = 3;
+  // The column it is in.
+  string to = 4;
+}
+
+// `board.decision_made`: a decision was taken.
+message DecisionMade {
+  // The decision.
+  string decision = 1;
+  // Its task.
+  string task = 2;
+  // Whether it waits for an approval.
+  bool pending = 3;
+}
+
+// A decision was approved, by a person or the team's policy
+// (`board.decision_approved`; a workflow's approval goes on,
+// docs/modules/workflow.md).
+message DecisionApproved {
+  // The decision.
+  string decision = 1;
+  // Its task.
+  string task = 2;
+  // Who approved it (a person, or policy:<version>).
+  string approved_by = 3;
+}
+
+// A person declined a decision that waited (`board.decision_declined`):
+// who asked it gives up what it asked for.
+message DecisionDeclined {
+  // The decision.
+  string decision = 1;
+  // Its task.
+  string task = 2;
+  // The person who declined it.
+  string declined_by = 3;
+}

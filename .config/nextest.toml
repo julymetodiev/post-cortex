@@ -1,0 +1,6 @@
+# cargo-nextest (local test runs; CI runs `cargo test`). The test binaries
+# below have their own harness (`harness = false`: each is the test and the
+# module processes it launches) and cannot be listed by nextest; run them
+# with `cargo test -p <crate> --test <name>`.
+[profile.default]
+default-filter = "not (binary_id(pcx-host::process_module) | binary_id(pcx-host::slots) | binary_id(pcx-sandbox::linux_helper) | binary_id(pcx-sandbox::freebsd_helper))"

@@ -1,6 +1,6 @@
-# Post-Cortex Usage Guide
+# Usage guide
 
-How to effectively use Post-Cortex for AI assistant memory management.
+How an agent uses post-cortex well: where its memory goes, what to record, how to search.
 
 ## Mental Model
 
@@ -12,56 +12,45 @@ Workspace = Project (e.g., "E-commerce Platform", "Mobile App")
 
 **Key insight:** Memory stays isolated per workspace. When searching within a workspace, you only get results from that project's sessions.
 
-> **Why "Workspace" and not "Project"?** Post-Cortex uses "workspace" because a single project may have multiple workspaces (e.g., `frontend-app`, `backend-api`), and a workspace can span multiple repos. Think of it as a *logical grouping* of related sessions, not a 1:1 project mapping.
+> **Why "Workspace" and not "Project"?** post-cortex uses "workspace" because a single project may have multiple workspaces (e.g., `frontend-app`, `backend-api`), and a workspace can span multiple repos. Think of it as a *logical grouping* of related sessions, not a 1:1 project mapping.
 
 ## Quick Setup
 
 ```bash
-pcx setup
+pcx setup             # every project: the Claude Code plugin, user-level files elsewhere
+pcx setup --project   # this project, with fixed ids
 ```
 
-This interactive wizard:
+`pcx setup` is global: for Claude Code it prints the `/plugin` commands that
+install the post-cortex plugin, whose hooks find each project's session and
+workspace by themselves (see [Global and project setup](DAEMON_MODE.md#global-and-project-setup)).
+
+`pcx setup --project` is the interactive project wizard:
 1. Creates a **session** (or reuses an existing one)
 2. Creates a **workspace** (or reuses an existing one)
 3. Attaches the session to the workspace
-4. Generates project files:
-   - `CLAUDE.md` — session IDs + memory rules
-   - `.claude/settings.json` — enforcement hooks
-   - `.claude/hooks/pcx-compact-reinject.sh` — context recovery after compaction
-5. Installs **agent definitions** to `~/.claude/agents/post-cortex-agents/`
+4. Pins their ids in `.post-cortex.json` at the project root, which the
+   plugin's hooks (and other agents and teammates) read first
+5. For Claude Code, writes nothing else: the plugin carries the MCP server,
+   the skill and the hooks. It takes out what setups before the plugin wrote:
+   the PCX section of `CLAUDE.md`, post-cortex's hooks in
+   `.claude/settings.json` and their scripts in `.claude/hooks/`, and
+   `~/.claude/agents/post-cortex-agents/` and `~/.claude/skills/post-cortex-memory/`
 
-Non-interactive mode: `pcx setup --name my-project --non-interactive`
-
-### What Gets Installed
-
-**Project files** (in current directory):
-
-| File | Purpose |
-|------|---------|
-| `CLAUDE.md` | Session/workspace IDs, memory rules, tool reference |
-| `.claude/settings.json` | Three hooks: UserPromptSubmit, Stop, SessionStart |
-| `.claude/hooks/pcx-compact-reinject.sh` | Re-injects PCX context after compaction |
-
-**Agent definitions** (in `~/.claude/agents/post-cortex-agents/`):
-
-| Agent | subagent_type | Model | Purpose |
-|-------|---------------|-------|---------|
-| Context Builder | `context-builder` | Haiku | Log decisions, Q&A, problems, code changes |
-| Search Specialist | `search-specialist` | Sonnet | Find past knowledge, semantic search |
-| Knowledge Analyst | `knowledge-analyst` | Opus | Summaries, analysis, entity mapping |
-| Memory Curator | `memory-curator` | Haiku | Session/workspace management |
-
-> **Note:** For simple search/log operations, call MCP tools directly — it's faster than routing through subagents.
+Non-interactive mode: `pcx setup --project --name my-project --non-interactive`
 
 ### Hooks
 
-Three hooks enforce the memory rules automatically:
+The plugin's hooks enforce the memory rules:
 
-| Hook | Event | Type | Purpose |
-|------|-------|------|---------|
-| **PCX Reminder** | `UserPromptSubmit` | `command` | Injects session ID and rules before every prompt |
-| **Stop Check** | `Stop` | `prompt` | JSON compliance checker; forces continuation if rules violated |
-| **Compact Reinject** | `SessionStart` (compact) | `command` | Re-injects PCX context after context window compaction |
+| Hook | Event | Purpose |
+|------|-------|---------|
+| **Banner** | `UserPromptSubmit` | Injects the session and workspace ids and the rules before every prompt |
+| **Cards** | `SessionStart` | Prints the user card and the project card |
+| **Compact Reinject** | `SessionStart` (compact) | Re-injects the PCX context after compaction |
+| **File memory** | `PreToolUse` (edits) | What memory knows of a file before it is edited |
+| **Record reminder** | `PostToolUse` (edits) | Past 8 files edited and not recorded, each new one reminds to record them |
+| **Stop Check** | `Stop` | Blocks a turn that edited a file no later record names, or ran a command or was opened by a task ending with nothing recorded after |
 
 ## The Workflow
 
@@ -104,6 +93,20 @@ User asks question
 | `requirement_added` | New requirement or constraint | "API must support cursor-based pagination" |
 | `concept_defined` | Technical concept explained | "Event sourcing: storing state changes as immutable events" |
 
+Writing a record costs no model call: it is stored and embedded at once. A
+record names the entities it is about (`entities`) and how they relate
+(`relations`: `depends_on`, `implements`, `caused_by`, `leads_to`,
+`related_to`, `required_by`, `conflicts_with`, `solves`); search follows that
+graph to what a hit touches.
+
+### Current and ended
+
+Facts change, history stays. A record ends when a later one supersedes it
+(`supersedes` on write, or the same fact restated about the same entities),
+when a later one says the opposite (`conflicts_with`), or when it is forgotten
+(`manage_entity` `forget`). An ended record is never deleted: it keeps the
+reason it ended and ranks lower in search.
+
 ## Multi-Project Setup
 
 ### Option A: One Workspace per Project
@@ -142,6 +145,18 @@ Workspace: backend-api
 
 Always search in order: **session → workspace → global**.
 
+### Search modes
+
+`mode` picks the reranker: `fast` (none, ~40 ms), `local` (a local
+cross-encoder, ~1 s) or `accurate` (Voyage where every workspace searched
+allows it, else local). Without
+`mode` the daemon's `search_mode` applies, else the best the configured
+rerankers allow. Measured quality per mode:
+[Search quality](DAEMON_MODE.md#search-quality).
+
+`sources: "messages"` (or `"all"`) searches the captured conversation too;
+`author` keeps one writer's records and `prefer_author` ranks them first.
+
 ## Recency Bias
 
 Use `recency_bias` to prioritize recent content:
@@ -159,9 +174,9 @@ Date filtering: `semantic_search(query: "...", date_from: "2024-06-01", date_to:
 
 ### Agent doesn't use memory tools
 
-1. Verify `CLAUDE.md` has rules (re-run `pcx setup` if missing)
-2. Check `.claude/settings.json` has hooks — the Stop hook forces compliance
-3. The `UserPromptSubmit` hook should inject a `[PCX]` reminder every turn
+1. Verify the post-cortex plugin is installed and enabled (`/plugin`): it carries the hooks
+2. The `UserPromptSubmit` hook injects a `[PCX]` line with the session and the rules every turn; without it the plugin does not reach its backend (check its `url` and key)
+3. The `Stop` hook blocks a turn that changed something with nothing recorded after
 
 ### Memory seems mixed across projects
 

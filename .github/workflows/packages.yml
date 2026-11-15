@@ -1,0 +1,131 @@
+name: Packages
+
+# The module bindings as public packages: `pcx-module` on PyPI and `@pcx/module`
+# on npm (docs/modules/dynamic.md). FreeBSD's are built with the image.
+# Started by hand: a version cannot be published twice.
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish what was built and checked"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Build the wheel
+        shell: bash
+        run: |
+          version=$(cat bindings/python/.python-version)
+          uv python install "$version"
+          uv tool install "maturin>=1.9,<2"
+          cd bindings/python
+          maturin build --release --compatibility pypi --out ../../dist/wheels \
+            --interpreter "$(uv python find "$version")"
+
+      - name: Check the wheel on a clean interpreter
+        shell: bash
+        run: |
+          version=$(cat bindings/python/.python-version)
+          uv venv --python "$version" /tmp/clean
+          uv pip install --python /tmp/clean/bin/python dist/wheels/*.whl
+          /tmp/clean/bin/python -c "import pcx_module; print(pcx_module.Module)"
+
+      - name: Build the addon
+        shell: bash
+        run: |
+          cargo build --release -p pcx-module-node
+          name="pcx_module.$(node -p 'process.platform + "-" + process.arch').node"
+          lib=target/release/libpcx_module_node.so
+          [ -f "$lib" ] || lib=target/release/libpcx_module_node.dylib
+          mkdir -p dist/addons
+          cp "$lib" "dist/addons/$name"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.os }}
+          path: dist
+
+  check:
+    name: Check the npm package on ${{ matrix.os }}
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Install what would be published, and load it
+        shell: bash
+        run: |
+          cp dist/addons/*.node bindings/ts/
+          tarball=$(cd bindings/ts && npm pack --silent --pack-destination "$RUNNER_TEMP")
+          mkdir "$RUNNER_TEMP/clean" && cd "$RUNNER_TEMP/clean"
+          npm init -y >/dev/null
+          npm install --silent "$RUNNER_TEMP/$tarball"
+          node --input-type=module -e 'const m = await import("@pcx/module"); if (!m.Module) process.exit(1); console.log("loads")'
+
+  publish:
+    name: Publish
+    needs: check
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: PyPI
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: uv publish dist/wheels/*.whl
+      - name: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cp dist/addons/*.node bindings/ts/
+          cd bindings/ts
+          npm publish --access public

@@ -1,0 +1,39 @@
+[project]
+name = "post-cortex"
+version = "0.1.0"
+description = "Python client for post-cortex, long-term memory for AI agents (gRPC)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Chronicle Labs Ltd." }]
+keywords = ["post-cortex", "memory", "mcp", "agents", "grpc"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
+dependencies = ["grpcio>=1.84.0", "protobuf>=7.35.1,<8"]
+
+[project.urls]
+Homepage = "https://post-cortex.com"
+Repository = "https://github.com/julymetodiev/post-cortex"
+Documentation = "https://github.com/julymetodiev/post-cortex/tree/main/sdks/python"
+
+[dependency-groups]
+dev = ["pytest>=8", "mypy>=1.13", "grpc-stubs>=1.53", "types-protobuf>=6.30"]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/post_cortex"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# The client, its tests and the generated stubs (mypy-protobuf, sdks/gen.sh), strict.
+[tool.mypy]
+strict = true
+files = ["src", "tests"]

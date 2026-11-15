@@ -1,0 +1,34 @@
+{
+  "description": "Posts a release's notes to the Discord channel ${channel}.",
+  "input": {
+    "fields": [
+      {
+        "name": "notes",
+        "type": "string",
+        "description": "What the release brings, as it is posted",
+        "required": true,
+        "constraints": { "minLength": "1", "maxLength": "6000" }
+      }
+    ]
+  },
+  "graph": {
+    "blocks": [
+      { "id": "release", "trigger": { "manual": {} } },
+      {
+        "id": "post",
+        "retry": { "attempts": 3 },
+        "tool": {
+          "method": "/pcx.discord.v1.Discord/Post",
+          "request": {
+            "fields": {
+              "channel": { "constant": { "string": "${channel}" } },
+              "text": { "text": "{{ input.notes }}" }
+            }
+          }
+        }
+      }
+    ],
+    "edges": [{ "from": "release", "to": "post" }]
+  },
+  "grants": { "modules": ["discord"] }
+}

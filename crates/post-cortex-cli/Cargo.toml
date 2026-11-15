@@ -1,0 +1,55 @@
+[package]
+name = "post-cortex-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The pcx client: backend profiles and login, coding-agent setup and hooks, the stdio MCP bridge, and the card, session and workspace commands over the public APIs of a post-cortex daemon or the cloud."
+keywords = ["pcx", "post-cortex", "cli", "mcp", "memory"]
+categories = ["command-line-utilities"]
+documentation = "https://docs.rs/post-cortex-cli"
+
+[dependencies]
+# Domain names the commands speak (session roles); no memory or storage.
+post-cortex-core.workspace = true
+# The author header of the public APIs.
+post-cortex-proto.workspace = true
+# `pcx agent`: the daemon's pcx.agent.v1 over gRPC.
+tonic.workspace = true
+# `pcx connect`: pairing with an organisation of the cloud.
+pcx-tunnel.workspace = true
+
+clap.workspace = true
+dialoguer.workspace = true
+dirs.workspace = true
+toml.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+regex.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# The machine's name a pairing shows.
+nix = { workspace = true, features = ["hostname"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+portpicker.workspace = true
+axum.workspace = true
+tokio-util.workspace = true
+
+[features]
+default = []
+# `pcx migrate` (between RocksDB and SurrealDB) exists in builds with
+# SurrealDB.
+surrealdb-storage = []
+
+[lints]
+workspace = true

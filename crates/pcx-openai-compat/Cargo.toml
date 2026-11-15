@@ -1,0 +1,23 @@
+[package]
+name = "pcx-openai-compat"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The OpenAI-compatible chat completions wire for pcx model providers: requests, the SSE stream, answers and failures."
+keywords = ["pcx", "llm", "openai", "streaming"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-openai-compat"
+
+[dependencies]
+pcx-module-api.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+serde_json.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

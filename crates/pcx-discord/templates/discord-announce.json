@@ -1,0 +1,63 @@
+{
+  "description": "Announces a release in the Discord channel ${channel} as one card: its title, what it brings, the link its title opens and up to four pictures (screenshots) by their https addresses.",
+  "input": {
+    "fields": [
+      {
+        "name": "title",
+        "type": "string",
+        "description": "The card's title, as: pcx 0.6.0",
+        "required": true,
+        "constraints": { "minLength": "1", "maxLength": "256" }
+      },
+      {
+        "name": "notes",
+        "type": "string",
+        "description": "What the release brings, in Discord's markdown",
+        "required": true,
+        "constraints": { "minLength": "1", "maxLength": "4000" }
+      },
+      {
+        "name": "link",
+        "type": "string",
+        "description": "The https address the title opens (the release's page); needed with several pictures",
+        "constraints": { "pattern": "(https://\\S+)?" }
+      },
+      {
+        "name": "images",
+        "type": "list<string>",
+        "description": "The https addresses of the pictures shown under the notes, at most 4",
+        "constraints": { "maxLength": "4" }
+      }
+    ]
+  },
+  "graph": {
+    "blocks": [
+      { "id": "release", "trigger": { "manual": {} } },
+      {
+        "id": "announce",
+        "retry": { "attempts": 3 },
+        "tool": {
+          "method": "/pcx.discord.v1.Discord/Post",
+          "request": {
+            "fields": {
+              "channel": { "constant": { "string": "${channel}" } },
+              "embed": {
+                "message": {
+                  "fields": {
+                    "title": { "text": "{{ input.title }}" },
+                    "description": { "text": "{{ input.notes }}" },
+                    "url": { "text": "{{ input.link }}" },
+                    "color": { "constant": { "uint": "${color}" } },
+                    "images": { "text": "{{ input.images }}" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "edges": [{ "from": "release", "to": "announce" }]
+  },
+  "grants": { "modules": ["discord"] }
+}

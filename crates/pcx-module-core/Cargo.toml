@@ -1,0 +1,47 @@
+[package]
+name = "pcx-module-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The core of a pcx module process: the pcx.module.v1 server, Scope, errors, settings and secrets, the callback socket; shared by Rust process modules and the bindings of other languages."
+keywords = ["pcx", "module", "plugin", "harness"]
+categories = ["api-bindings"]
+documentation = "https://docs.rs/pcx-module-core"
+
+[dependencies]
+# The wire types (pcx.module.v1); no memory crate (ARCHITECTURE section 3).
+post-cortex-proto.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# google.protobuf.Value of error details (json.rs); a configuration's Any (serve.rs).
+pbjson-types.workspace = true
+thiserror.workspace = true
+# A `format: workspace` setting is a UUID (config/check.rs).
+uuid.workspace = true
+# A string setting's pattern (config/pattern.rs).
+regex.workspace = true
+# The log ring (log.rs).
+parking_lot.workspace = true
+tokio-util.workspace = true
+# The module server on a Unix socket (serve.rs).
+tonic.workspace = true
+tokio.workspace = true
+tokio-stream = { workspace = true, features = ["net"] }
+# The callback socket's connector (callback.rs).
+tower = { workspace = true, features = ["util"] }
+hyper-util.workspace = true
+# A module's gRPC services served as the fallback of its socket's router (grpc.rs).
+axum.workspace = true
+# A manifest's descriptors: its documents' messages (config/document.rs, rpc_tool.rs).
+prost-reflect.workspace = true
+prost.workspace = true
+tracing.workspace = true
+# A module process's logs on stderr (serve.rs `logs`).
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

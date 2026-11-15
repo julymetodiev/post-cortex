@@ -1,12 +1,58 @@
 [workspace]
 resolver = "2"
+# Upstream code patched for the workspace (third_party/*/PATCH.md): used
+# through [patch.crates-io], never a member.
+exclude = ["third_party"]
 members = [
+    "crates/post-cortex-cli",
+    "crates/pcx-host",
+    "crates/pcx-sandbox",
+    "crates/pcx-module-launcher",
+    "crates/pcx-approval",
+    "crates/pcx-dynamic",
+    "crates/pcx-tools-fs",
+    "crates/pcx-tools-shell",
+    "crates/pcx-tools-git",
+    "crates/pcx-documents",
+    "crates/pcx-board",
+    "crates/pcx-chief",
+    "crates/pcx-kube",
+    "crates/pcx-nomad",
+    "crates/pcx-observe",
+    "crates/pcx-ops",
+    "crates/pcx-scheduler",
+    "crates/pcx-mail",
+    "crates/pcx-http",
+    "crates/pcx-expr",
+    "crates/pcx-workflow",
+    "crates/pcx-skills",
+    "crates/pcx-telegram",
+    "crates/pcx-discord",
+    "crates/pcx-webhooks",
+    "crates/pcx-openai-compat",
+    "crates/pcx-provider-zai",
+    "crates/pcx-provider-openai",
+    "crates/pcx-provider-openrouter",
+    "crates/pcx-provider-anthropic",
+    "crates/pcx-models",
+    "crates/pcx-agent",
+    "crates/pcx-context",
+    "crates/pcx-team",
+    "crates/pcx-greet",
+    "crates/pcx-module-api",
+    "crates/pcx-module-core",
+    "bindings/python",
+    "bindings/ts",
+    "bindings/tests",
+    "crates/pcx-tunnel",
     "crates/post-cortex-proto",
     "crates/post-cortex-core",
+    "crates/post-cortex-ports",
     "crates/post-cortex-embeddings",
     "crates/post-cortex-storage",
+    "crates/post-cortex-blobs",
     "crates/post-cortex-memory",
-    "crates/post-cortex-mcp",
+    "crates/post-cortex-transport",
     "crates/post-cortex-daemon",
     "crates/post-cortex",
 ]
@@ -16,7 +62,7 @@ members = [
 default-members = ["crates/post-cortex"]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 authors = ["Julius ML"]
 license = "MIT"
@@ -29,25 +75,7 @@ rust-version = "1.95"
 # flag patterns we deliberately keep for readability or (b) cleanup is
 # the Phase 9 follow-up that types every public API.
 [workspace.lints.clippy]
-result_large_err = "allow"
-type_complexity = "allow"
-field_reassign_with_default = "allow"
-manual_div_ceil = "allow"
-manual_checked_ops = "allow"
-unnecessary_sort_by = "allow"
-doc_lazy_continuation = "allow"
-needless_range_loop = "allow"
-too_many_arguments = "allow"
-useless_vec = "allow"
-# `async_trait` marks generated methods `#[must_use]` while they return a
-# must-use boxed future; clippy 1.99 flags every such trait method.
-double_must_use = "allow"
 
-# `missing_docs` as a workspace-wide warning surfaces the documentation
-# gap (~1073 undocumented struct fields + enum variants at 0.2.0) without
-# breaking docs.rs builds. The crate-level rustdoc + per-struct doc
-# comments + READMEs cover the headline surface; struct-field docs are
-# the bulk of the deferred sweep.
 [workspace.lints.rust]
 missing_docs = "warn"
 
@@ -55,20 +83,45 @@ missing_docs = "warn"
 # `optional`, `features`, and `default-features` overrides stay per-consumer.
 [workspace.dependencies]
 anyhow = "1.0"
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 schemars = "1.0"
 bincode = { version = "2.0.1", features = ["serde"] }
-uuid = { version = "1.11", features = ["v4", "serde"] }
+uuid = { version = "1.11", features = ["v4", "v5", "v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+# The scheduler's cron times, in their IANA time zones (W28).
+chrono-tz = "0.10"
+croner = "4"
 tokio = { version = "1.42", features = ["full"] }
+# The sandbox (pcx-sandbox): files beneath a root, process groups, the
+# Linux OS sandbox.
+cap-std = "4.0"
+nix = { version = "0.31", features = ["signal"] }
+landlock = "0.4"
+seccompiler = "0.5"
+libc = "0.2"
+# The file tools (pcx-tools-fs): glob patterns and .gitignore matching.
+globset = "0.4"
+ignore = "0.4"
 tokio-util = "0.7"
+# A daemon's tunnel to the cloud (pcx-tunnel): HTTP exchanges over one
+# gRPC stream.
+bytes = "1"
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
 tokio-stream = "0.1"
-rocksdb = "0.24"
+rocksdb = "0.25"
 futures = "0.3"
 thiserror = "2.0"
 clap = { version = "4.5", features = ["derive"] }
 regex = "1.0"
+# `asm`: the CPU's SHA instructions where it has them, its fastest code elsewhere.
+sha2 = { version = "0.10", features = ["asm"] }
+# The media type and size of an image by its first bytes (memory's blobs).
+imagesize = "0.15"
+# Memory's blobs on S3 (post-cortex-blobs).
+object_store = { version = "0.14", default-features = false, features = ["aws"] }
 dashmap = "6.1"
 crossbeam-channel = "0.5"
 crossbeam-queue = "0.3"
@@ -84,6 +137,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
 tracing-appender = "0.2"
 petgraph = { version = "0.8.2", features = ["serde-1"] }
+# Persistent (structurally shared) maps of the session graph.
+rpds = "1.2.1"
 rust-stemmers = "1.2"
 async-trait = "0.1"
 candle-core = "0.9"
@@ -98,12 +153,40 @@ surrealdb-types = "3.3.4"
 axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
+tonic-web = "0.14"
+form_urlencoded = "1"
+# A document's encoded data in the JSON of its stored rows and archives.
+base64 = "0.22"
+percent-encoding = "2"
+prost-reflect = { version = "0.16", features = ["serde"] }
 hyper = "1.5"
+hyper-util = { version = "0.1", features = ["tokio"] }
 dirs = "6.0.0"
 reqwest = { version = "0.12", features = ["json"] }
+# A URL parsed and joined by the WHATWG rules (docs/modules/http.md).
+url = "2.5"
+# Discord's Gateway (pcx-discord): the version and the features surrealdb
+# already builds it with, so it compiles once.
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+# The certificate authorities its TLS trusts.
+webpki-roots = "1"
+# CEL (docs/modules/workflow.md, expressions), reached only through pcx-expr;
+# patched with a budget of steps (third_party/cel-core/PATCH.md).
+cel-core = "0.5.1"
+cel-core-proto = "0.5.1"
+# SMTP for the mail module (docs/modules/mail.md), rustls as the rest.
+lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "pool", "tokio1", "tokio1-rustls", "ring", "rustls-native-certs"] }
+# A server's certificate verified against a name other than its URL's host (pcx-kube).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 dialoguer = "0.11"
 toml = "0.9.10"
+# daemon.toml rewritten with its comments and layout (module settings).
+toml_edit = "0.25"
 flate2 = "1.0"
+# A dynamic module's bundle (pcx-module-launcher).
+tar = "0.4"
+# A dynamic module's difference from its approved version (pcx-dynamic).
+similar = "2"
 zstd = "0.13"
 rmcp = { version = "3.5.1", features = ["server", "transport-streamable-http-server"] }
 tonic = "0.14"
@@ -112,6 +195,10 @@ tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 prost = "0.14"
 prost-types = "0.14"
+# proto3 JSON mapping of pcx.module.v1 (hook scripts read and write it).
+pbjson = "0.9"
+pbjson-types = "0.9"
+pbjson-build = "0.9"
 
 # Observability — added Phase 10; lifted here now so versions stay in lock-step
 # across crates when the otel feature lands. 0.31 is the line on tonic 0.14.
@@ -124,6 +211,8 @@ tracing-opentelemetry = "0.32"
 tokio-test = "0.4"
 tempfile = "3.0"
 criterion = "0.8.1"
+# Heap profiling of the write and search paths (the allocation audit).
+dhat = "0.3.3"
 portpicker = "0.1"
 proptest = "1.5"
 serial_test = { version = "3.3", features = ["async"] }
@@ -131,16 +220,69 @@ serial_test = { version = "3.3", features = ["async"] }
 # Intra-workspace path deps. Versions match [workspace.package].version so a
 # `cargo publish` from any member resolves siblings on crates.io rather than
 # the local path.
-post-cortex-proto = { version = "0.5.0", path = "crates/post-cortex-proto" }
-post-cortex-core = { version = "0.5.0", path = "crates/post-cortex-core" }
+post-cortex-proto = { version = "0.6.0", path = "crates/post-cortex-proto" }
+post-cortex-core = { version = "0.6.0", path = "crates/post-cortex-core" }
+post-cortex-ports = { version = "0.6.0", path = "crates/post-cortex-ports" }
 # default-features = false at the workspace level so storage (which only
 # needs the data types) can take it cleanly; consumers that want the BERT
 # stack add `features = ["bert"]` explicitly.
-post-cortex-embeddings = { version = "0.5.0", path = "crates/post-cortex-embeddings", default-features = false }
-post-cortex-storage = { version = "0.5.0", path = "crates/post-cortex-storage" }
-post-cortex-memory = { version = "0.5.0", path = "crates/post-cortex-memory" }
-post-cortex-mcp = { version = "0.5.0", path = "crates/post-cortex-mcp" }
-post-cortex-daemon = { version = "0.5.0", path = "crates/post-cortex-daemon" }
+post-cortex-embeddings = { version = "0.6.0", path = "crates/post-cortex-embeddings", default-features = false }
+post-cortex-storage = { version = "0.6.0", path = "crates/post-cortex-storage" }
+post-cortex-blobs = { version = "0.6.0", path = "crates/post-cortex-blobs" }
+post-cortex-memory = { version = "0.6.0", path = "crates/post-cortex-memory" }
+post-cortex-transport = { version = "0.6.0", path = "crates/post-cortex-transport" }
+pcx-module-api = { version = "0.6.0", path = "crates/pcx-module-api" }
+pcx-module-core = { version = "0.6.0", path = "crates/pcx-module-core" }
+# The bindings of other languages to the module core (docs/modules/dynamic.md).
+pyo3 = "0.30"
+napi = { version = "3", default-features = false, features = ["napi9", "async", "tokio_rt"] }
+napi-derive = "3"
+napi-build = "2"
+pcx-tunnel = { version = "0.6.0", path = "crates/pcx-tunnel" }
+pcx-host = { version = "0.6.0", path = "crates/pcx-host" }
+pcx-sandbox = { version = "0.6.0", path = "crates/pcx-sandbox" }
+pcx-module-launcher = { version = "0.6.0", path = "crates/pcx-module-launcher" }
+pcx-approval = { version = "0.6.0", path = "crates/pcx-approval" }
+pcx-dynamic = { version = "0.6.0", path = "crates/pcx-dynamic" }
+pcx-tools-fs = { version = "0.6.0", path = "crates/pcx-tools-fs" }
+pcx-tools-shell = { version = "0.6.0", path = "crates/pcx-tools-shell" }
+pcx-tools-git = { version = "0.6.0", path = "crates/pcx-tools-git" }
+pcx-documents = { version = "0.6.0", path = "crates/pcx-documents" }
+pcx-board = { version = "0.6.0", path = "crates/pcx-board" }
+pcx-chief = { version = "0.6.0", path = "crates/pcx-chief" }
+pcx-kube = { version = "0.6.0", path = "crates/pcx-kube" }
+pcx-nomad = { version = "0.6.0", path = "crates/pcx-nomad" }
+pcx-observe = { version = "0.6.0", path = "crates/pcx-observe" }
+pcx-ops = { version = "0.6.0", path = "crates/pcx-ops" }
+pcx-scheduler = { version = "0.6.0", path = "crates/pcx-scheduler" }
+pcx-mail = { version = "0.6.0", path = "crates/pcx-mail" }
+pcx-http = { version = "0.6.0", path = "crates/pcx-http" }
+pcx-expr = { version = "0.6.0", path = "crates/pcx-expr" }
+pcx-workflow = { version = "0.6.0", path = "crates/pcx-workflow" }
+pcx-skills = { version = "0.6.0", path = "crates/pcx-skills" }
+pcx-telegram = { version = "0.6.0", path = "crates/pcx-telegram" }
+pcx-discord = { version = "0.6.0", path = "crates/pcx-discord" }
+pcx-webhooks = { version = "0.6.0", path = "crates/pcx-webhooks" }
+pcx-openai-compat = { version = "0.6.0", path = "crates/pcx-openai-compat" }
+pcx-provider-zai = { version = "0.6.0", path = "crates/pcx-provider-zai" }
+pcx-provider-openai = { version = "0.6.0", path = "crates/pcx-provider-openai" }
+pcx-provider-openrouter = { version = "0.6.0", path = "crates/pcx-provider-openrouter" }
+pcx-provider-anthropic = { version = "0.6.0", path = "crates/pcx-provider-anthropic" }
+pcx-models = { version = "0.6.0", path = "crates/pcx-models" }
+pcx-agent = { version = "0.6.0", path = "crates/pcx-agent" }
+pcx-context = { version = "0.6.0", path = "crates/pcx-context" }
+pcx-team = { version = "0.6.0", path = "crates/pcx-team" }
+post-cortex-cli = { version = "0.6.0", path = "crates/post-cortex-cli" }
+post-cortex-daemon = { version = "0.6.0", path = "crates/post-cortex-daemon" }
+
+[profile.dev]
+# No debug info. On macOS a build's debug info stays in its object files
+# beside the binaries (split-debuginfo unpacked), which cargo never removes:
+# target/debug/deps grew to over a million of them, and listing that
+# directory (as the system proxy lookup does for a test's binary) took
+# longer than a test waits. A panic and an assert still name their file and
+# line; for lines in a backtrace, CARGO_PROFILE_DEV_DEBUG=line-tables-only.
+debug = false
 
 [profile.release]
 # Surface real bugs hard instead of unwinding through tokio task boundaries.
@@ -153,3 +295,7 @@ strip = "symbols"
 debug = true   # so flamegraph / pprof can resolve symbols
 strip = "none" # bench inherits release; keep symbols for profilers
 
+
+[patch.crates-io]
+# A budget of evaluation steps (third_party/cel-core/PATCH.md).
+cel-core = { path = "third_party/cel-core" }

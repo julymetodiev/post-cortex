@@ -1,0 +1,78 @@
+[package]
+name = "post-cortex-transport"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Transports of pcx: the MCP (rmcp) server over the module host's tools and the gRPC status mapping of memory failures."
+keywords = ["mcp", "post-cortex", "transport", "ai", "memory"]
+categories = ["api-bindings", "web-programming"]
+readme = "README.md"
+documentation = "https://docs.rs/post-cortex-transport"
+
+[dependencies]
+# The host whose tools MCP serves, and the module types it speaks.
+pcx-host.workspace = true
+pcx-module-api.workspace = true
+# The failures of memory operations (gRPC status mapping), and the detail
+# views `pcx.views.v1` maps (views.rs).
+post-cortex-memory.workspace = true
+post-cortex-core.workspace = true
+post-cortex-ports.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+prost-types.workspace = true
+futures.workspace = true
+
+# MCP server (the Streamable HTTP transport puts the request's
+# `http::request::Parts` into the call's extensions; axum re-exports http).
+rmcp.workspace = true
+# gRPC status mapping of capability failures (grpc.rs).
+tonic.workspace = true
+axum.workspace = true
+
+serde_json.workspace = true
+tracing.workspace = true
+# The pcx.module.v1 Host service (invoke.rs).
+post-cortex-proto.workspace = true
+tokio-util.workspace = true
+tokio-stream.workspace = true
+# Export and import (transfer.rs) and the browser transfer (browser/):
+# chunks flow through channels; the CORS allowlist; query strings.
+tokio.workspace = true
+tower-http.workspace = true
+form_urlencoded.workspace = true
+# A request of any transport read as the operation table sees it
+# (classify/): gRPC messages through their descriptors, REST paths.
+percent-encoding.workspace = true
+prost.workspace = true
+prost-reflect.workspace = true
+thiserror.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+# The host's agent as the source of served turns (agent.rs).
+async-trait.workspace = true
+# The modules' services forwarded to the host's channel (modules.rs).
+tower = { workspace = true, features = ["util"] }
+# A call's reach checked before memory answers it (reach.rs): its first
+# message read, then replayed.
+bytes.workspace = true
+http.workspace = true
+http-body.workspace = true
+http-body-util.workspace = true
+
+[dev-dependencies]
+# A module's configuration, an Any of its message (host_api tests).
+pbjson-types.workspace = true
+
+[features]
+default = []
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true

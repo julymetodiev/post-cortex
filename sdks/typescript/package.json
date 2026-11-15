@@ -1,0 +1,40 @@
+{
+  "name": "post-cortex",
+  "version": "0.1.0",
+  "description": "Node.js client for post-cortex, long-term memory for AI agents (gRPC)",
+  "license": "MIT",
+  "author": "Chronicle Labs Ltd.",
+  "homepage": "https://post-cortex.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/julymetodiev/post-cortex.git",
+    "directory": "sdks/typescript"
+  },
+  "keywords": ["post-cortex", "memory", "mcp", "agents", "grpc"],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.16.0",
+    "@grpc/grpc-js": "^1.14.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "ts-proto": "2.18.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

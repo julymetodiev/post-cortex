@@ -1,0 +1,23 @@
+[package]
+name = "pcx-provider-openrouter"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The OpenRouter model provider of pcx: Every model OpenRouter routes, over its OpenAI-compatible API."
+keywords = ["pcx", "llm", "openrouter"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-provider-openrouter"
+
+[dependencies]
+pcx-module-api.workspace = true
+pcx-openai-compat.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

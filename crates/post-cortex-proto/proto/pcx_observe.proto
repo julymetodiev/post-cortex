@@ -1,0 +1,729 @@
+syntax = "proto3";
+package pcx.observe.v1;
+
+import "google/protobuf/struct.proto";
+import "pcx_module.proto";
+
+// Reading a running system, never changing it (ARCHITECTURE section 8,
+// operations, W30): its metrics (Prometheus), logs (Loki), alerts
+// (Alertmanager) and cluster (Kubernetes, or Nomad), per environment. A
+// member that may only read is given these tools and not the ops module's.
+service Observe {
+  // A PromQL query, at a time or over a range: its series.
+  rpc QueryMetrics(MetricsRequest) returns (MetricSeries);
+  // A LogQL query over the last while: its streams, the newest lines.
+  rpc QueryLogs(LogsRequest) returns (LogStreams);
+  // The alerts Alertmanager has, firing and silenced.
+  rpc ListAlerts(AlertsRequest) returns (AlertList);
+  // A namespace's pods, deployments, jobs and recent events.
+  rpc GetCluster(ClusterRequest) returns (Cluster);
+  // The last lines of a pod's log.
+  rpc PodLog(PodLogRequest) returns (PodLogTail);
+  // A Nomad environment's jobs, each with its allocations.
+  rpc GetJobs(JobsRequest) returns (Jobs);
+  // The last lines of a task's log in a Nomad allocation.
+  rpc AllocLog(AllocLogRequest) returns (AllocLogTail);
+  // A Nomad environment's nodes, each with its memory and disks.
+  rpc GetNodes(NodesRequest) returns (Nodes);
+}
+
+// ------------------------------------------------------------- settings
+
+// The settings: the environments it reads.
+message ObserveConfig {
+  // The environments, by name.
+  repeated Environment environments = 1 [(pcx.module.v1.setting) = { title: "Environments" }];
+}
+
+// An environment's endpoints and where its credentials are (files the
+// module reads through its sandbox, under its filesystem grant; never in a
+// setting, a prompt or an answer).
+message Environment {
+  // Its name, e.g. prod, staging (1 to 64 of a-z, 0-9, '-').
+  string name = 1 [(pcx.module.v1.setting) = { title: "Name", required: true, pattern: "[a-z0-9-]{1,64}", example: "prod" }];
+  // Prometheus's URL; empty: none.
+  string prometheus = 2 [(pcx.module.v1.setting) = { title: "Prometheus URL", pattern: "https?://\\S+", example: "http://prometheus:9090" }];
+  // Loki's URL; empty: none.
+  string loki = 3 [(pcx.module.v1.setting) = { title: "Loki URL", pattern: "https?://\\S+", example: "http://loki:3100" }];
+  // Alertmanager's URL; empty: none.
+  string alertmanager = 4 [(pcx.module.v1.setting) = { title: "Alertmanager URL", pattern: "https?://\\S+", example: "http://alertmanager:9093" }];
+  // A file holding the bearer token of those three; empty: none.
+  string token_file = 5 [(pcx.module.v1.setting) = { title: "Their token's file" }];
+  // The Kubernetes API server's URL; empty: no cluster.
+  string kube_api = 6 [(pcx.module.v1.setting) = { title: "Kubernetes API URL", pattern: "https?://\\S+", example: "https://10.0.0.1:6443" }];
+  // A file holding a ServiceAccount's token that may only read.
+  string kube_token_file = 7 [(pcx.module.v1.setting) = { title: "Kubernetes token's file" }];
+  // A file holding the cluster's CA certificate (PEM); empty: the
+  // system's.
+  string kube_ca_file = 8 [(pcx.module.v1.setting) = { title: "Kubernetes CA file" }];
+  // The name the API server's certificate is verified against when it
+  // does not name the URL's host, as a kubeconfig's tls-server-name (a DNS
+  // name or an IP address); needs the CA file; empty: the URL's host.
+  string kube_tls_server_name = 9 [(pcx.module.v1.setting) = { title: "Kubernetes TLS server name" }];
+  // Nomad's API URL (https); empty: no Nomad. An environment names a
+  // Kubernetes API or this, never both.
+  string nomad_api = 10 [(pcx.module.v1.setting) = { title: "Nomad API URL", pattern: "https://\\S+", example: "https://nomad.example.com:4646" }];
+  // A file holding a Nomad ACL token that may only read (read-job,
+  // read-logs, node read).
+  string nomad_token_file = 11 [(pcx.module.v1.setting) = { title: "Nomad token's file" }];
+  // A file holding Nomad's CA certificate (PEM); empty: the system's.
+  string nomad_ca_file = 12 [(pcx.module.v1.setting) = { title: "Nomad CA file" }];
+  // The name Nomad's certificate is verified against when it does not
+  // name the URL's host; needs the CA file; empty: the URL's host.
+  string nomad_tls_server_name = 13 [(pcx.module.v1.setting) = { title: "Nomad TLS server name" }];
+}
+
+// ---------------------------------------------------------------- calls
+
+// A PromQL query.
+message MetricsRequest {
+  // The environment.
+  string environment = 1;
+  // The query.
+  string query = 2;
+  // A range's start, seconds since the epoch; 0: an instant query (now).
+  int64 start = 3;
+  // A range's end; 0: now.
+  int64 end = 4;
+  // A range's step in seconds; 0: a step that gives about 60 points.
+  uint32 step = 5;
+}
+
+// A query's series: at most 50, each at most 500 samples.
+message MetricSeries {
+  // The series.
+  repeated Serie series = 1;
+  // Whether series or samples were left out.
+  bool truncated = 2;
+}
+
+// One series.
+message Serie {
+  // Its labels.
+  map<string, string> labels = 1;
+  // Its samples, oldest first.
+  repeated Sample samples = 2;
+}
+
+// A sample.
+message Sample {
+  // When, seconds since the epoch.
+  double time = 1;
+  // Its value (NaN and infinities as Prometheus gives them).
+  double value = 2;
+}
+
+// A LogQL query.
+message LogsRequest {
+  // The environment.
+  string environment = 1;
+  // The query, e.g. {namespace="equal-rust"} |= "error".
+  string query = 2;
+  // How far back, in seconds; 0: an hour.
+  uint32 since = 3;
+  // Most lines; 0: 100, at most 500.
+  uint32 limit = 4;
+}
+
+// A query's streams.
+message LogStreams {
+  // The streams.
+  repeated LogStream streams = 1;
+}
+
+// One stream of lines.
+message LogStream {
+  // Its labels.
+  map<string, string> labels = 1;
+  // Its lines, the newest first.
+  repeated LogLine lines = 2;
+}
+
+// A line of a log.
+message LogLine {
+  // When, nanoseconds since the epoch.
+  int64 time = 1;
+  // The line.
+  string line = 2;
+}
+
+// The alerts of an environment.
+message AlertsRequest {
+  // The environment.
+  string environment = 1;
+}
+
+// Alerts.
+message AlertList {
+  // The alerts.
+  repeated ActiveAlert alerts = 1;
+}
+
+// An alert as Alertmanager has it.
+message ActiveAlert {
+  // Its labels.
+  map<string, string> labels = 1;
+  // Its annotations.
+  map<string, string> annotations = 2;
+  // When it started, RFC 3339.
+  string starts_at = 3;
+  // `active`, `suppressed` or `unprocessed`.
+  string state = 4;
+  // The silences that hold it, by id.
+  repeated string silenced_by = 5;
+}
+
+// A namespace of a cluster.
+message ClusterRequest {
+  // The environment.
+  string environment = 1;
+  // The namespace.
+  string namespace = 2;
+}
+
+// What a namespace runs.
+message Cluster {
+  // Its pods.
+  repeated PodState pods = 1;
+  // Its deployments.
+  repeated DeploymentState deployments = 2;
+  // Its jobs.
+  repeated JobState jobs = 3;
+  // Its events of the last hour that are warnings, the newest first.
+  repeated EventState events = 4;
+}
+
+// A pod.
+message PodState {
+  // Its name.
+  string name = 1;
+  // Its phase: Pending, Running, Succeeded, Failed, Unknown.
+  string phase = 2;
+  // Its containers that are ready, of all.
+  uint32 ready = 3;
+  // Its containers.
+  uint32 containers = 4;
+  // Restarts of its containers, together.
+  uint32 restarts = 5;
+  // Why a container waits or ended (CrashLoopBackOff, OOMKilled, ...);
+  // empty: none.
+  string reason = 6;
+  // When it was made, RFC 3339.
+  string created = 7;
+}
+
+// A deployment.
+message DeploymentState {
+  // Its name.
+  string name = 1;
+  // The replicas it wants.
+  uint32 wanted = 2;
+  // Those ready.
+  uint32 ready = 3;
+  // Those of its latest version.
+  uint32 updated = 4;
+}
+
+// A job.
+message JobState {
+  // Its name.
+  string name = 1;
+  // Its pods that run.
+  uint32 active = 2;
+  // Those that succeeded.
+  uint32 succeeded = 3;
+  // Those that failed.
+  uint32 failed = 4;
+}
+
+// An event.
+message EventState {
+  // Why, e.g. BackOff.
+  string reason = 1;
+  // What it says.
+  string message = 2;
+  // What it is about, `kind/name`.
+  string object = 3;
+  // How often.
+  uint32 count = 4;
+  // When last, RFC 3339.
+  string last = 5;
+}
+
+// A pod's log.
+message PodLogRequest {
+  // The environment.
+  string environment = 1;
+  // The namespace.
+  string namespace = 2;
+  // The pod.
+  string pod = 3;
+  // Its container; empty: its only one.
+  string container = 4;
+  // Lines from the end; 0: 100, at most 1000.
+  uint32 tail = 5;
+  // The container's previous run (after a crash).
+  bool previous = 6;
+}
+
+// The end of a pod's log.
+message PodLogTail {
+  // The lines.
+  string text = 1;
+}
+
+// The jobs of a Nomad environment.
+message JobsRequest {
+  // The environment.
+  string environment = 1;
+}
+
+// What a Nomad environment runs.
+message Jobs {
+  // Its jobs, by name.
+  repeated JobInfo jobs = 1;
+}
+
+// A Nomad job.
+message JobInfo {
+  // Its name.
+  string name = 1;
+  // Its type: service, batch, system, sysbatch.
+  string type = 2;
+  // Its status: pending, running, dead.
+  string status = 3;
+  // The version it runs.
+  uint64 version = 4;
+  // When that version was submitted, RFC 3339.
+  string submitted = 5;
+  // Whether that version is stable (its deployment was healthy).
+  bool stable = 6;
+  // Whether it is stopped.
+  bool stopped = 7;
+  // Its allocations, the newest first.
+  repeated AllocInfo allocations = 8;
+  // For a periodic job: when it is launched, as cron (e.g. "30 2 * * *").
+  repeated string schedule = 9;
+  // For a periodic job: the time zone of its schedule.
+  string time_zone = 10;
+  // For a periodic job: its launches Nomad still keeps (it forgets one
+  // some hours after it ended), the newest first, at most 5.
+  repeated Launch launches = 11;
+}
+
+// An allocation: a job's tasks placed on a node.
+message AllocInfo {
+  // Its id.
+  string id = 1;
+  // The node it is on.
+  string node = 2;
+  // Its state: pending, running, complete, failed, lost.
+  string state = 3;
+  // The job's version it runs.
+  uint64 version = 4;
+  // Restarts of its tasks, together.
+  uint64 restarts = 5;
+  // When it was made, RFC 3339.
+  string since = 6;
+  // Its tasks, by name.
+  repeated TaskInfo tasks = 7;
+}
+
+// A task of an allocation.
+message TaskInfo {
+  // Its name.
+  string name = 1;
+  // Its state: pending, running, dead.
+  string state = 2;
+  // Whether it failed.
+  bool failed = 3;
+  // Its last events, the newest last, at most 3: `time type: message`.
+  repeated string events = 4;
+}
+
+// One launch of a periodic job.
+message Launch {
+  // Its job's name, `<job>/periodic-<seconds>`.
+  string name = 1;
+  // When it was launched, RFC 3339.
+  string launched = 2;
+  // Its job's status: pending, running, dead.
+  string status = 3;
+  // Its allocations (complete: it succeeded; failed: it did not).
+  repeated AllocInfo allocations = 4;
+}
+
+// A task's log in a Nomad allocation.
+message AllocLogRequest {
+  // The environment.
+  string environment = 1;
+  // The allocation: its id, or the first 8 characters or more of it.
+  string allocation = 2;
+  // The task; empty: the allocation's only one.
+  string task = 3;
+  // Its stderr instead of its stdout.
+  bool stderr = 4;
+  // Lines from the end; 0: 100, at most 500.
+  uint32 tail = 5;
+}
+
+// The end of a task's log.
+message AllocLogTail {
+  // The lines.
+  string text = 1;
+}
+
+// The nodes of a Nomad environment.
+message NodesRequest {
+  // The environment.
+  string environment = 1;
+}
+
+// A Nomad environment's nodes.
+message Nodes {
+  // The nodes, by name.
+  repeated NodeInfo nodes = 1;
+}
+
+// A node.
+message NodeInfo {
+  // Its name.
+  string name = 1;
+  // Its status: initializing, ready, down, disconnected.
+  string status = 2;
+  // Whether new allocations may be placed on it.
+  bool eligible = 3;
+  // Whether it is being drained.
+  bool draining = 4;
+  // Its Nomad version.
+  string version = 5;
+  // Its memory in bytes.
+  uint64 memory = 6;
+  // Its memory that is available, in bytes.
+  uint64 memory_available = 7;
+  // Its disks.
+  repeated DiskInfo disks = 8;
+  // Why its memory and disks could not be read (a node that is down
+  // answers nothing); empty: they were.
+  string unread = 9;
+}
+
+// A disk of a node: a device, or a ZFS pool (its datasets together).
+message DiskInfo {
+  // The device (/dev/da0s1a) or the pool (potpool).
+  string name = 1;
+  // Its size in bytes.
+  uint64 size = 2;
+  // What is used of it, in bytes.
+  uint64 used = 3;
+  // What is used of it, in whole percent.
+  uint32 used_percent = 4;
+}
+
+// ------------------------------------- the outside APIs (their JSON, mirrored)
+
+// Prometheus's answer to a query.
+message PromAnswer {
+  // `success` or `error`.
+  string status = 1;
+  // Why not, when not.
+  string error = 2;
+  // Its data.
+  PromData data = 3;
+}
+
+// Prometheus's data.
+message PromData {
+  // `vector`, `matrix`, `scalar` or `string`.
+  string result_type = 1 [json_name = "resultType"];
+  // The series.
+  repeated PromSerie result = 2;
+}
+
+// A series as Prometheus answers it.
+message PromSerie {
+  // Its labels.
+  map<string, string> metric = 1;
+  // An instant's sample: [seconds, "value"] (an array of mixed types).
+  google.protobuf.ListValue value = 2;
+  // A range's samples, each [seconds, "value"].
+  repeated google.protobuf.ListValue values = 3;
+}
+
+// Loki's answer to a query.
+message LokiAnswer {
+  // `success` or `error`.
+  string status = 1;
+  // Its data.
+  LokiData data = 2;
+}
+
+// Loki's data.
+message LokiData {
+  // `streams`.
+  string result_type = 1 [json_name = "resultType"];
+  // The streams.
+  repeated LokiStream result = 2;
+}
+
+// A stream as Loki answers it.
+message LokiStream {
+  // Its labels.
+  map<string, string> stream = 1;
+  // Its lines, each ["nanoseconds", "line"].
+  repeated google.protobuf.ListValue values = 2;
+}
+
+// An alert as Alertmanager's API v2 answers it.
+message AmAlert {
+  // Its labels.
+  map<string, string> labels = 1;
+  // Its annotations.
+  map<string, string> annotations = 2;
+  // When it started.
+  string starts_at = 3 [json_name = "startsAt"];
+  // Its status.
+  AmStatus status = 4;
+}
+
+// An alert's status.
+message AmStatus {
+  // `active`, `suppressed` or `unprocessed`.
+  string state = 1;
+  // The silences that hold it.
+  repeated string silenced_by = 2 [json_name = "silencedBy"];
+}
+
+// A Kubernetes list.
+message KubeList {
+  // Its items.
+  repeated KubeObject items = 1;
+}
+
+// A Kubernetes object: the fields of a pod, a deployment, a job or an
+// event this module reads.
+message KubeObject {
+  // Its metadata.
+  KubeMeta metadata = 1;
+  // A deployment's spec.
+  KubeSpec spec = 2;
+  // A pod's, a deployment's or a job's status.
+  KubeStatus status = 3;
+  // An event's reason.
+  string reason = 4;
+  // An event's message.
+  string message = 5;
+  // An event's type: Normal or Warning.
+  string type = 6;
+  // What an event is about.
+  KubeRef involved_object = 7 [json_name = "involvedObject"];
+  // How often an event happened.
+  uint32 count = 8;
+  // When an event happened last; null from a writer that names
+  // `event_time` instead (the scheduler does).
+  optional string last_timestamp = 9 [json_name = "lastTimestamp"];
+  // When an event happened, as the newer writers say it; null from the
+  // others.
+  optional string event_time = 10 [json_name = "eventTime"];
+}
+
+// An object's metadata.
+message KubeMeta {
+  // Its name.
+  string name = 1;
+  // When it was made.
+  string creation_timestamp = 2 [json_name = "creationTimestamp"];
+}
+
+// A deployment's spec.
+message KubeSpec {
+  // The replicas it wants.
+  uint32 replicas = 1;
+}
+
+// An object's status.
+message KubeStatus {
+  // A pod's phase.
+  string phase = 1;
+  // A pod's containers.
+  repeated KubeContainer container_statuses = 2 [json_name = "containerStatuses"];
+  // A deployment's ready replicas.
+  uint32 ready_replicas = 3 [json_name = "readyReplicas"];
+  // A deployment's replicas of its latest version.
+  uint32 updated_replicas = 4 [json_name = "updatedReplicas"];
+  // A job's pods that run.
+  uint32 active = 5;
+  // A job's pods that succeeded.
+  uint32 succeeded = 6;
+  // A job's pods that failed.
+  uint32 failed = 7;
+}
+
+// A container's status.
+message KubeContainer {
+  // Whether it is ready.
+  bool ready = 1;
+  // How often it restarted.
+  uint32 restart_count = 2 [json_name = "restartCount"];
+  // What it does now.
+  KubeContainerState state = 3;
+}
+
+// A container's state.
+message KubeContainerState {
+  // While it waits.
+  KubeReason waiting = 1;
+  // Once it ended.
+  KubeReason terminated = 2;
+}
+
+// Why a container waits or ended.
+message KubeReason {
+  // The reason.
+  string reason = 1;
+}
+
+// What an event is about.
+message KubeRef {
+  // Its kind.
+  string kind = 1;
+  // Its name.
+  string name = 2;
+}
+
+// ----------------------------------------- Nomad's API (its JSON, mirrored)
+//
+// The fields are named as Nomad names them, so each message reads Nomad's
+// JSON as it is. Nomad writes an empty list, map or time as null: the
+// reader drops nulls first (`pcx-nomad`).
+
+// A job as Nomad lists it.
+message NomadJobStub {
+  // Its name.
+  string ID = 1;
+  // For a launch of a periodic job: that job; else empty.
+  string ParentID = 2;
+  // Its type.
+  string Type = 3;
+  // Its status.
+  string Status = 4;
+  // When it was submitted, nanoseconds since the epoch.
+  int64 SubmitTime = 5;
+}
+
+// A job as Nomad answers it by name.
+message NomadJob {
+  // Its name.
+  string ID = 1;
+  // Its type.
+  string Type = 2;
+  // Its status.
+  string Status = 3;
+  // Whether it is stopped.
+  bool Stop = 4;
+  // Its version.
+  uint64 Version = 5;
+  // Whether that version is stable.
+  bool Stable = 6;
+  // When that version was submitted, nanoseconds since the epoch.
+  int64 SubmitTime = 7;
+  // When it is launched, for a periodic job.
+  NomadPeriodic Periodic = 8;
+}
+
+// A periodic job's schedule.
+message NomadPeriodic {
+  // Whether it is launched at all.
+  bool Enabled = 1;
+  // Its cron expression, as older jobs say it.
+  string Spec = 2;
+  // Its cron expressions.
+  repeated string Specs = 3;
+  // Their time zone.
+  string TimeZone = 4;
+}
+
+// An allocation as Nomad lists it.
+message NomadAllocation {
+  // Its id.
+  string ID = 1;
+  // Its job.
+  string JobID = 2;
+  // The job's version it runs.
+  uint64 JobVersion = 3;
+  // Its node's name.
+  string NodeName = 4;
+  // Its state on the node: pending, running, complete, failed, lost.
+  string ClientStatus = 5;
+  // When it was made, nanoseconds since the epoch.
+  int64 CreateTime = 6;
+  // Its tasks' states, by task.
+  map<string, NomadTaskState> TaskStates = 7;
+}
+
+// A task's state.
+message NomadTaskState {
+  // pending, running or dead.
+  string State = 1;
+  // Whether it failed.
+  bool Failed = 2;
+  // How often it restarted.
+  uint64 Restarts = 3;
+  // What happened to it, the oldest first.
+  repeated NomadTaskEvent Events = 4;
+}
+
+// Something that happened to a task.
+message NomadTaskEvent {
+  // What: Started, Terminated, Restarting, Killing, ...
+  string Type = 1;
+  // What it says.
+  string DisplayMessage = 2;
+  // When, nanoseconds since the epoch.
+  int64 Time = 3;
+}
+
+// A node as Nomad lists it.
+message NomadNode {
+  // Its id.
+  string ID = 1;
+  // Its name.
+  string Name = 2;
+  // initializing, ready, down or disconnected.
+  string Status = 3;
+  // eligible or ineligible.
+  string SchedulingEligibility = 4;
+  // Whether it is being drained.
+  bool Drain = 5;
+  // Its Nomad version.
+  string Version = 6;
+}
+
+// A node's host statistics.
+message NomadHostStats {
+  // Its memory.
+  NomadMemory Memory = 1;
+  // Its mounted filesystems.
+  repeated NomadDisk DiskStats = 2;
+}
+
+// A host's memory, in bytes.
+message NomadMemory {
+  // All of it.
+  uint64 Total = 1;
+  // What is available.
+  uint64 Available = 2;
+}
+
+// A mounted filesystem of a host, in bytes.
+message NomadDisk {
+  // Its device: /dev/da0s1a, a ZFS dataset (potpool/pot/jails), devfs, or
+  // for a nullfs mount the directory it shows.
+  string Device = 1;
+  // Its size.
+  uint64 Size = 2;
+  // What is used of it.
+  uint64 Used = 3;
+  // What is available on it.
+  uint64 Available = 4;
+}

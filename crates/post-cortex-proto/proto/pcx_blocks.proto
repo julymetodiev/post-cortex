@@ -1,0 +1,67 @@
+// pcx.blocks.v1: the pieces of a conversation's message (W25), shared by
+// the memory API (pcx.v1, pcx.views.v1: a captured message keeps its
+// blocks) and the module protocol (pcx_model.proto: a model's request and
+// answer carry them). A package of its own, so a client of memory never
+// carries the module protocol (docs/modules/dynamic.md, `foreign_modules`).
+syntax = "proto3";
+package pcx.blocks.v1;
+
+import "google/protobuf/struct.proto";
+
+// One piece of a message.
+message ModelBlock {
+  // Exactly one is set.
+  oneof block {
+    // Text.
+    string text = 1;
+    // The model's reasoning.
+    ThinkingBlock thinking = 2;
+    // A tool call.
+    ToolUseBlock tool_use = 3;
+    // A tool's result.
+    ToolResultBlock tool_result = 4;
+    // What the conversation before it said, in short (a compaction).
+    string summary = 5;
+    // How the turn it closes ended (W25): kept in the transcript, never
+    // sent to a model.
+    TurnEndBlock end = 6;
+  }
+}
+
+// How a turn ended, as its transcript keeps it (W25).
+message TurnEndBlock {
+  // Why: `end_turn`, `max_tokens`, `blocked`, `step_limit`, `cancelled`
+  // or `failed`.
+  string stop = 1;
+  // For `blocked` or `failed`, what happened; for `cancelled`, who stopped
+  // it.
+  string detail = 2;
+}
+
+// The model's reasoning.
+message ThinkingBlock {
+  // The reasoning.
+  string text = 1;
+  // The provider's signature of it, when it gives one.
+  optional string signature = 2;
+}
+
+// A tool call.
+message ToolUseBlock {
+  // The call's id.
+  string id = 1;
+  // The tool.
+  string name = 2;
+  // Its input (an object).
+  google.protobuf.Struct input = 3;
+}
+
+// A tool's result.
+message ToolResultBlock {
+  // The call it answers.
+  string tool_use_id = 1;
+  // Its text.
+  string content = 2;
+  // Whether the tool failed.
+  bool is_error = 3;
+}

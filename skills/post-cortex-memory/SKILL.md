@@ -44,12 +44,12 @@ Other read tools, by question:
 
 | You want to know… | Use |
 |---|---|
-| "What depends on X / what breaks if I change X?" | `assemble_context` with a query naming X — returns the one-hop entity neighbourhood plus **impact analysis (reverse dependencies)** and an LLM-ready `formatted_text`. It matches entity names, not meaning, so name the components explicitly. |
+| "What depends on X / what breaks if I change X?" | `assemble_context` with a query naming X — returns the cards, the one-hop entity neighbourhood plus **impact analysis (reverse dependencies)**, the records that best match the query and an LLM-ready `formatted_text`. The graph part matches entity names, so name the components explicitly. |
 | "Catch me up on this project" / resuming after a break | `get_structured_summary` (`include: ["decisions","insights","entities","questions"]`, `compact: true`) |
 | Decisions, open questions, important entities, statistics, recent changes, references to a file | `query_conversation_context` with the matching `query_type` (see the reference) |
 | Exact keyword lookup when semantics miss | `query_conversation_context` `query_type: "search_updates"`, `parameters: {"query": "..."}` |
 
-Use `semantic_search` for meaning ("how do we handle auth"), `assemble_context` for structure ("who uses the storage actor"). They complement each other.
+Use `semantic_search` for meaning ("how do we handle auth"), `assemble_context` for everything about a task at once: the cards, the structure around what it names ("who uses the storage actor") and the matching records, in one budget.
 
 ## 3. Write after learning
 
@@ -88,7 +88,11 @@ Do not log chit-chat, things obvious from the code or git history, or secrets. p
 - `relation_type`: `depends_on`, `implements`, `caused_by`, `solves`, `leads_to`, `related_to`, `required_by`, `conflicts_with`. Both ends must be listed in `entities`; self-relations are rejected.
 - Reuse existing entity names exactly (search or `query_conversation_context` `all_entities` first) — `StorageActor` and `storage actor` become two different nodes.
 - Several records at once: pass `updates: [ {interaction_type, content, entities, relations}, ... ]` instead of the single fields. Unsure about the shape? `dry_run: true` validates without writing.
-- A success reply is just "Context updated successfully" (bulk: a count). It does not return the new entry's ID; if you later need it (to correct or delete the entry), find it with `semantic_search` — its `content_id` is the `entry_id`.
+- The reply carries the new record's `entry_id` (bulk: one per update, by `index`). A record found later by `semantic_search` has it as its `content_id`.
+
+### When a record corrects or replaces an earlier one
+
+A check that turned out wrong, a fix that replaced another, a decision reversed, a requirement changed, something removed or renamed: before writing the new record, find the earlier one (`semantic_search`; its `content_id` is the `entry_id`) and pass it in `supersedes`. The earlier record stays in the history, marked as ended by yours, and ranks lower in search. Without `supersedes` both read as current, and whoever asks later gets the wrong answer next to the right one. `supersedes` takes records of the same session. A record that no longer holds and that nothing new replaces is ended with `manage_entity` `action: "forget"`.
 
 ## 4. Keep the project card current
 
@@ -98,7 +102,7 @@ When you learn something that belongs there — a convention the user insists on
 
 ## 5. Housekeeping
 
-- Wrong or outdated entry: `manage_entity` `action: "delete_update"` with its `entry_id` (the `content_id` from search), then write the corrected version. `action: "delete"` with `entity_name` removes an entity and its edges.
+- Wrong or outdated entry: write the corrected record with `supersedes` (section 3), or `forget` it when nothing replaces it; both keep it in the history. `manage_entity` `action: "delete_update"` with its `entry_id` is only for a row that should never have existed (a test write, a ghost). `action: "delete"` with `entity_name` removes an entity and its edges.
 - Rename / re-describe a session: `session` `action: "update_metadata"`.
 - Search returns nothing for content you know exists: `admin` `action: "vectorize_session"` (then `vectorize_stats`). `admin` `action: "health"` checks the daemon.
 - Deletes (`session` `delete`, `manage_workspace` `delete`, `manage_entity`) are permanent — confirm with the user before running them.

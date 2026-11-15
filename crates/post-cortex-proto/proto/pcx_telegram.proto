@@ -1,0 +1,169 @@
+syntax = "proto3";
+package pcx.telegram.v1;
+
+import "pcx_module.proto";
+
+// The Telegram channel's settings (ARCHITECTURE section 8, operations,
+// W29); it serves pcx.channel.v1.Channel.
+message TelegramConfig {
+  // The bot's token from @BotFather.
+  string bot_token = 1 [(pcx.module.v1.setting) = { title: "Bot token", required: true, secret: true }];
+  // The chats it sends to and reads, by name.
+  repeated Chat chats = 2 [(pcx.module.v1.setting) = { title: "Chats" }];
+  // The people it knows by their Telegram user id.
+  repeated Person people = 3 [(pcx.module.v1.setting) = { title: "People" }];
+  // The persons it acts for (approving, talking with the chief): each of
+  // the people must be one.
+  pcx.module.v1.PersonGrant persons = 4 [(pcx.module.v1.setting) = { title: "Acts for" }];
+  // The chat that decisions waiting for a person go to, by name; empty:
+  // none.
+  string approvals = 5 [(pcx.module.v1.setting) = { title: "Approvals chat", pattern: "[a-z0-9-]{1,64}", example: "ops" }];
+  // The Bot API's URL; empty: https://api.telegram.org.
+  string api_url = 6 [(pcx.module.v1.setting) = { title: "API URL", pattern: "https?://\\S+", example: "https://api.telegram.org" }];
+}
+
+// A chat of the bot.
+message Chat {
+  // Its name, a destination (1 to 64 of a-z, 0-9, '-').
+  string name = 1 [(pcx.module.v1.setting) = { title: "Name", required: true, pattern: "[a-z0-9-]{1,64}", example: "ops" }];
+  // Its Telegram id (a group's is negative).
+  int64 chat_id = 2 [(pcx.module.v1.setting) = { title: "Chat id", required: true }];
+}
+
+// A person on Telegram.
+message Person {
+  // Their Telegram user id.
+  int64 telegram_id = 1 [(pcx.module.v1.setting) = { title: "Telegram user id", required: true }];
+  // The person, by the author name they act as.
+  string name = 2 [(pcx.module.v1.setting) = { title: "Name", required: true }];
+}
+
+// ------------------------------------ the Bot API (its JSON, mirrored)
+// Fields as the Bot API names them, decoded and encoded by the canonical
+// proto3 JSON mapping (unknown fields skipped).
+
+// An answer of the Bot API.
+message Answer {
+  // Whether the call worked.
+  bool ok = 1;
+  // Why not.
+  string description = 2;
+}
+
+// getUpdates' answer.
+message UpdatesAnswer {
+  // Whether the call worked.
+  bool ok = 1;
+  // Why not.
+  string description = 2;
+  // The updates, oldest first.
+  repeated Update result = 3;
+}
+
+// sendMessage's answer.
+message MessageAnswer {
+  // Whether the call worked.
+  bool ok = 1;
+  // Why not.
+  string description = 2;
+  // The message sent.
+  Message result = 3;
+}
+
+// An update.
+message Update {
+  // Its id: the next getUpdates asks from it + 1.
+  int64 update_id = 1;
+  // A message in a chat.
+  Message message = 2;
+  // A button pressed.
+  CallbackQuery callback_query = 3;
+}
+
+// A message.
+message Message {
+  // Its id in its chat.
+  int64 message_id = 1;
+  // Who wrote it.
+  User from = 2;
+  // Its chat.
+  TelegramChat chat = 3;
+  // Its text.
+  string text = 4;
+}
+
+// A Telegram user.
+message User {
+  // Their id.
+  int64 id = 1;
+  // Their username, without '@'.
+  string username = 2;
+}
+
+// A Telegram chat.
+message TelegramChat {
+  // Its id.
+  int64 id = 1;
+}
+
+// A button pressed on a message.
+message CallbackQuery {
+  // Its id, to answer it.
+  string id = 1;
+  // Who pressed it.
+  User from = 2;
+  // The message it is on.
+  Message message = 3;
+  // The button's data.
+  string data = 4;
+}
+
+// getUpdates' input.
+message GetUpdates {
+  // The first update to answer.
+  int64 offset = 1;
+  // Seconds to wait for one.
+  uint32 timeout = 2;
+  // The kinds of update wanted.
+  repeated string allowed_updates = 3;
+}
+
+// sendMessage's input.
+message SendMessage {
+  // The chat.
+  int64 chat_id = 1;
+  // The text.
+  string text = 2;
+  // Its buttons, as the JSON the Bot API reads (an array of rows cannot
+  // be a proto field): written by the adapter from `Button`s; empty: none.
+  string reply_markup = 3;
+}
+
+// editMessageText's input.
+message EditMessageText {
+  // The chat.
+  int64 chat_id = 1;
+  // The message.
+  int64 message_id = 2;
+  // Its new text.
+  string text = 3;
+  // Its buttons, as `SendMessage.reply_markup`; empty: none (those it had
+  // go).
+  string reply_markup = 4;
+}
+
+// answerCallbackQuery's input.
+message AnswerCallbackQuery {
+  // The button press.
+  string callback_query_id = 1;
+  // What to show the person who pressed it.
+  string text = 2;
+}
+
+// An inline button of a message.
+message Button {
+  // Its label.
+  string text = 1;
+  // What a press sends back (at most 64 bytes).
+  string callback_data = 2;
+}

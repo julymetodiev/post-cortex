@@ -1,0 +1,15 @@
+[package]
+name = "cel-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "High-level API for the Common Expression Language (CEL)"
+
+[dependencies]
+chrono = "0.4"
+chrono-tz = "0.10"
+logos.workspace = true
+regex.workspace = true
+

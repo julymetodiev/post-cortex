@@ -26,6 +26,32 @@ jobs:
       - run: cargo fmt --all --check
 
   # -------------------------------------------------------------------------
+  # File size — no Rust file over 500 lines outside the allowlist of files a
+  # later migration wave splits (docs/ARCHITECTURE.md rule 6).
+  # -------------------------------------------------------------------------
+  file-size:
+    name: file size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/check-file-size.sh
+
+  # -------------------------------------------------------------------------
+  # Architecture — the rules of docs/ARCHITECTURE.md section 2 a grep can see
+  # (module paths, pure domain, env reads, adapters chosen by the daemon);
+  # each count may only go down to 0.
+  # -------------------------------------------------------------------------
+  architecture:
+    name: architecture
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: scripts/check-architecture.sh
+      - run: scripts/check-architecture.sh --new "$(git merge-base HEAD origin/main)"
+
+  # -------------------------------------------------------------------------
   # Clippy — workspace-wide, all targets, all features. Treats warnings as
   # errors so the strict lint suite stays clean.
   # -------------------------------------------------------------------------
@@ -67,6 +93,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install system deps
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      # The local reranker's conformance and ranking tests (feature `rerank`)
+      # run the smallest cross-encoder (~25 MB, downloaded once, then cached)
+      # on the ONNX Runtime release the README names.
+      - name: Cache the reranker model
+        if: matrix.features == 'all'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-cross-encoder-ms-marco-MiniLM-L4-v2
+      - name: Install ONNX Runtime
+        if: matrix.features == 'all'
+        run: |
+          curl -sSL https://github.com/microsoft/onnxruntime/releases/download/v1.31.0/onnxruntime-linux-x64-1.31.0.tgz \
+            | tar -xz -C "$RUNNER_TEMP"
+          echo "ORT_DYLIB_PATH=$RUNNER_TEMP/onnxruntime-linux-x64-1.31.0/lib/libonnxruntime.so" >> "$GITHUB_ENV"
       - run: cargo build --workspace ${{ matrix.flags }}
       - run: cargo test --workspace --lib ${{ matrix.flags }}
         # Lib tests only. Integration tests under crates/post-cortex/tests/
@@ -74,7 +115,7 @@ jobs:
         # model downloads + dedicated ports, none of which are available in
         # the hosted CI runners. They live in the suite to be runnable
         # locally / from a self-hosted runner — see
-        # `crates/post-cortex/tests/integration_e2e_surrealdb.rs` for the
+        # `crates/post-cortex/tests/it/integration_e2e_surrealdb.rs` for the
         # canonical example and its `POST_CORTEX_E2E_SURREAL_*` env vars.
 
   # -------------------------------------------------------------------------
@@ -170,11 +211,92 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
-      - run: cargo llvm-cov --workspace --lib --features embeddings,surrealdb-storage --lcov --output-path lcov.info
+      - run: cargo llvm-cov --workspace --lib --features surrealdb-storage --lcov --output-path lcov.info
       - uses: codecov/codecov-action@v4
         with:
           files: lcov.info
           fail_ci_if_error: false  # coverage upload is informational
+
+  # -------------------------------------------------------------------------
+  # SDKs: generated gRPC code matches pcx.proto, and both clients pass their
+  # end-to-end tests against a freshly built daemon.
+  # -------------------------------------------------------------------------
+  sdk:
+    name: SDKs (Python, TypeScript)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cargo build -p post-cortex-daemon --bin pcx
+      - name: Generated code is up to date
+        run: sdks/gen.sh && git diff --exit-code -- sdks
+      - name: Python SDK
+        working-directory: sdks/python
+        run: uv run mypy && uv run pytest -q
+      - name: TypeScript SDK
+        working-directory: sdks/typescript
+        run: npm ci && npm run typecheck && npm test
+
+  # -------------------------------------------------------------------------
+  # Catalog packages (Claude Code plugin, Cursor plugin, Gemini CLI
+  # extension, MCP Registry entry): every copied or generated file matches
+  # the pcx templates and the workspace version it comes from.
+  # -------------------------------------------------------------------------
+  integrations:
+    name: Catalog packages in sync, hook resolver and launcher tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 integrations/sync.py --check
+      - run: python3 -m py_compile integrations/sync.py integrations/claude-code/hooks/*.py
+      - run: sh -n integrations/cursor/scripts/pcx.sh
+      # The project resolver (pcx_resolve.py) against the shared test vectors
+      # in integrations/testdata, and the hooks run as Claude Code runs them.
+      - run: python3 -m unittest discover -s integrations/tests -v
+      # The pcx launcher of the Cursor plugin and the Gemini CLI extension,
+      # and the manifests that call it.
+      - run: python3 -m unittest discover -s integrations/cursor/tests -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Gemini CLI validates the extension
+        run: npx -y @google/gemini-cli@0.65.0 extensions validate integrations/gemini
+      - name: mcp-publisher validates the registry entries
+        run: |
+          curl -sSL https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz | tar -xz -C "$RUNNER_TEMP" mcp-publisher
+          for f in server.json server.self-hosted.json; do
+            "$RUNNER_TEMP/mcp-publisher" validate "integrations/mcp-registry/$f"
+          done
+
+  # -------------------------------------------------------------------------
+  # Native plugins (integrations/js): the shared core and the OpenCode, Kilo,
+  # Pi, OpenClaw and DeepSeek Harness plugins build, type-check against each
+  # client's published plugin types and pass their tests. Install scripts are
+  # off: only type packages and test helpers are installed.
+  # -------------------------------------------------------------------------
+  plugins-js:
+    name: Native plugins (TypeScript)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: integrations/js
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: integrations/js/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run build
+      - run: npm test
 
   # -------------------------------------------------------------------------
   # Workspace publish dry-run. Runs on every tag push to verify that

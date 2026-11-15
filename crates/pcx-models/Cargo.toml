@@ -1,0 +1,37 @@
+[package]
+name = "pcx-models"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The models module of pcx: every model provider (OpenRouter, Anthropic, Z.AI, OpenAI) in one module, each on with its API key."
+keywords = ["pcx", "llm", "models", "providers"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-models"
+
+[[bin]]
+name = "pcx-models"
+path = "src/main.rs"
+
+[dependencies]
+pcx-module-api.workspace = true
+pcx-provider-anthropic.workspace = true
+pcx-provider-openai.workspace = true
+pcx-provider-openrouter.workspace = true
+pcx-provider-zai.workspace = true
+# Its settings, a message of pcx.models.v1.
+post-cortex-proto.workspace = true
+prost.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
+tracing.workspace = true
+# The module process's runtime (main.rs).
+tokio.workspace = true
+
+[dev-dependencies]
+tokio-util.workspace = true
+
+[lints]
+workspace = true

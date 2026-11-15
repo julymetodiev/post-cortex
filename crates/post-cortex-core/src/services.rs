@@ -1,188 +1,181 @@
 // Copyright (c) 2025, 2026 Julius ML
 // Licensed under the MIT License. See LICENSE at the workspace root.
 
-//! Canonical service trait for post-cortex.
+//! Request and response DTOs of the memory capability services (the
+//! services themselves are `post_cortex_memory::capabilities`).
 //!
-//! `PostCortexService` is the **single internal entrypoint** that every
-//! transport layer (gRPC, MCP, REST, future SDKs) delegates to. Per
-//! TODO.md:106-117 we never want two transports re-implementing the same
-//! operation with subtly different validation; they each translate their
-//! wire payload, then call the same method on this trait. The canonical
-//! impl lives in [`post-cortex-memory`](https://docs.rs/post-cortex-memory)
-//! as `MemoryServiceImpl`.
-//!
-//! ## Scope
-//!
-//! Phase 4 introduces the trait skeleton with the **read/write/search/manage**
-//! operations every transport exposes. Phases 6 + 7 (MCP and daemon
-//! extraction) migrate the existing handlers to delegate here; until then
-//! both transports still call into `ConversationMemorySystem` directly.
-//!
-//! Trait methods intentionally take small, immediately-usable request
-//! types defined in `types` rather than huge proto structs — keeping
-//! the surface readable from non-gRPC consumers. gRPC handlers do the
-//! proto-to-domain translation in a single `From`/`Into` module at the
-//! transport boundary (Phase 7).
-//!
-//! ## Object safety
-//!
-//! The trait is intentionally object-safe (no generic methods, no `Self`
-//! return types) so consumers — `post-cortex-mcp` in particular — can
-//! hold an `Arc<dyn PostCortexService>` and let downstream Rust projects
-//! plug in their own implementation without touching the MCP layer.
+//! Each request carries exactly what its operation needs, with no
+//! transport-specific fields; transports translate their wire payload
+//! (proto, MCP JSON, REST) into these types at the boundary.
 
-use std::sync::Arc;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-use async_trait::async_trait;
+use crate::core::context_update::{
+    CodeReference, EntityData, EntityRelationship, UpdateContent, UpdateType,
+};
 
-use crate::core::error::SystemError;
+// ---------------------------------------------------------------------------
+// Write path
+// ---------------------------------------------------------------------------
 
-pub mod types;
-
-pub use types::*;
-
-/// Canonical post-cortex service.
-///
-/// Every transport (gRPC, MCP, REST, future SDKs) delegates to this trait
-/// so there is exactly one implementation per operation across the
-/// codebase. See the module-level docs for the design rationale.
-///
-/// Default implementations are kept minimal — the production impl is
-/// `post_cortex_memory::services::MemoryServiceImpl`. Downstream Rust
-/// projects can implement this trait against their own storage +
-/// embeddings stack and reuse the rest of the post-cortex ecosystem
-/// (MCP tools, gRPC client, summary view).
-#[async_trait]
-pub trait PostCortexService: Send + Sync + 'static {
-    // ------------------------------------------------------------------
-    // Liveness
-    // ------------------------------------------------------------------
-
-    /// Returns a snapshot of system health. Cheap — the only operation
-    /// that does **not** flow through the storage actor and is safe to
-    /// call from a heartbeat probe.
-    async fn health(&self) -> Result<HealthReport, SystemError>;
-
-    // ------------------------------------------------------------------
-    // Write path
-    // ------------------------------------------------------------------
-
-    /// Persist a single context update for a session and enqueue derived
-    /// work (embedding, HNSW upsert, graph update, summary refresh)
-    /// onto background pipelines. Returns once the entry is durably
-    /// persisted; embeddings / vector index land asynchronously per
-    /// TODO.md:136-145.
-    async fn update_context(
-        &self,
-        req: UpdateContextRequest,
-    ) -> Result<UpdateContextResponse, SystemError>;
-
-    /// Batch variant of [`Self::update_context`]. Backends use storage
-    /// write batches when available (RocksDB transaction).
-    async fn bulk_update_context(
-        &self,
-        req: BulkUpdateContextRequest,
-    ) -> Result<BulkUpdateContextResponse, SystemError>;
-
-    /// Append captured conversation turns to a session's message stream.
-    /// Idempotent on each turn's `turn_id`.
-    async fn append_messages(
-        &self,
-        req: AppendMessagesRequest,
-    ) -> Result<AppendMessagesResponse, SystemError>;
-
-    /// Read a project or user card.
-    async fn get_card(&self, req: GetCardRequest) -> Result<GetCardResponse, SystemError>;
-
-    /// Write the next version of a project or user card, unless it changed
-    /// since the version the caller edited.
-    async fn update_card(&self, req: UpdateCardRequest) -> Result<UpdateCardResponse, SystemError>;
-
-    // ------------------------------------------------------------------
-    // Read path
-    // ------------------------------------------------------------------
-
-    /// Run a semantic similarity search against persisted content. Scope
-    /// determines whether the query runs against a single session, a
-    /// workspace, or the global index.
-    async fn semantic_search(
-        &self,
-        req: SemanticSearchRequest,
-    ) -> Result<SemanticSearchResponse, SystemError>;
-
-    /// Run a structured/keyword query against the session's context
-    /// updates. Faster than semantic search; no embedding required.
-    async fn query_context(
-        &self,
-        req: QueryContextRequest,
-    ) -> Result<QueryContextResponse, SystemError>;
-
-    /// Graph-aware retrieval: semantic search + entity neighbourhood
-    /// traversal + impact analysis, all merged into one assembled
-    /// context payload.
-    async fn assemble_context(
-        &self,
-        req: AssembleContextRequest,
-    ) -> Result<AssembleContextResponse, SystemError>;
-
-    // ------------------------------------------------------------------
-    // Session management
-    // ------------------------------------------------------------------
-
-    /// Manage session lifecycle (create / list / load / search / update /
-    /// delete). The variant carried in the request determines which
-    /// operation runs — letting callers (especially MCP) treat sessions
-    /// as a single tool surface.
-    async fn manage_session(
-        &self,
-        req: ManageSessionRequest,
-    ) -> Result<ManageSessionResponse, SystemError>;
-
-    // ------------------------------------------------------------------
-    // Workspace management
-    // ------------------------------------------------------------------
-
-    /// Manage workspace lifecycle (create / list / get / delete /
-    /// add-session / remove-session). Same shape as
-    /// [`Self::manage_session`].
-    async fn manage_workspace(
-        &self,
-        req: ManageWorkspaceRequest,
-    ) -> Result<ManageWorkspaceResponse, SystemError>;
-
-    // ------------------------------------------------------------------
-    // Entity maintenance
-    // ------------------------------------------------------------------
-
-    /// Manage entity lifecycle (delete / delete-update). Cascades through
-    /// the entity graph; storage-layer side effects (vector index purge,
-    /// summary invalidation) run on background pipelines.
-    async fn manage_entity(
-        &self,
-        req: ManageEntityRequest,
-    ) -> Result<ManageEntityResponse, SystemError>;
-
-    // ------------------------------------------------------------------
-    // Analytics & summaries
-    // ------------------------------------------------------------------
-
-    /// Compose the structured summary view for a session — a
-    /// hierarchical projection over context updates, decisions,
-    /// problems, and entity importance.
-    async fn get_structured_summary(
-        &self,
-        req: StructuredSummaryRequest,
-    ) -> Result<StructuredSummaryResponse, SystemError>;
-
-    // ------------------------------------------------------------------
-    // Admin
-    // ------------------------------------------------------------------
-
-    /// Run an admin operation (vectorize session, create checkpoint,
-    /// fetch vectorization stats, etc.). Variant-dispatched like
-    /// session/workspace/entity for symmetry.
-    async fn admin(&self, req: AdminRequest) -> Result<AdminResponse, SystemError>;
+/// A single context-update write.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateContextRequest {
+    /// Session this update belongs to.
+    pub session_id: Uuid,
+    /// Classification of the interaction (e.g. decision, problem, code change).
+    pub interaction_type: UpdateType,
+    /// The main body of the update.
+    pub content: UpdateContent,
+    /// Named entities extracted from this update.
+    pub entities: Vec<EntityData>,
+    /// Relationships between entities in this update.
+    pub relations: Vec<EntityRelationship>,
+    /// Optional structured code reference (file path, line range, snippet
+    /// and git metadata). Transports translate their wire format to this
+    /// shape so no transport loses fidelity.
+    pub code_reference: Option<CodeReference>,
+    /// Who writes it (agent name, user or teammate); transports fill in the
+    /// client's name when the caller gives none.
+    #[serde(default)]
+    pub author: Option<String>,
+    /// Captured messages of the same session the update was drawn from
+    /// (`message:<seq>`); each must exist.
+    #[serde(default)]
+    pub derived_from: Vec<String>,
+    /// Validity and trust the writer states: `valid_from`, `supersedes`
+    /// (entry ids of the session), `confidence`. `retired_at` is rejected.
+    #[serde(default)]
+    pub meta: crate::core::context_update::UpdateMeta,
 }
 
-/// Convenience alias — most consumers carry the trait behind an `Arc`.
-pub type DynPostCortexService = Arc<dyn PostCortexService>;
+/// Outcome of a single write.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateContextResponse {
+    /// Unique identifier assigned to the persisted entry.
+    pub entry_id: Uuid,
+    /// Session the entry was stored under.
+    pub session_id: Uuid,
+    /// Timestamp when the entry was durably written.
+    pub persisted_at: DateTime<Utc>,
+    /// True once the storage backend acknowledged the write. Embedding,
+    /// index, graph and summary updates run asynchronously and are not
+    /// signalled here.
+    pub durable: bool,
+}
+
+/// Batch write — N entries written under a single backend transaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BulkUpdateContextRequest {
+    /// Session all updates belong to.
+    pub session_id: Uuid,
+    /// Individual updates to persist atomically.
+    pub updates: Vec<UpdateContextRequest>,
+}
+
+/// Outcome of a batch write.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BulkUpdateContextResponse {
+    /// Identifiers of all persisted entries.
+    pub entry_ids: Vec<Uuid>,
+    /// Timestamp when the batch was durably written.
+    pub persisted_at: DateTime<Utc>,
+    /// Whether the storage backend acknowledged the full batch.
+    pub durable: bool,
+}
+
+/// Captured conversation turns for a session's message stream
+/// ([`crate::core::message`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppendMessagesRequest {
+    /// Session whose stream receives the turns.
+    pub session_id: Uuid,
+    /// Turns in conversation order.
+    pub messages: Vec<crate::core::message::NewMessage>,
+}
+
+/// Outcome of an append.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppendMessagesResponse {
+    /// Positions of the turns stored by this call, in order.
+    pub appended: Vec<u64>,
+    /// Turns not stored: already captured, repeated in the batch, or empty.
+    pub skipped: usize,
+    /// Vectors written by the call itself: always 0, since the stored turns
+    /// are embedded in the background (see `queued`). Kept for clients that
+    /// read it.
+    pub vectorized: usize,
+    /// Stored turns whose embedding was queued; 0 when embeddings are off.
+    #[serde(default)]
+    pub queued: usize,
+}
+
+/// Read a project or user card ([`crate::core::card`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetCardRequest {
+    /// Whose card.
+    pub scope: crate::core::card::CardScope,
+    /// Older versions to return as well (0: the latest only).
+    pub history: usize,
+}
+
+/// A card and, if asked for, its older versions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetCardResponse {
+    /// The latest version, if the card exists.
+    pub card: Option<crate::core::card::Card>,
+    /// Older versions, newest first.
+    pub history: Vec<crate::core::card::Card>,
+}
+
+/// Write the next version of a card.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateCardRequest {
+    /// Whose card.
+    pub scope: crate::core::card::CardScope,
+    /// The new markdown text (at most `MAX_CARD_BYTES`; empty clears it).
+    pub text: String,
+    /// The version the text was edited from (0: no card yet). The write
+    /// fails if the card has changed since.
+    pub expected_version: u64,
+    /// Who writes it.
+    pub author: Option<String>,
+}
+
+/// Outcome of a card write.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateCardResponse {
+    /// Whether the text was stored. False: the card changed since
+    /// `expected_version`; `card` is then its latest version, to merge with.
+    pub written: bool,
+    /// The new version, or the latest one on a conflict (`None`: no card).
+    pub card: Option<crate::core::card::Card>,
+}
+
+/// Find or create the workspace and session of a project.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveProjectRequest {
+    /// Project key computed by the client (see
+    /// [`crate::workspace::WorkspaceProject::key`]).
+    pub key: String,
+    /// Display name of a new workspace and session.
+    pub name: String,
+    /// Name of the workspace to put a new project in (created if missing).
+    pub workspace: Option<String>,
+    /// The client asking, for the logs.
+    pub client: Option<String>,
+}
+
+/// The workspace and session of a project.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolveProjectResponse {
+    /// Workspace the key is bound to.
+    pub workspace_id: Uuid,
+    /// Session of the project in that workspace.
+    pub session_id: Uuid,
+    /// Whether this call bound the key (created the workspace or attached
+    /// the key to an existing one).
+    pub created: bool,
+}

@@ -15,16 +15,16 @@ We appreciate your interest in contributing to Post-Cortex! This document provid
    ```bash
    git clone https://github.com/julymetodiev/post-cortex.git
    cd post-cortex
-   cargo build --features embeddings
+   cargo build
    ```
 
 3. **Running Tests**
    ```bash
    # Run all tests
-   cargo test --features embeddings
+   cargo test
    
    # Run with specific output
-   cargo test --features embeddings -- --nocapture
+   cargo test -- --nocapture
    ```
 
 4. **Building Documentation**

@@ -1,0 +1,104 @@
+syntax = "proto3";
+package pcx.skills.v1;
+
+import "google/protobuf/timestamp.proto";
+import "pcx_module.proto";
+
+// The skills (ARCHITECTURE section 8): a library of instructions in
+// Markdown, each one every agent's MCP prompt of its name.
+service Skills {
+  // Add a skill to the library: what it is for and its instructions in
+  // Markdown. Every agent then has it as an MCP prompt of its name.
+  rpc AddSkill(AddSkillRequest) returns (SkillRecord);
+  // Change a skill from the version you read; what you leave out stays.
+  // Its name does not change.
+  rpc UpdateSkill(UpdateSkillRequest) returns (SkillRecord);
+  // The skills of the library, by name: each one's description, the tools
+  // it needs and its version.
+  rpc ListSkills(ListSkillsRequest) returns (SkillList);
+  // One skill with its instructions.
+  rpc GetSkill(GetSkillRequest) returns (SkillRecord);
+}
+
+// A skill (document skills/skill, titled by name); its instructions are
+// the document's text.
+message Skill {
+  // Its name, unique in the library: its prompt's name (1 to 64 of a-z,
+  // 0-9 and -).
+  string name = 1;
+  // What it is for: its prompt's description.
+  string description = 2;
+  // The tools it needs, by name.
+  repeated string tools = 3;
+}
+
+// A skill as the library keeps it.
+message SkillRecord {
+  // Its document's id.
+  string id = 1;
+  // Its version: a change names it.
+  uint64 version = 2;
+  // The skill.
+  Skill skill = 3;
+  // Its instructions, in Markdown.
+  string instructions = 4;
+  // When it was last changed.
+  google.protobuf.Timestamp updated_at = 5;
+  // Who changed it last; unset: unknown.
+  optional string author = 6;
+}
+
+// Add a skill.
+message AddSkillRequest {
+  // The skill's name: 1 to 64 of a-z, 0-9 and -; its prompt's name.
+  string name = 1;
+  // What it is for, in a line.
+  string description = 2;
+  // What to do, in Markdown; a script goes in a code block, run with the
+  // tools it needs.
+  string instructions = 3;
+  // The tools it needs, by name (e.g. bash, to run a script written in its
+  // instructions).
+  repeated string tools = 4;
+}
+
+// The tools a skill needs.
+message ToolNames {
+  // By name.
+  repeated string names = 1;
+}
+
+// Change a skill.
+message UpdateSkillRequest {
+  // The skill's name.
+  string name = 1;
+  // The version you read: a change since then is a conflict.
+  uint64 version = 2;
+  // Its new description; unset: unchanged.
+  optional string description = 3;
+  // Its new instructions, in Markdown; unset: unchanged.
+  optional string instructions = 4;
+  // The tools it needs now; unset: unchanged.
+  ToolNames tools = 5;
+}
+
+// The skills of the library.
+message ListSkillsRequest {}
+
+// The skills, by name.
+message SkillList {
+  // The skills.
+  repeated SkillRecord skills = 1;
+}
+
+// One skill.
+message GetSkillRequest {
+  // The skill's name.
+  string name = 1;
+}
+
+// The skills' settings: the workspace their library lives in.
+message SkillsConfig {
+  // The workspace whose documents hold the skills.
+  string workspace_id = 1 [(pcx.module.v1.setting) = { title: "Library workspace", required: true, workspace: true }];
+}

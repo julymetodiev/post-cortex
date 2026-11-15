@@ -1,0 +1,74 @@
+{
+  "description": "post-cortex memory hooks: rules on every prompt, cards on session start, context re-injected after compaction, file memory before edits, a Stop check for unlogged changes, and conversation capture when it is on in ~/.post-cortex/config.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}\"/hooks/pcx-compact-reinject.py"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}\"/hooks/pcx-card.py"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|mcp__.*__(edit_symbols|insert_after|edit_lines|replace_text|write_file|edit|write)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}\"/hooks/pcx-file-context.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|mcp__.*__(edit_symbols|insert_after|edit_lines|replace_text|write_file|edit|write)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}\"/hooks/pcx-stop-check.py --remind"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}\"/hooks/pcx-stop-check.py"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}\"/hooks/pcx-capture.py"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}\"/hooks/pcx-banner.py"
+          }
+        ]
+      }
+    ]
+  }
+}

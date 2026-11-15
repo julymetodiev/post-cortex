@@ -1,0 +1,52 @@
+[package]
+name = "pcx-workflow"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The pcx workflow module: graphs of steps over the tools of every module, checked against their messages, kept in memory's documents."
+keywords = ["pcx", "workflow", "cel", "automation"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-workflow"
+
+[[bin]]
+name = "pcx-workflow"
+path = "src/main.rs"
+
+[dependencies]
+pcx-module-api.workspace = true
+pcx-documents.workspace = true
+pcx-approval.workspace = true
+pcx-expr.workspace = true
+# Its package, pcx.workflow.v1.
+post-cortex-proto.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+# The modules' messages, by their descriptors.
+prost-reflect.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+parking_lot.workspace = true
+tracing.workspace = true
+tokio-util.workspace = true
+# A blob's chunks, and the module's gRPC service.
+tokio-stream.workspace = true
+tonic.workspace = true
+chrono.workspace = true
+# A data block's items evaluated over the cores.
+rayon.workspace = true
+# A model's answer and the JSON of Struct fields.
+serde_json.workspace = true
+# The bus's payloads (the module API's well-known types).
+pbjson-types.workspace = true
+# A dry run's blobs, named as memory names them.
+sha2.workspace = true
+
+[dev-dependencies]
+# Its templates are made workflows and checked against its tools.
+pcx-discord.workspace = true
+
+[lints]
+workspace = true

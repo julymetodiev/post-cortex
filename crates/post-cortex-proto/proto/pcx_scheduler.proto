@@ -1,0 +1,251 @@
+syntax = "proto3";
+package pcx.scheduler.v1;
+
+import "google/protobuf/timestamp.proto";
+import "pcx_module.proto";
+import "pcx_workflow.proto";
+
+// Work at set times (ARCHITECTURE section 8, operations, W28): jobs that
+// run a script under the sandbox, add a board task or run a workflow
+// (docs/modules/workflow.md), and their runs.
+service Scheduler {
+  // Add a job; its name is unique.
+  rpc AddJob(AddJobRequest) returns (JobRecord);
+  // Change a job from the version read.
+  rpc UpdateJob(UpdateJobRequest) returns (JobRecord);
+  // The jobs, each with its last run and when it is due next.
+  rpc ListJobs(ListJobsRequest) returns (JobList);
+  // Remove a job; its runs are kept.
+  rpc RemoveJob(JobRequest) returns (RemoveJobResponse);
+  // Run a job now, once, whatever its time; answers the run.
+  rpc RunJob(JobRequest) returns (RunRecord);
+  // A job's runs, the newest first.
+  rpc ListRuns(ListRunsRequest) returns (RunList);
+  // Whether the job of a name runs as it should, for who watches it from
+  // outside (the daemon's `GET /health/jobs/{name}`): the job of that name
+  // in whichever workspace has it.
+  rpc JobHealth(JobHealthRequest) returns (JobHealthAnswer);
+}
+
+// ------------------------------------------------------------- settings
+
+// The scheduler's settings.
+message SchedulerConfig {
+  // The workspace its jobs and runs are kept in.
+  string workspace_id = 1 [(pcx.module.v1.setting) = { title: "Workspace", required: true, workspace: true }];
+  // PATH of its scripts; empty: the sandbox's default.
+  string path = 2 [(pcx.module.v1.setting) = { title: "PATH" }];
+}
+
+// ------------------------------------------------------------ documents
+
+// A job (document scheduler/job, titled by name).
+message Job {
+  // Its name: 1 to 64 of a-z, 0-9, '-', unique.
+  string name = 1;
+  // When it runs.
+  oneof when {
+    // At the times of a cron expression.
+    Cron cron = 2;
+    // Every this many seconds, at least 60.
+    uint32 every_seconds = 3;
+  }
+  // A paused job does not run at its times (`RunJob` still runs it).
+  bool paused = 4;
+  // What it does.
+  oneof does {
+    // Run a program under the sandbox.
+    Script script = 5;
+    // Add a task to a board.
+    TaskTemplate task = 6;
+    // Run a workflow (its `schedule` trigger).
+    WorkflowAction workflow = 8;
+  }
+  // Was `deliver` (a channel destination told how its runs end): a
+  // workflow tells a channel itself (`channel_send`, owner 2026-11-11).
+  reserved 7;
+  reserved "deliver";
+}
+
+// The times of a cron expression.
+message Cron {
+  // Five fields: minute, hour, day of month, month, day of week.
+  string expression = 1;
+  // The IANA time zone it is read in, e.g. Europe/Sofia; empty: UTC.
+  string time_zone = 2;
+}
+
+// A program a job runs.
+message Script {
+  // The program: a name on the sandbox's PATH, or a path.
+  string program = 1;
+  // Its arguments.
+  repeated string args = 2;
+  // Longest it may run, in seconds; 0: 300.
+  uint32 timeout_seconds = 3;
+}
+
+// A workflow a job runs.
+message WorkflowAction {
+  // The workflow's name.
+  string name = 1;
+  // Its input, by the input's fields.
+  pcx.workflow.v1.Map input = 2;
+}
+
+// A task a job adds.
+message TaskTemplate {
+  // The workspace of its board.
+  string workspace_id = 1;
+  // The board, by id.
+  string board = 2;
+  // Its title.
+  string title = 3;
+  // What it is about, in Markdown.
+  string text = 4;
+  // Who works on it (a member the team wakes); empty: no one.
+  string assignee = 5;
+  // Its labels.
+  repeated string labels = 6;
+}
+
+// How a run ended.
+enum Outcome {
+  // Not given.
+  OUTCOME_UNSPECIFIED = 0;
+  // It runs.
+  OUTCOME_RUNNING = 1;
+  // It did what it does (a script that exited 0, a task added, a
+  // workflow's run started).
+  OUTCOME_OK = 2;
+  // It failed: its result says why.
+  OUTCOME_FAILED = 3;
+  // It was due while its job ran: not run.
+  OUTCOME_SKIPPED = 4;
+}
+
+// A job's run (document scheduler/run, titled by its job's name).
+message Run {
+  // Its job, by id.
+  string job = 1;
+  // Its job's name then.
+  string name = 2;
+  // When it was due; unset: run by hand.
+  google.protobuf.Timestamp due = 3;
+  // When it started.
+  google.protobuf.Timestamp started = 4;
+  // When it ended; unset: it runs.
+  google.protobuf.Timestamp ended = 5;
+  // How it ended.
+  Outcome outcome = 6;
+  // For a script: its exit code; unset: it did not exit by itself (a
+  // timeout, a signal) or is no script.
+  optional int32 exit_code = 7;
+  // For a script: the tail of its output; for a task: the task's id; for
+  // a workflow: its run's id; for a failure: why.
+  string result = 8;
+  // Was `told` (whether the job's `deliver` destination was told).
+  reserved 9;
+  reserved "told";
+}
+
+// ---------------------------------------------------------------- calls
+
+// A job as the scheduler keeps it.
+message JobRecord {
+  // Its document's id.
+  string id = 1;
+  // Its version: a change names it.
+  uint64 version = 2;
+  // The job.
+  Job job = 3;
+  // When it was last changed.
+  google.protobuf.Timestamp updated_at = 4;
+  // Its last run; unset: none yet.
+  RunRecord last_run = 5;
+  // When it is due next; unset: paused, or no time comes.
+  google.protobuf.Timestamp next = 6;
+}
+
+// A run as the scheduler keeps it.
+message RunRecord {
+  // Its document's id.
+  string id = 1;
+  // The run.
+  Run run = 2;
+}
+
+// Add a job.
+message AddJobRequest {
+  // The job.
+  Job job = 1;
+}
+
+// Change a job.
+message UpdateJobRequest {
+  // The job, by id.
+  string id = 1;
+  // The version of the job you read: a change since then is a conflict.
+  uint64 version = 2;
+  // The job as it is to be.
+  Job job = 3;
+}
+
+// The jobs.
+message ListJobsRequest {}
+
+// Jobs.
+message JobList {
+  // The jobs, by name.
+  repeated JobRecord jobs = 1;
+}
+
+// One job.
+message JobRequest {
+  // The job, by id.
+  string id = 1;
+}
+
+// A job removed.
+message RemoveJobResponse {}
+
+// A job's runs.
+message ListRunsRequest {
+  // The job, by id.
+  string job = 1;
+  // At most this many; 0: 20.
+  uint32 limit = 2;
+}
+
+// Runs.
+message RunList {
+  // The runs, the newest first.
+  repeated RunRecord runs = 1;
+}
+
+// A job to ask about.
+message JobHealthRequest {
+  // The job's name.
+  string name = 1;
+}
+
+// How a job stands for who watches it from outside.
+enum Health {
+  // Not given.
+  HEALTH_UNSPECIFIED = 0;
+  // It runs on time.
+  HEALTH_OK = 1;
+  // It is paused: it does not run at its times.
+  HEALTH_PAUSED = 2;
+  // A time of its schedule passed more than 15 minutes ago and no run of
+  // it since then succeeded or still runs.
+  HEALTH_LATE = 3;
+}
+
+// How a job stands.
+message JobHealthAnswer {
+  // How.
+  Health health = 1;
+  // In words, for a person who reads the probe.
+  string why = 2;
+}

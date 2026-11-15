@@ -4,25 +4,41 @@
 //! Pure domain primitives shared by every post-cortex crate.
 //!
 //! After Phase 3 the orchestrator (`memory_system`, `content_vectorizer`,
-//! `semantic_query_engine`, `query_cache`, `context_assembly`,
+//! `query_cache`, `context_assembly`,
 //! `scoring`, `performance`) lives in `post-cortex-memory`; the
 //! embedding engines + HNSW index live in `post-cortex-embeddings`; the
 //! storage backends live in `post-cortex-storage`. What remains here is
 //! transport-/IO-free domain logic.
 
-/// Generic LRU cache primitives used across the workspace.
-pub mod cache;
+/// Blobs: the bytes of images documents name, by their SHA-256.
+pub mod blob;
 
 /// Project and user cards: small versioned markdown documents put in front
 /// of every session.
 pub mod card;
 
+/// An agent's conversation: who asked, and how its newest turn stands.
+pub mod conversation;
+
+/// Kinds of vectorised content (`ContentKind`).
+pub mod content;
+
 /// Context-update data model — `ContextUpdate`, `EntityData`,
 /// `EntityRelationship`, `UpdateType`, and supporting types.
 pub mod context_update;
 
-/// Typed system error hierarchy and `Result<T>` alias.
-pub mod error;
+/// Documents of modules: versioned data a module keeps in a workspace.
+pub mod document;
+
+/// The organisation's bus: the events modules emit, in one ordered log.
+pub mod event;
+
+/// Radar dismissals: radar items a workspace set aside.
+pub mod dismissal;
+
+/// Source freshness: source references, freshness checks and cascade
+/// reports (the freshness port's types).
+pub mod freshness;
 
 /// Raw conversation turns: the append-only message stream that client
 /// hooks capture next to the structured context updates.
@@ -31,5 +47,5 @@ pub mod message;
 /// Structured projection types over a session's update history.
 pub mod structured_context;
 
-/// Retry + timeout helpers (`with_storage_timeout`, `with_mcp_timeout`).
-pub mod timeout_utils;
+/// Wire and stored names of domain enums: one codec, strict parsing.
+pub mod wire;

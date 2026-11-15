@@ -1,0 +1,32 @@
+[package]
+name = "pcx-documents"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "A pcx module's documents in memory: the port, typed reads and writes, and its adapter over memory's manage_document through the host handle."
+keywords = ["pcx", "documents", "modules"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-documents"
+
+[dependencies]
+pcx-module-api.workspace = true
+# memory's pcx.v1 documents and sessions, their client (W23).
+post-cortex-proto.workspace = true
+tonic.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+# An in-memory filter reads the data with the module's descriptors.
+prost-reflect.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
+# A log's days.
+chrono.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

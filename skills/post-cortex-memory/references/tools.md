@@ -16,7 +16,7 @@ Nine tools. IDs are UUID strings. Optional fields can be omitted.
 
 ## session
 
-`action` (required): `create` | `list` | `load` | `search` | `update_metadata` | `delete`
+`action` (required): `create` | `list` | `load` | `search` | `update_metadata` | `delete` | `delete_message` | `delete_messages` | `resolve_project`
 
 | Action | Fields |
 |---|---|
@@ -26,23 +26,35 @@ Nine tools. IDs are UUID strings. Optional fields can be omitted.
 | `search` | `query` (matches name / description) |
 | `update_metadata` | `session_id`, `name` and/or `description` (keeps `created_at`) |
 | `delete` | `session_id` — permanent: updates, graph and embeddings |
+| `delete_message` | `session_id`, `seq` (the `<n>` of the turn's `message:<n>` content id): deletes one captured turn and its vectors. Returns `deleted`, `remaining` |
+| `delete_messages` | `session_id`: deletes the session's whole captured message stream; its records stay. Returns `deleted`, `remaining` |
+| `resolve_project` | `key`, `name`, optional `workspace`: the workspace and session of a project, created on first use. `key`: the `origin` remote without scheme, user and `.git`, host lowercased (`github.com/owner/repo`), else `local:<16 hex of sha256 of the git root or directory>`. A new key gets a workspace and session named `name`, or a session in the workspace named `workspace`. Returns `workspace_id`, `session_id`, `created` (false when the key was known) |
 
 ## manage_workspace
 
-`action` (required): `create` | `list` | `get` | `delete` | `add_session` | `remove_session` | `get_card` | `update_card`
+`action` (required): `create` | `list` | `get` | `update` | `archive` | `unarchive` | `delete` | `add_session` | `remove_session` | `get_card` | `update_card` | `dismiss_radar_item` | `restore_radar_item` | `list_radar_dismissals`
 
 | Action | Fields |
 |---|---|
 | `create` | `name`, `description` |
-| `list` | — |
+| `list` | optional `include_archived` (archived workspaces are left out by default) |
 | `get` | `workspace_id` |
+| `update` | `workspace_id`, `name` and/or `description` (name 1 to 200 characters, not another workspace's) |
+| `archive` / `unarchive` | `workspace_id`: an archived workspace keeps its sessions and data and leaves `list`. Returns `changed` |
 | `delete` | `workspace_id` (sessions are kept) |
 | `add_session` | `workspace_id`, `session_id`, `role`: `primary` \| `related` \| `dependency` \| `shared` |
 | `remove_session` | `workspace_id`, `session_id` |
 | `get_card` | `workspace_id` (project card) or `card: "user"`; optional `history` (older versions) |
 | `update_card` | `workspace_id` or `card: "user"`, `content` (whole new text, ≤ 2 KB), `expected_version` (the version you read; 0 for a new card); optional `author` (default: as for `update_conversation_context`) |
+| `dismiss_radar_item` | `workspace_id`, `kind`, `key`; optional `author`: hides the item from the `radar` view of the workspace and of its member sessions |
+| `restore_radar_item` | `workspace_id`, `kind`, `key`: shows it again. Returns `existed` |
+| `list_radar_dismissals` | `workspace_id` |
 
 Cards: one markdown note per project (stack, conventions, current goals) and one for the user (preferences), put in front of every session by the SessionStart hook and at the top of `assemble_context`. Every update is a new version. If the card changed since `expected_version`, nothing is written and the reply carries the latest version: merge and retry.
+
+Radar items: `kind` and `key` as the `radar` view lists them: `unsolved_problem` and `stale_entity` (entity name), `decision_without_rationale` (record id), `open_question` (question text), `alias_candidate` (`<name>|<of>`). Dismiss what is fine as it is; the radar then shows what still needs attention.
+
+Export and import of whole sessions or workspaces, with their cards and captured messages (the `pcx export` file format), are gRPC only (`Export`, `Import`), not MCP tools.
 
 ## semantic_search
 
@@ -85,7 +97,7 @@ Bulk mode: `session_id`, `updates: [{interaction_type, content, entities, relati
 - `valid_from`: when the fact started to hold, if not now (RFC 3339 or `YYYY-MM-DD`). `confidence`: 0..1.
 - Entity names resolve: spellings that differ only in case, spaces, `-` or `_` are one entity ("SurrealDB", "surreal-db"); other synonyms can be merged with `manage_entity` `merge`.
 
-Response (MCP): a success message — single mode "Context updated successfully", bulk mode a success/error count. No entry ID is returned; look it up later via `semantic_search` (`content_id`). An error message explains what was rejected (missing entities/relations, unknown relation type, bad `code_reference`).
+Response (MCP): a success message — single mode "Context updated successfully", bulk mode a success/error count. The reply carries the record's `entry_id` (bulk: one per item, by `index`), the id `supersedes` and `forget` take. An error message explains what was rejected (missing entities/relations, unknown relation type, bad `code_reference`).
 
 ## assemble_context
 
@@ -97,7 +109,7 @@ Response (MCP): a success message — single mode "Context updated successfully"
 | `sources` | `records` (default) \| `messages` \| `all`; with messages, the captured turns that match the query come as conversation excerpts (with the turns around them); `all` gives the records half the budget |
 | `select` / `select_map` | e.g. `$.formatted_text` to get only the prompt-ready block |
 
-For records it uses no embeddings: matches entity names in the query, expands one hop, ranks recent updates by entity matches and recency. Returns `items` (excerpts have `source: Conversation`), `entity_context` (`DirectMention` / `GraphNeighbor{via, relation}`), `impact` (reverse dependencies), `total_tokens`, `formatted_text`.
+In this order, within `token_budget`: the user and project cards; the entities the query names, one hop around them and what depends on them (at most half of what the cards leave); then the records `semantic_search` ranks for the query (only records that still hold, each as its passage for the query). Returns `items` (excerpts have `source: Conversation`), `entity_context` (`DirectMention` / `GraphNeighbor{via, relation}`), `impact` (reverse dependencies), `total_tokens`, `formatted_text`.
 
 ## query_conversation_context
 
@@ -127,18 +139,16 @@ For records it uses no embeddings: matches entity names in the query, expands on
 | `analyze_entity_importance` | — |
 | `assemble_context` | `query`, `token_budget` |
 
-Graph views (JSON, the same as the daemon's REST `/api/graph`... routes); add `workspace_id` to any of them to view the whole workspace:
+Graph views (JSON, also over gRPC `GetGraphView`); add `workspace_id` to any of them to view the whole workspace:
 
 | query_type | parameters | returns |
 |---|---|---|
-| `graph` | `limit` (default 100), `at` | most important entities (`importance` 0..1, `aliases`, `community`) and the relations between them, each with `valid_from` / `valid_to` and the records asserting it; `at` shows the graph as it stood then |
 | `entity` | `entity`, `limit` | one entity by name or alias: relations, the records mentioning it (newest first), its decisions |
 | `impact` | `entity`, `depth` (default 3), `limit` | who depends on it, hop by hop, and the valid decisions, requirements and problems about them: a risk report before changing it |
 | `file` | `path`, `depth`, `limit` | problems solved in a source file, decisions about it, the entities naming it and what depends on them |
-| `timeline` | `from`, `to`, `limit` | records written and ended, relations added and ended, in time order |
 | `topics` | `limit`, `per_topic` | entity communities with their central entities and key decisions: a summary of the project by topic |
 | `lineage` | `entity`, `depth` | "why did we choose X": problem → decision → consequences in time order |
-| `radar` | `limit` | unsolved problems, decisions without rationale, open questions, entities untouched for 90 days, possible aliases |
+| `radar` | `limit`, `include_dismissed` | unsolved problems, decisions without rationale, open questions, entities untouched for 90 days, possible aliases; items dismissed with `manage_workspace` `dismiss_radar_item` are left out (listed under `dismissed`) unless `include_dismissed` is `true` |
 
 ## get_structured_summary
 

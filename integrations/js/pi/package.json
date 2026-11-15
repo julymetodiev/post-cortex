@@ -1,0 +1,63 @@
+{
+  "name": "@post-cortex/pi",
+  "version": "0.1.0",
+  "description": "post-cortex memory for the Pi coding agent: project and user cards in the system prompt, file memory after edits, optional turn capture",
+  "license": "MIT",
+  "author": "Chronicle Labs Ltd.",
+  "homepage": "https://post-cortex.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/julymetodiev/post-cortex.git",
+    "directory": "integrations/js/pi"
+  },
+  "bugs": "https://github.com/julymetodiev/post-cortex/issues",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "post-cortex",
+    "memory",
+    "mcp",
+    "agents"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/extension.js",
+    "dist/extension.d.ts",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test build-test/test/*.test.js",
+    "clean": "rm -rf dist build-test"
+  },
+  "dependencies": {
+    "@post-cortex/plugin-core": "0.1.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.3.0"
+  }
+}

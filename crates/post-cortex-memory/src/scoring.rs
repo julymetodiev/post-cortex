@@ -9,7 +9,7 @@
 //! without modifying the core search logic.
 
 use chrono::{DateTime, Utc};
-use post_cortex_embeddings::VectorMetadata;
+use post_cortex_ports::VectorMetadata;
 
 /// Trait for adjusting search result scores based on various factors
 ///
@@ -108,11 +108,6 @@ impl TemporalDecayAdjuster {
     pub fn new(lambda: f32, now: DateTime<Utc>) -> Self {
         Self { lambda, now }
     }
-
-    /// Create adjuster with current time
-    pub fn with_current_time(lambda: f32) -> Self {
-        Self::new(lambda, Utc::now())
-    }
 }
 
 impl ScoreAdjuster for TemporalDecayAdjuster {
@@ -137,88 +132,6 @@ impl ScoreAdjuster for TemporalDecayAdjuster {
     }
 }
 
-/// Composite score adjuster - combines multiple adjusters sequentially
-///
-/// This adjuster applies multiple scoring strategies in sequence, with each
-/// adjuster receiving the output of the previous one. This allows you to
-/// compose complex scoring behaviors from simple, reusable components.
-///
-/// # Example
-///
-/// ```ignore
-/// use post_cortex::core::scoring::{CompositeScoreAdjuster, TemporalDecayAdjuster};
-/// use chrono::Utc;
-///
-/// // Combine temporal decay with custom popularity boost
-/// let composite = CompositeScoreAdjuster::new(vec![
-///     Box::new(TemporalDecayAdjuster::new(0.5, Utc::now())),
-///     Box::new(PopularityBoostAdjuster { boost_factor: 0.2 }),
-/// ]);
-///
-/// let adjusted_score = composite.adjust(0.8, &metadata);
-/// // First applies temporal decay, then popularity boost
-/// ```
-pub struct CompositeScoreAdjuster {
-    /// The adjusters to apply, in order
-    adjusters: Vec<Box<dyn ScoreAdjuster>>,
-}
-
-impl CompositeScoreAdjuster {
-    /// Create a new composite adjuster from a list of adjusters
-    ///
-    /// Adjusters are applied in the order they appear in the vector.
-    ///
-    /// # Arguments
-    /// * `adjusters` - Vector of boxed adjusters to apply sequentially
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let composite = CompositeScoreAdjuster::new(vec![
-    ///     Box::new(TemporalDecayAdjuster::new(0.5, Utc::now())),
-    ///     Box::new(QualityWeightAdjuster::new(0.3)),
-    /// ]);
-    /// ```
-    pub fn new(adjusters: Vec<Box<dyn ScoreAdjuster>>) -> Self {
-        Self { adjusters }
-    }
-
-    /// Create an empty composite adjuster (no adjustments)
-    ///
-    /// This is useful when you want to conditionally add adjusters.
-    pub fn empty() -> Self {
-        Self {
-            adjusters: Vec::new(),
-        }
-    }
-
-    /// Add an adjuster to the composite
-    ///
-    /// # Arguments
-    /// * `adjuster` - The adjuster to add
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let mut composite = CompositeScoreAdjuster::empty();
-    /// composite.add(Box::new(TemporalDecayAdjuster::new(0.5, Utc::now())));
-    /// composite.add(Box::new(PopularityBoostAdjuster::new(0.2)));
-    /// ```
-    pub fn add(&mut self, adjuster: Box<dyn ScoreAdjuster>) {
-        self.adjusters.push(adjuster);
-    }
-}
-
-impl ScoreAdjuster for CompositeScoreAdjuster {
-    fn adjust(&self, base_score: f32, metadata: &VectorMetadata) -> f32 {
-        // Apply each adjuster in sequence, feeding the output of one
-        // into the input of the next
-        self.adjusters.iter().fold(base_score, |score, adjuster| {
-            adjuster.adjust(score, metadata)
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,7 +147,7 @@ mod tests {
             source: "session123".to_string(),
             content_type: "qa".to_string(),
             timestamp: now - Duration::days(365), // 1 year old
-            text: "test content".to_string(),
+            text: "test content".into(),
             metadata: std::collections::HashMap::new(),
         };
 
@@ -252,7 +165,7 @@ mod tests {
             source: "session123".to_string(),
             content_type: "qa".to_string(),
             timestamp: now, // Fresh content
-            text: "test content".to_string(),
+            text: "test content".into(),
             metadata: std::collections::HashMap::new(),
         };
 
@@ -270,7 +183,7 @@ mod tests {
             source: "session123".to_string(),
             content_type: "qa".to_string(),
             timestamp: now - Duration::days(365), // 1 year old
-            text: "test content".to_string(),
+            text: "test content".into(),
             metadata: std::collections::HashMap::new(),
         };
 
@@ -290,7 +203,7 @@ mod tests {
             source: "session123".to_string(),
             content_type: "qa".to_string(),
             timestamp: now - Duration::days(365), // 1 year old
-            text: "test content".to_string(),
+            text: "test content".into(),
             metadata: std::collections::HashMap::new(),
         };
 
@@ -310,7 +223,7 @@ mod tests {
             source: "session123".to_string(),
             content_type: "qa".to_string(),
             timestamp: now + Duration::days(30), // Future timestamp
-            text: "test content".to_string(),
+            text: "test content".into(),
             metadata: std::collections::HashMap::new(),
         };
 
@@ -318,95 +231,5 @@ mod tests {
         // Future content should get decay_factor > 1.0 (boost)
         // days_since will be 0 (max(0, -30))
         assert!((adjusted - 0.8).abs() < 0.01); // No decay for future content
-    }
-
-    // A simple test adjuster that always multiplies by a fixed factor
-    struct BoostAdjuster {
-        factor: f32,
-    }
-
-    impl ScoreAdjuster for BoostAdjuster {
-        fn adjust(&self, base_score: f32, _metadata: &VectorMetadata) -> f32 {
-            base_score * self.factor
-        }
-    }
-
-    #[test]
-    fn test_composite_adjuster_empty() {
-        let composite = CompositeScoreAdjuster::empty();
-
-        let metadata = VectorMetadata {
-            id: "test".to_string(),
-            source: "session123".to_string(),
-            content_type: "qa".to_string(),
-            timestamp: Utc::now(),
-            text: "test content".to_string(),
-            metadata: std::collections::HashMap::new(),
-        };
-
-        let adjusted = composite.adjust(0.8, &metadata);
-        assert_eq!(adjusted, 0.8); // No adjusters, score unchanged
-    }
-
-    #[test]
-    fn test_composite_adjuster_single() {
-        let adjuster = BoostAdjuster { factor: 0.5 };
-        let composite = CompositeScoreAdjuster::new(vec![Box::new(adjuster)]);
-
-        let metadata = VectorMetadata {
-            id: "test".to_string(),
-            source: "session123".to_string(),
-            content_type: "qa".to_string(),
-            timestamp: Utc::now(),
-            text: "test content".to_string(),
-            metadata: std::collections::HashMap::new(),
-        };
-
-        let adjusted = composite.adjust(0.8, &metadata);
-        assert_eq!(adjusted, 0.4); // 0.8 * 0.5
-    }
-
-    #[test]
-    fn test_composite_adjuster_multiple() {
-        let now = Utc::now();
-        let composite = CompositeScoreAdjuster::new(vec![
-            // First adjuster: decay by ~50% (e^(-0.693) ≈ 0.5)
-            Box::new(TemporalDecayAdjuster::new(0.693, now)),
-            // Second adjuster: boost by 2.0x
-            Box::new(BoostAdjuster { factor: 2.0 }),
-        ]);
-
-        let metadata = VectorMetadata {
-            id: "test".to_string(),
-            source: "session123".to_string(),
-            content_type: "qa".to_string(),
-            timestamp: now - Duration::days(365), // 1 year old
-            text: "test content".to_string(),
-            metadata: std::collections::HashMap::new(),
-        };
-
-        let adjusted = composite.adjust(0.8, &metadata);
-        // First: decay from 1 year with lambda=0.693: 0.8 * 0.5 = 0.4
-        // Then: boost by 2.0x: 0.4 * 2.0 = 0.8
-        assert!((adjusted - 0.8).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_composite_adjuster_add() {
-        let mut composite = CompositeScoreAdjuster::empty();
-        composite.add(Box::new(BoostAdjuster { factor: 0.5 }));
-        composite.add(Box::new(BoostAdjuster { factor: 0.5 }));
-
-        let metadata = VectorMetadata {
-            id: "test".to_string(),
-            source: "session123".to_string(),
-            content_type: "qa".to_string(),
-            timestamp: Utc::now(),
-            text: "test content".to_string(),
-            metadata: std::collections::HashMap::new(),
-        };
-
-        let adjusted = composite.adjust(0.8, &metadata);
-        assert_eq!(adjusted, 0.2); // 0.8 * 0.5 * 0.5
     }
 }

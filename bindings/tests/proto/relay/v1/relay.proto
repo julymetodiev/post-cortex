@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Julius ML
+// Licensed under the MIT License. See LICENSE at the workspace root.
+
+// The bindings' test (tests/bindings.rs): a module in Python or TS
+// (fixtures/relay_module.*) serving Relay, which calls Helper, a Rust module in the
+// host's process, through its host.
+syntax = "proto3";
+package test.relay.v1;
+
+service Relay {
+  // The text in capitals, as Helper writes it, with who called Relay.
+  rpc Upper(Text) returns (Text);
+  // Answers after `wait_ms`, whether its caller still waits.
+  rpc Wait(Text) returns (Text);
+  // Tries what `text` names (`spawn`, `connect`, `read:<path>`, `write:<path>`,
+  // `alloc:<MB>`, `files`, `pid`) and answers `allowed`, `refused: why` or what
+  // it found: what its sandbox lets it do (docs/modules/dynamic.md).
+  rpc Probe(Text) returns (Text);
+}
+
+service Helper {
+  // The text in capitals, with the module that called.
+  rpc Upper(Text) returns (Text);
+}
+
+// A text, and how long Wait waits.
+message Text {
+  // The text.
+  string text = 1;
+  // Milliseconds Wait waits before it answers.
+  uint32 wait_ms = 2;
+}

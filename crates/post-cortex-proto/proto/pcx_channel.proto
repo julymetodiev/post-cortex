@@ -1,0 +1,24 @@
+syntax = "proto3";
+package pcx.channel.v1;
+
+// A channel to people (ARCHITECTURE section 8, operations, W29): what the
+// webhooks, the scheduler and the ops module tell, sent to a destination
+// the channel module knows by name, so a sender names no platform.
+service Channel {
+  // Send a message.
+  rpc Send(SendRequest) returns (SendResponse);
+}
+
+// A message to send.
+message SendRequest {
+  // Where: a destination of the channel module's settings, by name.
+  string destination = 1;
+  // What, as plain text.
+  string text = 2;
+}
+
+// A message sent.
+message SendResponse {
+  // Its id on the platform.
+  string message_id = 1;
+}

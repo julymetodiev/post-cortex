@@ -8,18 +8,19 @@
 //! for every backend, in place of stopword lists. On LoCoMo dropping words on
 //! more than 20% of the records matches a hand-made English stopword list
 //! (fast-mode all@50 0.809 vs 0.812) at a third of its query cost, and works
-//! in any language.
+//! in any language. A word's share is of the records written in its script
+//! (Latin, Cyrillic, ...), so in a memory that is mostly English the
+//! Bulgarian "и" is still found common; in a memory of one script it is the
+//! share of all records.
 //!
-//! Postings are kept only with `VectorDbConfig::full_text_index`, for storage
+//! Postings are kept only when the database is created with them, for storage
 //! backends without full-text search (RocksDB; SurrealDB has a native BM25
 //! index). Scoring as SurrealDB's: k1 1.2, b 0.75, statistics over the whole
 //! index. Unlike SurrealDB's analyzer it does not fold accents.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use parking_lot::RwLock;
-
-use crate::text::tokens;
+use post_cortex_core::text::tokens;
 
 const K1: f32 = 1.2;
 const B: f32 = 0.75;
@@ -29,24 +30,70 @@ const MAX_QUERY_DF_SHARE: f32 = 0.2;
 /// every word.
 const MIN_PRUNED_DF: u32 = 10;
 
+/// Document frequencies and BM25 postings, keyed by slot.
+/// Adding or removing a text costs O(its distinct words).
 #[derive(Default)]
-struct Inner {
+pub struct TextIndex {
     /// Term -> number of records containing it.
     df: HashMap<String, u32>,
     /// Records indexed.
     docs: u32,
-    /// Term -> (vector id, term frequency in that vector's text); empty
-    /// unless postings are kept.
-    postings: HashMap<String, Vec<(u32, u32)>>,
-    /// Vector id -> number of words in its text (with postings only).
+    /// Script -> number of records with a word in it.
+    scripts: HashMap<Script, u32>,
+    /// Term -> slot -> term frequency in that slot's text.
+    postings: HashMap<String, HashMap<u32, u32>>,
+    /// Slot -> number of words in its text.
     lengths: HashMap<u32, u32>,
     total_length: u64,
 }
 
-/// Document frequencies, and BM25 postings when enabled, keyed by vector id.
-pub(super) struct TextIndex {
-    postings: bool,
-    inner: RwLock<Inner>,
+/// The writing system of a word, by its first letter; numbers and the
+/// scripts not named are [`Script::Other`], whose share is of all records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Script {
+    Latin,
+    Greek,
+    Cyrillic,
+    Armenian,
+    Hebrew,
+    Arabic,
+    Devanagari,
+    Thai,
+    Georgian,
+    Hangul,
+    Kana,
+    Han,
+    Other,
+}
+
+fn script(word: &str) -> Script {
+    let Some(c) = word.chars().find(|c| c.is_alphabetic()) else {
+        return Script::Other;
+    };
+    match u32::from(c) {
+        0x0041..=0x024F | 0x1E00..=0x1EFF => Script::Latin,
+        0x0370..=0x03FF | 0x1F00..=0x1FFF => Script::Greek,
+        0x0400..=0x052F | 0x1C80..=0x1C8F | 0x2DE0..=0x2DFF | 0xA640..=0xA69F => Script::Cyrillic,
+        0x0530..=0x058F => Script::Armenian,
+        0x0590..=0x05FF => Script::Hebrew,
+        0x0600..=0x06FF | 0x0750..=0x077F | 0x08A0..=0x08FF => Script::Arabic,
+        0x0900..=0x097F => Script::Devanagari,
+        0x0E00..=0x0E7F => Script::Thai,
+        0x10A0..=0x10FF => Script::Georgian,
+        0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7AF => Script::Hangul,
+        0x3040..=0x30FF => Script::Kana,
+        0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF => Script::Han,
+        _ => Script::Other,
+    }
+}
+
+/// The scripts of a record's words, other than [`Script::Other`].
+fn scripts_of(counts: &HashMap<String, u32>) -> HashSet<Script> {
+    counts
+        .keys()
+        .map(|t| script(t))
+        .filter(|s| *s != Script::Other)
+        .collect()
 }
 
 fn term_counts(text: &str) -> HashMap<String, u32> {
@@ -58,185 +105,102 @@ fn term_counts(text: &str) -> HashMap<String, u32> {
 }
 
 impl TextIndex {
-    /// Index that keeps BM25 postings only when `postings` is set.
-    pub(super) fn new(postings: bool) -> Self {
-        Self {
-            postings,
-            inner: RwLock::default(),
-        }
-    }
-
-    /// Whether BM25 search is available.
-    pub(super) fn has_postings(&self) -> bool {
-        self.postings
-    }
-
-    pub(super) fn add(&self, id: u32, text: &str) {
+    pub fn add(&mut self, slot: u32, text: &str) {
         let counts = term_counts(text);
-        let mut inner = self.inner.write();
-        inner.docs += 1;
-        for term in counts.keys() {
-            *inner.df.entry(term.clone()).or_default() += 1;
+        self.docs += 1;
+        for script in scripts_of(&counts) {
+            *self.scripts.entry(script).or_default() += 1;
         }
-        if !self.postings {
-            return;
+        for term in counts.keys() {
+            *self.df.entry(term.clone()).or_default() += 1;
         }
         let length: u32 = counts.values().sum();
         for (term, tf) in counts {
-            inner.postings.entry(term).or_default().push((id, tf));
+            self.postings.entry(term).or_default().insert(slot, tf);
         }
-        if let Some(old) = inner.lengths.insert(id, length) {
-            inner.total_length -= u64::from(old);
+        if let Some(old) = self.lengths.insert(slot, length) {
+            self.total_length -= u64::from(old);
         }
-        inner.total_length += u64::from(length);
+        self.total_length += u64::from(length);
     }
 
-    /// Remove `id`, indexed from `text` (the same text it was added with).
-    pub(super) fn remove(&self, id: u32, text: &str) {
+    /// Remove `slot`, indexed from `text` (the same text it was added with).
+    pub fn remove(&mut self, slot: u32, text: &str) {
         let counts = term_counts(text);
-        let mut inner = self.inner.write();
-        inner.docs = inner.docs.saturating_sub(1);
-        for term in counts.keys() {
-            if let Some(n) = inner.df.get_mut(term) {
+        self.docs = self.docs.saturating_sub(1);
+        for script in scripts_of(&counts) {
+            if let Some(n) = self.scripts.get_mut(&script) {
                 *n -= 1;
                 if *n == 0 {
-                    inner.df.remove(term);
+                    self.scripts.remove(&script);
                 }
             }
-            if let Some(list) = inner.postings.get_mut(term) {
-                list.retain(|&(v, _)| v != id);
+        }
+        for term in counts.keys() {
+            if let Some(n) = self.df.get_mut(term) {
+                *n -= 1;
+                if *n == 0 {
+                    self.df.remove(term);
+                }
+            }
+            if let Some(list) = self.postings.get_mut(term) {
+                list.remove(&slot);
                 if list.is_empty() {
-                    inner.postings.remove(term);
+                    self.postings.remove(term);
                 }
             }
         }
-        if let Some(old) = inner.lengths.remove(&id) {
-            inner.total_length -= u64::from(old);
+        if let Some(old) = self.lengths.remove(&slot) {
+            self.total_length -= u64::from(old);
         }
-    }
-
-    pub(super) fn clear(&self) {
-        *self.inner.write() = Inner::default();
     }
 
     /// The words of `query` worth searching for, deduplicated: those on more
-    /// than [`MAX_QUERY_DF_SHARE`] of the records (and more than
-    /// [`MIN_PRUNED_DF`]) are dropped.
-    pub(super) fn query_terms(&self, query: &str) -> Vec<String> {
+    /// than [`MAX_QUERY_DF_SHARE`] of the records written in their script
+    /// (and more than [`MIN_PRUNED_DF`]) are dropped.
+    pub fn query_terms(&self, query: &str) -> Vec<String> {
         let mut terms = tokens(query);
         terms.sort_unstable();
         terms.dedup();
-        let inner = self.inner.read();
-        let max_df = ((MAX_QUERY_DF_SHARE * inner.docs as f32) as u32).max(MIN_PRUNED_DF);
-        terms.retain(|t| inner.df.get(t).copied().unwrap_or(0) <= max_df);
+        terms.retain(|t| {
+            let docs = match script(t) {
+                Script::Other => self.docs,
+                script => self.scripts.get(&script).copied().unwrap_or(0),
+            };
+            let max_df = ((MAX_QUERY_DF_SHARE * docs as f32) as u32).max(MIN_PRUNED_DF);
+            self.df.get(t).copied().unwrap_or(0) <= max_df
+        });
         terms
     }
 
-    /// The `k` best vectors for `terms` by BM25, best first, among those
-    /// `keep` accepts. Empty without postings.
-    pub(super) fn search(
-        &self,
-        terms: &[String],
-        k: usize,
-        keep: impl Fn(u32) -> bool,
-    ) -> Vec<(u32, f32)> {
-        let inner = self.inner.read();
-        let docs = inner.lengths.len() as f32;
-        if terms.is_empty() || k == 0 || docs == 0.0 {
-            return Vec::new();
-        }
-        let avg_length = inner.total_length as f32 / docs;
-
+    /// The BM25 score for `terms` of every slot `keep` accepts that has
+    /// one of them, in no particular order. Empty without postings.
+    pub fn scores(&self, terms: &[String], keep: impl Fn(u32) -> bool) -> HashMap<u32, f32> {
         let mut scores: HashMap<u32, f32> = HashMap::new();
+        let docs = self.lengths.len() as f32;
+        if terms.is_empty() || docs == 0.0 {
+            return scores;
+        }
+        let avg_length = self.total_length as f32 / docs;
         for term in terms {
-            let Some(list) = inner.postings.get(term) else {
+            let Some(list) = self.postings.get(term) else {
                 continue;
             };
             let df = list.len() as f32;
             let idf = ((docs - df + 0.5) / (df + 0.5) + 1.0).ln();
-            for &(id, tf) in list {
-                if !keep(id) {
+            for (&slot, &tf) in list {
+                if !keep(slot) {
                     continue;
                 }
-                let length = inner.lengths.get(&id).copied().unwrap_or(0) as f32;
+                let length = self.lengths.get(&slot).copied().unwrap_or(0) as f32;
                 let tf = tf as f32;
                 let norm = tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * length / avg_length));
-                *scores.entry(id).or_default() += idf * norm;
+                *scores.entry(slot).or_default() += idf * norm;
             }
         }
-        let mut ranked: Vec<(u32, f32)> = scores.into_iter().collect();
-        ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-        ranked.truncate(k);
-        ranked
+        scores
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn index() -> TextIndex {
-        let index = TextIndex::new(true);
-        index.add(1, "Decided to keep RocksDB for the local daemon");
-        index.add(
-            2,
-            "SurrealDB HNSW index and RocksDB column families, RocksDB tuning",
-        );
-        index.add(3, "Lunch plans for Friday");
-        index.add(4, "Решихме да ползваме базата SurrealDB");
-        index
-    }
-
-    fn search(index: &TextIndex, query: &str) -> Vec<u32> {
-        let terms = index.query_terms(query);
-        index
-            .search(&terms, 10, |_| true)
-            .into_iter()
-            .map(|r| r.0)
-            .collect()
-    }
-
-    #[test]
-    fn ranks_by_bm25_and_filters() {
-        let index = index();
-        let ranked = search(&index, "rocksdb tuning");
-        assert_eq!(ranked.first(), Some(&2), "{ranked:?}");
-        assert!(ranked.contains(&1) && !ranked.contains(&3));
-        let terms = index.query_terms("rocksdb");
-        assert_eq!(index.search(&terms, 10, |id| id == 1).len(), 1);
-        assert_eq!(search(&index, "базата"), [4]);
-    }
-
-    /// Words on most records are dropped from queries once the memory is
-    /// big enough for frequencies to mean something, in any language.
-    #[test]
-    fn common_words_are_dropped_by_frequency() {
-        let index = TextIndex::new(false);
-        for i in 0..40 {
-            index.add(i, &format!("jsem byl v práci číslo {i}"));
-        }
-        index.add(40, "jsem viděl kočku");
-        assert_eq!(index.query_terms("Viděl jsem kočku?"), ["kočku", "viděl"]);
-        assert!(
-            index.search(&["kočku".into()], 10, |_| true).is_empty(),
-            "no postings"
-        );
-
-        let small = TextIndex::new(false);
-        small.add(1, "jsem tady");
-        small.add(2, "jsem tam");
-        assert_eq!(small.query_terms("jsem tady"), ["jsem", "tady"]);
-    }
-
-    #[test]
-    fn removed_and_cleared_vectors_are_gone() {
-        let index = index();
-        index.remove(
-            2,
-            "SurrealDB HNSW index and RocksDB column families, RocksDB tuning",
-        );
-        assert_eq!(search(&index, "rocksdb"), [1]);
-        index.clear();
-        assert!(search(&index, "rocksdb").is_empty());
-    }
-}
+mod tests;

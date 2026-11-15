@@ -1,35 +1,24 @@
 {
   "hooks": {
-    "SessionStart": [
+    "PreToolUse": [
       {
-        "matcher": "compact",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pcx-compact-reinject.sh"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pcx-cargo-guard.py",
+            "statusMessage": "Checking cargo use"
+          },
           {
             "type": "command",
-            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pcx-stop-check.py bf52f62e-8e26-4e9e-8501-c42753d9a9ee"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "echo '[PCX] Session: bf52f62e-8e26-4e9e-8501-c42753d9a9ee | Rules: 1) Search PCX before answering code/arch questions 2) Log discoveries to PCX after'"
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pcx-nomad-guard.py",
+            "statusMessage": "Checking nomad use"
           }
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "rust-analyzer-lsp@claude-plugins-official": false
   }
 }

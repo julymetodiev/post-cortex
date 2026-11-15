@@ -1,5 +1,5 @@
 # Data and cache
-data/
+/data/
 *.csv
 *.html
 
@@ -39,6 +39,21 @@ tests/test_data_*
 target
 psx_examples
 scripts
+# Root scripts/ holds local helpers; only the CI checks are tracked.
+!/scripts/
+/scripts/*
+!/scripts/check-file-size.sh
+!/scripts/file-size-allowlist.txt
+!/scripts/check-architecture.sh
+!/scripts/architecture-budget.txt
+!/scripts/approved-crate-items.txt
+!/scripts/grpc-json-edges.txt
+!/scripts/proto-json-fields.awk
+# The bindings: their message code and their end-to-end test (docs/modules/dynamic.md).
+!/scripts/bindings-gen.sh
+!/scripts/test-bindings.sh
+# The one way to run cargo here (CLAUDE.md).
+!/scripts/cargo.sh
 GEMINI.md
 TODO.md
 PROJECT.md
@@ -52,3 +67,24 @@ test_data_*
 RELEASING.md
 history.txt
 .jm/
+
+# Python bytecode (integrations tests, hook templates)
+__pycache__/
+
+# Catalog packages ship these files; the generic rules above would drop them.
+!/integrations/*/scripts/
+!/integrations/cursor/mcp.json
+!/integrations/gemini/GEMINI.md
+
+# The bindings (docs/modules/dynamic.md): their environments and builds.
+node_modules/
+bindings/python/.venv/
+bindings/python/python/pcx_module/_core*.so
+bindings/ts/*.node
+__pycache__/
+
+# The pin of this checkout to its post-cortex session (owner 2026-11-06)
+.post-cortex.json
+
+# The owner's instructions for coding agents; not published (owner 2026-11-15)
+CLAUDE.md

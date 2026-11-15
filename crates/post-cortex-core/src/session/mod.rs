@@ -17,10 +17,11 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
-//! Session management types and storage components.
-//!
-//! Defines `ActiveSession` (the main mutable session object) and the
-//! fine-grained lock-free components used for concurrent access.
+//! Sessions: the session value (`ActiveSession`: metadata, records and
+//! the entity graph, with every other view derived from the records) and
+//! its metadata.
 pub mod active_session;
-/// Granular session components for fine-grained locking and lock-free access
+/// Point-in-time session snapshots
+pub mod checkpoint;
+/// Session metadata
 pub mod session_components;

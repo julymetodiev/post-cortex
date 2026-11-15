@@ -1,76 +1,86 @@
 // Copyright (c) 2025, 2026 Julius ML
 // Licensed under the MIT License. See LICENSE at the workspace root.
 
-//! Typed error hierarchy for `post-cortex-embeddings`.
-//!
-//! Public API on this crate returns [`Result<T>`] (aliased to
-//! `Result<T, Error>`). Internal helpers may still use `anyhow::Result`
-//! for ergonomic error context — the boundary functions wrap them with
-//! [`Error::External`].
-//!
-//! Variants:
-//! - [`Error::ModelLoad`] — failed to download or open the safetensors
-//!   model file (hf-hub network / disk / format issues).
-//! - [`Error::Tokenization`] — tokenizer JSON parse failure or
-//!   encoding mismatch.
-//! - [`Error::Inference`] — candle tensor op error during the forward
-//!   pass.
-//! - [`Error::Dimension`] — embedding dimension mismatch when an
-//!   external vector is fed into the wrong index.
-//! - [`Error::IndexFull`] — HNSW index reached its configured capacity.
-//! - [`Error::External`] — last-resort wrapper around `anyhow::Error`
-//!   for migrating call sites.
+//! The errors of `post-cortex-embeddings`: every public operation returns
+//! [`Result<T>`], with the kind a caller acts on.
 
 use thiserror::Error;
 
 /// Errors produced by [`crate`].
 #[derive(Debug, Error)]
 pub enum Error {
-    /// Failed to load the embedding model file (network / disk / format).
-    #[error("embedding model load failed: {0}")]
-    ModelLoad(String),
-
-    /// Tokeniser failed to parse its config or encode the input string.
+    /// The model could not be downloaded or opened.
+    #[error("loading model {model}: {reason}")]
+    ModelLoad {
+        /// The model id.
+        model: String,
+        /// What failed.
+        reason: String,
+    },
+    /// The model needs a feature this build was compiled without.
+    #[error("model {model} needs the `{feature}` feature, which this build lacks")]
+    FeatureDisabled {
+        /// The model.
+        model: String,
+        /// The missing feature.
+        feature: &'static str,
+    },
+    /// The tokenizer could not be read or could not encode the input.
     #[error("tokenization failed: {0}")]
     Tokenization(String),
-
-    /// Forward pass returned a candle / tensor error.
+    /// The model's forward pass failed.
     #[error("inference failed: {0}")]
     Inference(String),
-
-    /// Caller supplied a vector with a dimension other than the
-    /// index's expected width.
+    /// The model produced no vector, or an empty one.
+    #[error("model {0} produced no embedding")]
+    NoEmbedding(String),
+    /// A vector of another length than the index's or the model's.
     #[error("vector dimension mismatch: expected {expected}, got {actual}")]
     Dimension {
-        /// Dimension the index was built with.
+        /// The dimension expected.
         expected: usize,
-        /// Dimension of the supplied vector.
+        /// The vector's length.
         actual: usize,
     },
+    /// The index holds its configured maximum.
+    #[error("vector index is full: {max} vectors")]
+    IndexFull {
+        /// The configured maximum.
+        max: usize,
+    },
+    /// The engine was shut down.
+    #[error("embedding engine is not active")]
+    Inactive,
+    /// The caller stopped waiting, so the rest of the batch was not run.
+    #[error("embedding batch abandoned by its caller")]
+    Abandoned,
+    /// A batch took longer than the configured timeout.
+    #[error("embedding batch timed out after {0} s")]
+    Timeout(u64),
+    /// A blocking model task panicked or was cancelled.
+    #[error("blocking model task: {0}")]
+    Join(#[from] tokio::task::JoinError),
+}
 
-    /// HNSW index is full.
-    #[error("vector index is full")]
-    IndexFull,
+#[cfg(feature = "bert")]
+impl From<candle_core::Error> for Error {
+    fn from(e: candle_core::Error) -> Self {
+        Error::Inference(e.to_string())
+    }
+}
 
-    /// Catch-all for migrating call sites that still use `anyhow`.
-    #[error(transparent)]
-    External(#[from] anyhow::Error),
+#[cfg(feature = "rerank")]
+impl From<ort::Error> for Error {
+    fn from(e: ort::Error) -> Self {
+        Error::Inference(e.to_string())
+    }
 }
 
 /// Crate-level result alias.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-impl Error {
-    /// A stable discriminant for metrics / structured logs.
-    #[must_use]
-    pub fn kind(&self) -> &'static str {
-        match self {
-            Self::ModelLoad(_) => "model_load",
-            Self::Tokenization(_) => "tokenization",
-            Self::Inference(_) => "inference",
-            Self::Dimension { .. } => "dimension_mismatch",
-            Self::IndexFull => "index_full",
-            Self::External(_) => "external",
-        }
+impl From<Error> for post_cortex_ports::PortError {
+    fn from(e: Error) -> Self {
+        post_cortex_ports::PortError::Unavailable(e.to_string())
     }
 }

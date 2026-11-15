@@ -1,0 +1,53 @@
+{
+  "description": "Thanks the author of a new post of the Discord forum ${feedback_channel} with fixed words and tells the Discord channel ${team_channel} its title and author. No agent reads the post.",
+  "graph": {
+    "blocks": [
+      {
+        "id": "post",
+        "trigger": {
+          "event": {
+            "name": "discord.post_created",
+            "filter": "event.payload.channel == '${feedback_channel}'"
+          }
+        }
+      },
+      {
+        "id": "thank",
+        "retry": { "attempts": 3 },
+        "tool": {
+          "method": "/pcx.discord.v1.Discord/Reply",
+          "request": {
+            "fields": {
+              "thread_id": { "text": "{{ trigger.event.payload.thread_id }}" },
+              "text": {
+                "constant": {
+                  "string": "Thank you. The team reads every post here and answers in this post."
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "tell",
+        "retry": { "attempts": 3 },
+        "tool": {
+          "method": "/pcx.discord.v1.Discord/Post",
+          "request": {
+            "fields": {
+              "channel": { "constant": { "string": "${team_channel}" } },
+              "text": {
+                "text": "New post in #${feedback_channel}: {{ trigger.event.payload.title }} (by {{ trigger.event.payload.author_name }})."
+              }
+            }
+          }
+        }
+      }
+    ],
+    "edges": [
+      { "from": "post", "to": "thank" },
+      { "from": "thank", "to": "tell" }
+    ]
+  },
+  "grants": { "modules": ["discord"] }
+}

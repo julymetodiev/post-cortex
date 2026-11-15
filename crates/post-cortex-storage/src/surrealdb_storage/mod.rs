@@ -14,81 +14,72 @@
 //!
 //! This module provides a SurrealDB-based storage implementation with:
 //! - Native graph support for entity relationships
-//! - HNSW vector indexing for embeddings
+//! - Persisted embeddings (searched by the memory layer's in-memory index)
 //! - Efficient session and workspace management
 //!
 //! Enable with: `cargo build --features surrealdb-storage`
 //!
-//! Split by trait concern so the public surface stays identical — external
-//! code imports `SurrealDBStorage` from `crate::surrealdb_storage`
-//! exactly as before.
+//! One struct implementing every storage port (see [`post_cortex_ports::storage`]),
+//! split into a module per port.
 
 use std::sync::Arc;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 
 mod cards;
+mod checkpoints;
+mod connection;
 mod core;
+mod dismissals;
+mod document_index;
+mod documents;
+mod events;
 mod freshness;
 mod graph;
-mod import_export;
+mod ids;
 mod messages;
+mod migrate;
+mod persist;
 mod records;
+mod schema;
 mod sessions;
-mod text_search;
 mod vectors;
+mod workspaces;
 
+pub use connection::{ANSWER, Connection, MISSES, Opener, PROBE};
+
+#[cfg(test)]
+mod corrupt_tests;
+#[cfg(test)]
+mod normalized_tests;
 #[cfg(test)]
 mod persist_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vector_tests;
 
-/// Minimum embedding dimension. Storage doesn't enforce a specific dim —
-/// the embedding engine + vector_db (HNSW) own that contract. We keep a
-/// sanity floor here to reject malformed zero-length payloads. Each
-/// `EmbeddingRecord` carries its `vector.len()` natively in SurrealDB, so
-/// callers can mix dims across model migrations as long as they keep the
-/// per-session index consistent.
-pub(super) const MIN_VECTOR_LEN: usize = 8;
+/// Shortest embedding stored without a configured dimension: a sanity floor
+/// against malformed payloads.
+const MIN_VECTOR_LEN: usize = 8;
 
 /// SurrealDB storage implementation supporting both local (RocksDB) and remote (WebSocket) backends
 #[derive(Clone)]
 pub struct SurrealDBStorage {
-    pub(super) db: Arc<Surreal<Any>>,
-    #[allow(dead_code)]
-    pub(super) namespace: String,
-    #[allow(dead_code)]
-    pub(super) database: String,
-    /// What this process last wrote or read per session; lets saves send
-    /// only what changed. See [`sessions::PersistedState`].
-    pub(super) persisted: Arc<sessions::PersistedStates>,
+    /// The connection, replaced when it stops answering.
+    connection: Arc<Connection>,
+    /// `namespace/database`, for messages.
+    name: String,
+    /// Required embedding length; `None` accepts any of at least
+    /// [`MIN_VECTOR_LEN`].
+    vector_dimension: Option<usize>,
+    /// Refuses calls while the database keeps failing.
+    breaker: Arc<crate::breaker::Breaker>,
 }
 
-/// The eight relation (edge) tables, one per [`RelationType`].
-///
-/// [`RelationType`]: post_cortex_core::core::context_update::RelationType
-pub(super) const RELATION_TABLES: [(&str, post_cortex_core::core::context_update::RelationType);
-    8] = {
-    use post_cortex_core::core::context_update::RelationType;
-    [
-        ("required_by", RelationType::RequiredBy),
-        ("leads_to", RelationType::LeadsTo),
-        ("related_to", RelationType::RelatedTo),
-        ("conflicts_with", RelationType::ConflictsWith),
-        ("depends_on", RelationType::DependsOn),
-        ("implements", RelationType::Implements),
-        ("caused_by", RelationType::CausedBy),
-        ("solves", RelationType::Solves),
-    ]
-};
-
-/// One SurrealQL statement per relation table, built from `template` with
-/// `{table}` replaced by the (static) table name. Lets callers touch all
-/// eight tables in a single round trip.
-pub(super) fn per_relation_table(template: &str) -> String {
-    RELATION_TABLES
-        .iter()
-        .map(|(table, _)| template.replace("{table}", table))
-        .collect::<Vec<_>>()
-        .join(" ")
+impl SurrealDBStorage {
+    /// The connection a call uses now.
+    fn db(&self) -> Arc<Surreal<Any>> {
+        self.connection.db()
+    }
 }

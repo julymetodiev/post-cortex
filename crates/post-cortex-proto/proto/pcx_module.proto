@@ -1,0 +1,1488 @@
+// pcx.module.v1: the protocol between the pcx host and its modules
+// (ARCHITECTURE section 7). The one source of the module types: Rust types
+// are generated from it and wrapped by pcx-module-api; SDKs for other
+// languages are the protoc output plus a thin runtime. Every message has a
+// JSON form by the proto3 JSON mapping; the hook messages use the field
+// names of Claude Code and Codex hook JSON, so existing hook scripts run
+// unchanged: the JSON keeps the proto field names, which are the hook
+// names (snake_case for events, the camelCase of Claude Code's answers).
+// Fields a hook script reads are never int64 (whose JSON form is a string).
+syntax = "proto3";
+package pcx.module.v1;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/descriptor.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "pcx_view.proto";
+
+// A module as the host runs it: the out-of-process side of the Module trait.
+service Module {
+  // What the module is, once, before Start.
+  rpc GetManifest(GetManifestRequest) returns (Manifest);
+  // Start the module; the host calls nothing else until it returns.
+  rpc Start(StartRequest) returns (StartResponse);
+  // The events the module subscribed to, each answered with an outcome
+  // matched to it by `seq` (one stream per module for its lifetime).
+  rpc Events(stream EventEnvelope) returns (stream OutcomeEnvelope);
+  // Stop the module; it may finish what is in flight.
+  rpc Stop(StopRequest) returns (StopResponse);
+  // One of its HTML resources (the `ui://` URI of a view).
+  rpc GetResource(GetResourceRequest) returns (GetResourceResponse);
+  // The prompts it offers now (they may change while it runs).
+  rpc ListPrompts(ListPromptsRequest) returns (ListPromptsResponse);
+  // One of its prompts, filled with its arguments.
+  rpc GetPrompt(GetPromptRequest) returns (GetPromptResponse);
+}
+
+// The host as its clients see it: its modules, their settings, views and
+// tools (ARCHITECTURE section 7). A module's API is its own services,
+// which the host serves by path (W23).
+service Host {
+  // Every module's tools, as agents see them.
+  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+  // Every running module: manifest (without its descriptors: GetModule has
+  // them), configuration without its secrets, the secrets set, health.
+  rpc ListModules(ListModulesRequest) returns (ListModulesResponse);
+  // A running module whole (W25): its manifest with its descriptors, to read
+  // its configuration and draw its settings.
+  rpc GetModule(GetModuleRequest) returns (GetModuleResponse);
+  // A running module's log (W25): what the host saw of it (a failed or
+  // panicked call, its breaker opening, its process exiting and starting
+  // again) and what its process wrote on stderr, the newest last.
+  rpc ModuleLog(ModuleLogRequest) returns (ModuleLogResponse);
+  // Change a module's configuration, checked against its message; the
+  // module restarts with it.
+  rpc ConfigureModule(ConfigureModuleRequest) returns (ConfigureModuleResponse);
+  // Change what a module's sandbox lets it use (its roots, network,
+  // processes), on the machine only; a built-in module that does not run
+  // yet is turned on with them.
+  rpc GrantModule(GrantModuleRequest) returns (GrantModuleResponse);
+  // Every running module's views, in load order.
+  rpc ListViews(ListViewsRequest) returns (ListViewsResponse);
+  // One view, with its HTML when it is a resource.
+  rpc GetView(GetViewRequest) returns (GetViewResponse);
+  // Every model of the running providers, each provider's in its load
+  // order (the app's models screen and its model fields).
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+  // A running module says what stops it from doing its work, as it found
+  // after it started (a server its bot lacks rights in, a tag its settings
+  // name that is not there), or that nothing does. Served on a module's
+  // callback socket only; the module's health carries it.
+  rpc Report(ReportRequest) returns (ReportResponse);
+}
+
+// Report input.
+message ReportRequest {
+  // What stops the module, for a person, with what would fix it; empty:
+  // nothing does.
+  string problem = 1;
+}
+
+// Report result.
+message ReportResponse {
+  // Why it was refused.
+  ModuleError error = 1;
+}
+
+// A module's sandbox (ARCHITECTURE section 7, sandbox and tools), served on
+// its callback socket under its policy: its files and processes.
+service Sandbox {
+  // The policy the sandbox applies.
+  rpc Policy(SandboxPolicyRequest) returns (SandboxPolicyResponse);
+  // The bytes of a file.
+  rpc Read(ReadFileRequest) returns (ReadFileResponse);
+  // Replace a file atomically.
+  rpc Write(WriteFileRequest) returns (SandboxResponse);
+  // The entries of a directory.
+  rpc List(ListDirRequest) returns (ListDirResponse);
+  // What a path holds.
+  rpc Stat(StatRequest) returns (StatResponse);
+  // Remove a file or an empty directory.
+  rpc Remove(RemoveRequest) returns (SandboxResponse);
+  // Move a path.
+  rpc Rename(RenameRequest) returns (SandboxResponse);
+  // Run a process; its output as it comes, then its exit. Closing the
+  // stream kills it.
+  rpc Exec(ExecRequest) returns (stream ExecReply);
+}
+
+// The module API version a module was built against. The host refuses a
+// major it does not speak and supports the previous major for 6 months.
+message ApiVersion {
+  // Breaking changes.
+  uint32 major = 1;
+  // Additions.
+  uint32 minor = 2;
+}
+
+// What a module is for. `memory` and `context_engine` are exclusive slots
+// (one module each); the others allow many.
+enum ModuleKind {
+  // Not set; refused at load.
+  MODULE_KIND_UNSPECIFIED = 0;
+  // Long-term memory (the post-cortex module).
+  MODULE_KIND_MEMORY = 1;
+  // Assembles the context of a turn.
+  MODULE_KIND_CONTEXT_ENGINE = 2;
+  // A model provider.
+  MODULE_KIND_MODEL_PROVIDER = 3;
+  // Tools.
+  MODULE_KIND_TOOL = 4;
+  // A channel (chat platform, API server).
+  MODULE_KIND_CHANNEL = 5;
+  // Schedules and triggers.
+  MODULE_KIND_SCHEDULER = 6;
+  // Runs tools in an OS sandbox.
+  MODULE_KIND_SANDBOX = 7;
+  // A view in the app.
+  MODULE_KIND_VIEW = 8;
+  // Answers events only (a hook script).
+  MODULE_KIND_HOOK = 9;
+  // The agent: runs turns with models and tools (exclusive).
+  MODULE_KIND_AGENT = 10;
+}
+
+// What a module may do; the host enforces it (T11). Conversation access is
+// off for third-party modules unless the person grants it.
+enum Capability {
+  // Not set.
+  CAPABILITY_UNSPECIFIED = 0;
+  // Read the conversation (prompts, answers, tool calls).
+  CAPABILITY_READ_CONVERSATION = 1;
+  // Write memory.
+  CAPABILITY_WRITE_MEMORY = 2;
+  // Open network connections.
+  CAPABILITY_NETWORK = 3;
+  // Read or write the paths in `Manifest.filesystem`.
+  CAPABILITY_FILESYSTEM = 4;
+  // Start processes.
+  CAPABILITY_SPAWN = 5;
+  // Serve HTML views the app shows in a sandboxed frame.
+  CAPABILITY_UI_HTML = 6;
+  // Ask the host's models (`ModuleHost::model`), beside the agent and
+  // context_engine slots (docs/modules/workflow.md, the engine's reach).
+  CAPABILITY_MODELS = 7;
+}
+
+// The events a module can subscribe to (about 12 to start; one is added
+// only when a module consumes it).
+enum EventKind {
+  // Not set; refused.
+  EVENT_KIND_UNSPECIFIED = 0;
+  // A session starts or resumes (Claude Code SessionStart).
+  EVENT_KIND_SESSION_START = 1;
+  // A session ends (SessionEnd).
+  EVENT_KIND_SESSION_END = 2;
+  // The person sends a prompt (UserPromptSubmit).
+  EVENT_KIND_TURN_START = 3;
+  // The agent finished its answer (Stop).
+  EVENT_KIND_TURN_END = 4;
+  // Before a model call.
+  EVENT_KIND_PRE_MODEL_CALL = 5;
+  // After a model call.
+  EVENT_KIND_POST_MODEL_CALL = 6;
+  // Before a tool runs (PreToolUse).
+  EVENT_KIND_PRE_TOOL = 7;
+  // After a tool ran (PostToolUse).
+  EVENT_KIND_POST_TOOL = 8;
+  // Before the context is compacted (PreCompact).
+  EVENT_KIND_PRE_COMPACT = 9;
+  // A memory record was written.
+  EVENT_KIND_MEMORY_WRITE = 10;
+  // A schedule fired.
+  EVENT_KIND_SCHEDULE_FIRE = 11;
+  // A channel received a message.
+  EVENT_KIND_CHANNEL_INBOUND = 12;
+  // A channel is about to send a message.
+  EVENT_KIND_CHANNEL_OUTBOUND = 13;
+  // Modules that run elsewhere (a runner's) can be called again: their
+  // place connected (docs/connect.md section 7).
+  EVENT_KIND_MODULE_AVAILABLE = 14;
+}
+
+// What happens when a module does not answer an event in time or fails.
+enum FailurePolicy {
+  // Not set: fail open.
+  FAILURE_POLICY_UNSPECIFIED = 0;
+  // The turn goes on without the module's outcome.
+  FAILURE_POLICY_FAIL_OPEN = 1;
+  // The turn is blocked (only modules that may block).
+  FAILURE_POLICY_FAIL_CLOSED = 2;
+}
+
+// One event subscription and how the host treats it.
+message Subscription {
+  // The event.
+  EventKind kind = 1;
+  // Longest the module may take, in milliseconds; 0: the host's default.
+  uint32 deadline_ms = 2;
+  // Failure policy.
+  FailurePolicy policy = 3;
+  // EVENT_KIND_MEMORY_WRITE: the changes it follows (ARCHITECTURE section
+  // 7, modules together); unset: every change.
+  MemoryFilter memory = 4;
+}
+
+// The memory changes a subscription follows: a document change when its
+// kind is listed, a record change when its type is listed (a removed
+// record, whose type is gone, when any type is), in the workspaces listed
+// (none: every workspace).
+message MemoryFilter {
+  // Document kinds, `<module>/<name>`.
+  repeated string document_kinds = 1;
+  // Record types by wire name (`decision_made`).
+  repeated string record_types = 2;
+  // Workspace ids.
+  repeated string workspaces = 3;
+}
+
+// A path the module may use with CAPABILITY_FILESYSTEM.
+message FilesystemGrant {
+  // The path (a directory covers what is under it).
+  string path = 1;
+  // Whether it may write there, not only read.
+  bool write = 2;
+}
+
+// What a module is: identity, API version, kind, events and capabilities.
+message Manifest {
+  // Stable id, e.g. `post-cortex.memory`.
+  string id = 1;
+  // Its own version (semver).
+  string version = 2;
+  // The module API it speaks.
+  ApiVersion api = 3;
+  // Its kind (and so its slot).
+  ModuleKind kind = 4;
+  // The events it answers.
+  repeated Subscription events = 5;
+  // What it may do.
+  repeated Capability capabilities = 6;
+  // The paths of CAPABILITY_FILESYSTEM.
+  repeated FilesystemGrant filesystem = 7;
+  // 8: the JSON Schema of its configuration (W23: `config_type`).
+  reserved 8;
+  reserved "config_schema";
+  // Its views (ARCHITECTURE section 7, Module UI levels 2 and 3).
+  repeated pcx.view.v1.View views = 9;
+  // The kinds of documents it keeps in memory (ARCHITECTURE section 7,
+  // modules together).
+  repeated DocumentKind document_kinds = 10;
+  // The ids of the modules whose tools it calls (ARCHITECTURE section 7,
+  // modules together); the configuration grants them.
+  repeated string uses = 11;
+  // It offers prompts (ListPrompts, GetPrompt); the host asks no other
+  // module for them.
+  bool prompts = 12;
+  // It runs turns in its own name though it is not the agent (the chief):
+  // a module process serves pcx.agent.v1.Agent on its socket.
+  bool turns = 13;
+  // Its gRPC services (W23), by full name (`pcx.chief.v1.Chief`); the host
+  // routes a call to the module whose manifest names its service.
+  repeated string services = 14;
+  // An encoded `google.protobuf.FileDescriptorSet` of its services, its
+  // configuration and its documents' messages, with their source info (the
+  // comments are the descriptions agents and people read).
+  bytes descriptors = 15;
+  // The tool of each of its RPCs, for agents (MCP) and its views.
+  repeated Rpc rpcs = 16;
+  // The full name of the message of its configuration, in its
+  // descriptors (ARCHITECTURE section 7, settings); empty: it takes none.
+  string config_type = 17;
+  // What it does, in a line, for a person choosing it (W25).
+  string description = 18;
+  // The events it emits on the organisation's bus (docs/host.md, events of
+  // a module).
+  repeated EmittedEvent emits = 19;
+  // The events it follows, by name: each one a module it uses emits.
+  repeated string follows = 20;
+  // The workflows it ships for an organisation to install (owner
+  // 2026-11-14; docs/modules/workflow.md, templates).
+  repeated WorkflowTemplate workflow_templates = 21;
+}
+
+// A workflow a module ships: the workflow module lists it to the authors
+// who reach the module and installs it with their values, then its grants
+// are approved as any workflow's.
+message WorkflowTemplate {
+  // Its name, the workflow's when installed: 1 to 64 of a-z, 0-9 and `-`,
+  // unique among the module's.
+  string name = 1;
+  // What it does, for a person choosing it.
+  string description = 2;
+  // The workflow, in the proto3 JSON of `pcx.workflow.v1.Workflow` (this
+  // package cannot name the message: the workflow's imports this one).
+  // `${<parameter>}` in one of its strings is that parameter's value.
+  string workflow = 3;
+  // What an installer chooses.
+  repeated TemplateParameter parameters = 4;
+}
+
+// A value an installer of a template chooses.
+message TemplateParameter {
+  // Its name: 1 to 32 of a-z, 0-9 and `_`.
+  string name = 1;
+  // What it is, for a person.
+  string description = 2;
+  // The value when the installer gives none; empty: it must be given.
+  string default = 3;
+  // A regular expression every value matches whole, so a value cannot
+  // break the text it is put in (a quote in an expression).
+  string pattern = 4;
+}
+
+// An event a module emits.
+message EmittedEvent {
+  // `<module id>.<name>`, the name of a-z, 0-9, `_` and `.`
+  // (`board.task_moved`).
+  string name = 1;
+  // The full name of its message in the module's descriptors.
+  string type = 2;
+  // When it is emitted, for a person.
+  string description = 3;
+}
+
+// The organisation's bus (docs/host.md, events of a module), served on a
+// module's callback socket to the module it is for.
+service Bus {
+  // Emit an event the module declares; it is kept before the call answers.
+  rpc Publish(PublishRequest) returns (PublishResponse);
+  // The events the module follows after what it acknowledged, oldest
+  // first, then each new one as it comes; closing the stream stops it. A
+  // refusal (the module is not running yet, the host keeps no events) is
+  // the call's status; an error reply ends a feed that was running.
+  rpc Follow(FollowRequest) returns (stream FollowReply);
+  // The module has handled the events of a name up to a position.
+  rpc Ack(AckRequest) returns (AckResponse);
+}
+
+// An event of the bus.
+message BusEvent {
+  // Its id (a UUIDv7), by which a follower deduplicates.
+  string id = 1;
+  // Its position in the organisation's log; never reused.
+  uint64 position = 2;
+  // Its name.
+  string name = 3;
+  // The module that emitted it.
+  string module = 4;
+  // The workspace it is of; empty: none.
+  string workspace_id = 5;
+  // Who acted; empty: not known.
+  string author = 6;
+  // When it was emitted.
+  google.protobuf.Timestamp at = 7;
+  // Its message, of the type its module declares.
+  google.protobuf.Any payload = 8;
+}
+
+// Publish input.
+message PublishRequest {
+  // Who and what the event is for (its workspace and author).
+  Scope scope = 1;
+  // The event's name.
+  string name = 2;
+  // Its message.
+  google.protobuf.Any payload = 3;
+}
+
+// Publish result.
+message PublishResponse {
+  // The event's id; empty with an error.
+  string id = 1;
+  // Why it was refused.
+  ModuleError error = 2;
+}
+
+// Follow input: the module follows what its manifest names.
+message FollowRequest {}
+
+// One reply of a Follow stream.
+message FollowReply {
+  // What it is.
+  oneof reply {
+    // An event.
+    BusEvent event = 1;
+    // Events of this name the module had not acknowledged were dropped
+    // (they are kept 7 days): it re-reads what it follows.
+    string fell_behind = 2;
+    // Why the stream ends.
+    ModuleError error = 3;
+  }
+}
+
+// Ack input.
+message AckRequest {
+  // The events' name.
+  string name = 1;
+  // The position handled, with every one of the name before it.
+  uint64 position = 2;
+}
+
+// Ack result.
+message AckResponse {
+  // Why it was refused.
+  ModuleError error = 1;
+}
+
+// How a settings form shows a field of a module's configuration message,
+// the field's `setting` option; its description is the field's comment.
+message Setting {
+  // Its label; empty: the field's name.
+  string title = 1;
+  // A configuration that leaves it unset is refused.
+  bool required = 2;
+  // A secret: written, never read back (a listing says it is set). A
+  // string outside any repeated field, or in the element of one list whose
+  // message has a `key` (its path names the element:
+  // `connections[github].secret`).
+  bool secret = 3;
+  // A string naming a workspace of the host by its id; the form offers
+  // the host's workspaces.
+  bool workspace = 4;
+  // A string naming a board by its id: of the workspace a `workspace`
+  // field of the same message names, else of the workspace the form is
+  // in; the form offers its boards.
+  bool board = 5;
+  // A string of a list's element that names it (1 to 64 of a-z, 0-9, '-';
+  // unique in the list): a change keeps an element's secrets by it. At
+  // most one in a message.
+  bool key = 6;
+  // A string naming a model by its id; the form offers every model of the
+  // host's providers, each with its provider, and takes an id typed in.
+  bool model = 7;
+  // A string of several lines (a prompt, instructions); the form gives it
+  // a text area.
+  bool multiline = 8;
+  // What a string's text must be, a regular expression it matches whole (at
+  // most 1 KiB); on a repeated string, each of its values. A configuration
+  // with another text is refused, naming the setting, and a form says so as
+  // it is typed. Empty: any text.
+  string pattern = 9;
+  // A text that matches `pattern`, which the refusal and the form show a
+  // person (`1570896359719047299`); required with a pattern, and only then.
+  string example = 10;
+}
+
+extend google.protobuf.FieldOptions {
+  // How a settings form shows the field.
+  Setting setting = 51230;
+}
+
+// What a module's settings give the turns it asks of the agent
+// (ARCHITECTURE section 7, a module's turns): a field of this type in its
+// configuration message, which the host reads and enforces.
+message TurnGrant {
+  // Tools only a person calls (visibility app) its turns may call, by
+  // name.
+  repeated string person_tools = 1 [(setting) = { title: "Person-only tools it may call" }];
+  // Tools its turns are not given, whatever else allows them, by name.
+  repeated string withheld = 2 [(setting) = { title: "Tools withheld" }];
+}
+
+// Whom a module's calls may act for (ARCHITECTURE section 8, operations,
+// W29): a field of this type in its configuration message, which the host
+// reads and enforces. A call of the module whose author is one of these
+// persons may call a tool only a person calls (visibility app) as that
+// person: a channel module that a person's button press or message
+// reaches. Only a person configures a module.
+message PersonGrant {
+  // The persons, by the author name they act as.
+  repeated string persons = 1 [(setting) = { title: "People it acts for" }];
+}
+
+// A kind of document a module keeps in memory, written
+// `<module id>/<name>`.
+message DocumentKind {
+  // Its name in the module: lowercase letters, digits, `_` and `-`.
+  string name = 1;
+  // The data field that is its title: a singular string field of `type`.
+  string title_field = 3;
+  // The full name of the message of its data (W23), in the module's
+  // descriptors.
+  string type = 4;
+  // Whether search finds its documents (their title and text embedded);
+  // unset: it does. A kind the module keeps for itself, a log or a run's
+  // journal, is not searched (docs/modules/workflow.md, why documents).
+  optional bool searchable = 5;
+  reserved 2;
+}
+
+// One RPC of a module as a tool (W23): what agents and views call it.
+message Rpc {
+  // Its gRPC path, `/pcx.chief.v1.Chief/ListTalks`.
+  string method = 1;
+  // Its tool name, `chief_talks`; unique across the host.
+  string tool = 2;
+  // Who may call it; none: both (as MCP Apps).
+  repeated ToolVisibility visibility = 3;
+  // What calling it does; refused unset (docs/host.md, effects).
+  Effect effect = 4;
+}
+
+// What calling an RPC does (owner 2026-10-31): the worst the call itself may
+// do, not what modules following its events do later.
+enum Effect {
+  // Not set; refused.
+  EFFECT_UNSPECIFIED = 0;
+  // Changes nothing, in pcx or outside.
+  EFFECT_READ = 1;
+  // Changes state inside pcx only: memory, documents, settings, the files
+  // and local repositories under the module's roots.
+  EFFECT_WRITE = 2;
+  // Acts outside pcx, or runs what may: a message or mail sent, an outside
+  // API that changes something, a process, a running system, a turn.
+  EFFECT_EXTERNAL = 3;
+}
+
+// Who and what a call or event is for (T7). Cancellation is the RPC's own.
+message Scope {
+  // The tenant (organisation); empty for a local host.
+  string tenant = 1;
+  // The profile within the tenant.
+  string profile = 2;
+  // The session, when there is one.
+  string session_id = 3;
+  // The workspace, when there is one.
+  string workspace_id = 4;
+  // Who acts (agent, person); empty: unknown.
+  string author = 5;
+  // Milliseconds left for the call; 0: the host's default.
+  uint32 deadline_ms = 6;
+  // The module that makes the call, set by the host; empty: not a module.
+  string caller_module = 7;
+  // How many module calls deep the call is; the host refuses past 4.
+  uint32 call_depth = 8;
+  // The host's token of a turn a module asked of the agent, set by the host
+  // only; the agent's calls in it are checked against that module's reach
+  // and grant. Empty: not such a turn.
+  string turn = 9;
+  // The workspaces the call may reach (docs/connect.md, reach); unset:
+  // every one. Set for a person limited to some workspaces (a gateway, a
+  // connected daemon's tunnel); every call made in this scope carries it.
+  Reach reach = 10;
+  // The organisation's role of the person who is the call's author
+  // (docs/host.md); unspecified: not known, or not a client's call.
+  PersonRole role = 11;
+  // The caller may only read (a person or a key with read permission only,
+  // set by a gateway): the host refuses every RPC and tool whose effect is
+  // not read, and every turn (docs/host.md, effects); every call made in
+  // this scope carries it.
+  bool read_only = 12;
+  // The person the call is for (a cloud user's id, set by a gateway from
+  // the person's session or personal key, also when an agent acting with
+  // the key names itself); empty: none, as on a local host. Memory answers
+  // the user card with that person's (docs/memory.md, cards); every call
+  // made in this scope carries it.
+  string person = 13;
+}
+
+// An organisation's role of a person.
+enum PersonRole {
+  // Not known (a role this version does not know is this: the least).
+  PERSON_ROLE_UNSPECIFIED = 0;
+  // Owns the organisation.
+  PERSON_ROLE_OWNER = 1;
+  // Administers it.
+  PERSON_ROLE_ADMIN = 2;
+  // A member.
+  PERSON_ROLE_MEMBER = 3;
+  // May only read.
+  PERSON_ROLE_VIEWER = 4;
+}
+
+// The workspaces a call may reach.
+message Reach {
+  // Their ids; none: no workspace.
+  repeated string workspaces = 1;
+}
+
+// A tool a module offers: JSON in, text and JSON out.
+message ToolSpec {
+  // Name, unique within the module.
+  string name = 1;
+  // What it does, for a model.
+  string description = 2;
+  // JSON Schema of its input.
+  google.protobuf.Struct input_schema = 3;
+  // Who may call it; none: both (as MCP Apps). The host's tool lists for
+  // agents leave out a tool without TOOL_VISIBILITY_MODEL.
+  repeated ToolVisibility visibility = 4;
+  // What calling it does; refused unset.
+  Effect effect = 5;
+}
+
+// Who may call a tool.
+enum ToolVisibility {
+  // Not set; refused.
+  TOOL_VISIBILITY_UNSPECIFIED = 0;
+  // An agent.
+  TOOL_VISIBILITY_MODEL = 1;
+  // The module's views.
+  TOOL_VISIBILITY_APP = 2;
+}
+
+// Why a call failed.
+message ModuleError {
+  // The kind a host or caller acts on.
+  ModuleErrorKind kind = 1;
+  // What went wrong, for a person.
+  string message = 2;
+  // 3: structured details as JSON (W23: `field`).
+  reserved 3;
+  reserved "details";
+  // The setting or argument at fault (`token`, `slack.channel`); empty:
+  // none in particular.
+  string field = 4;
+}
+
+// The kinds of ModuleError.
+enum ModuleErrorKind {
+  // Not set: internal.
+  MODULE_ERROR_KIND_UNSPECIFIED = 0;
+  // The input is malformed.
+  MODULE_ERROR_KIND_INVALID_ARGUMENT = 1;
+  // Something the input names does not exist.
+  MODULE_ERROR_KIND_NOT_FOUND = 2;
+  // The module or a backend it needs is unavailable; retrying may work.
+  MODULE_ERROR_KIND_UNAVAILABLE = 3;
+  // The deadline passed.
+  MODULE_ERROR_KIND_DEADLINE_EXCEEDED = 4;
+  // A capability the call needs is not granted.
+  MODULE_ERROR_KIND_DENIED = 5;
+  // A defect of the module.
+  MODULE_ERROR_KIND_INTERNAL = 6;
+  // The change conflicts with the current state (it already exists, or a
+  // newer version does).
+  MODULE_ERROR_KIND_CONFLICT = 7;
+  // The state does not allow the call yet (a precondition is not met).
+  MODULE_ERROR_KIND_FAILED_PRECONDITION = 8;
+  // A limit is spent (a daily budget); it is reset later.
+  MODULE_ERROR_KIND_RESOURCE_EXHAUSTED = 9;
+  // The module runs elsewhere (a runner) and that place is not connected:
+  // it comes back by itself, so a caller waits rather than tries again.
+  MODULE_ERROR_KIND_OFFLINE = 10;
+}
+
+// A hook event in the JSON form of Claude Code and Codex hooks; fields a
+// module does not read are skipped.
+message Event {
+  // The event, by its Claude Code name (`SessionStart`, `UserPromptSubmit`,
+  // `PreToolUse`, ...), so hook scripts read it unchanged.
+  string hook_event_name = 1;
+  // The client's own session id.
+  string session_id = 2;
+  // The client's transcript file, when it has one.
+  string transcript_path = 3;
+  // Working directory of the session.
+  string cwd = 4;
+  // TURN_START: the prompt.
+  string prompt = 5;
+  // PRE_TOOL / POST_TOOL: the tool.
+  string tool_name = 6;
+  // PRE_TOOL / POST_TOOL: its input.
+  google.protobuf.Struct tool_input = 7;
+  // POST_TOOL: its result.
+  google.protobuf.Value tool_response = 8;
+  // TURN_END (Codex): the answer.
+  string last_assistant_message = 9;
+  // Codex: the turn.
+  string turn_id = 10;
+  // SESSION_START: startup, resume, clear or compact; PRE_COMPACT: manual
+  // or auto.
+  string source = 11;
+  // SESSION_END: why it ended.
+  string reason = 12;
+  // Payload of events without a hook equivalent (memory write, schedule,
+  // channel).
+  google.protobuf.Struct payload = 13;
+}
+
+// What a module wants done after an event, in the JSON form of a Claude
+// Code hook answer.
+message Outcome {
+  // `block` to block (fail-closed modules only); empty: go on.
+  string decision = 1;
+  // Why it blocks, for the agent.
+  string reason = 2;
+  // Context to add for the model. Named as Claude Code names it in JSON.
+  HookSpecificOutput hookSpecificOutput = 3;
+}
+
+// The event-specific part of an Outcome.
+message HookSpecificOutput {
+  // The event answered (Claude Code's JSON name).
+  string hookEventName = 1;
+  // Context to add for the model (Claude Code's JSON name).
+  string additionalContext = 2;
+}
+
+// An event sent to a module, with its scope and a sequence number.
+message EventEnvelope {
+  // Matches the OutcomeEnvelope that answers it.
+  uint64 seq = 1;
+  // Who and what it is for.
+  Scope scope = 2;
+  // The event.
+  Event event = 3;
+}
+
+// A module's answer to one event.
+message OutcomeEnvelope {
+  // The EventEnvelope it answers.
+  uint64 seq = 1;
+  // The outcome, or the error.
+  oneof result {
+    // What to do.
+    Outcome outcome = 2;
+    // Why it failed.
+    ModuleError error = 3;
+  }
+}
+
+// GetManifest input.
+message GetManifestRequest {}
+
+// Start input: what the host gives the module.
+message StartRequest {
+  // The host's API version.
+  ApiVersion host_api = 1;
+  // 2: the configuration as JSON (W23: `config`, 4).
+  reserved 2;
+  // The Unix socket on which the host serves `Host.ListTools`,
+  // `Host.ListModules` (manifests only) and the modules' services for
+  // this module once its Start returned; empty: the host offers none.
+  string host_socket = 3;
+  // The module's configuration, a message of its `config_type`; unset: it
+  // takes none.
+  google.protobuf.Any config = 4;
+}
+
+// Start result.
+message StartResponse {
+  // Set when the module could not start.
+  ModuleError error = 1;
+}
+
+// ListTools input.
+message ListToolsRequest {
+  // On a module's callback socket: the scope of the calls the tools are
+  // for (a turn's, whose grant they are listed under); unset elsewhere.
+  Scope scope = 1;
+}
+
+// ListTools result.
+message ListToolsResponse {
+  // The tools.
+  repeated ToolSpec tools = 1;
+  // On a module's callback socket: the module that offers each tool, in
+  // the order of `tools`; empty elsewhere.
+  repeated string modules = 2;
+  // The gRPC path of each tool's RPC (`Manifest.rpcs`), in the order of
+  // `tools`: a tool is called as its RPC. Empty for one of memory's MCP
+  // tools, which only MCP clients call.
+  repeated string rpcs = 3;
+}
+
+// Stop input.
+message StopRequest {}
+
+// Stop result.
+message StopResponse {
+  // Set when the module did not stop cleanly.
+  ModuleError error = 1;
+}
+
+// ListModels input.
+message ListModelsRequest {}
+
+// ListModels result.
+message ListModelsResponse {
+  // The models.
+  repeated ModelInfo models = 1;
+}
+
+// A model a provider serves (ARCHITECTURE section 7, the agent): one shape
+// for every provider.
+message ModelInfo {
+  // Its id, unique among the running providers.
+  string id = 1;
+  // Its context, in tokens.
+  uint64 context_tokens = 2;
+  // The most tokens it answers.
+  uint64 output_tokens = 3;
+  // Its name for a person; empty: its id.
+  string name = 4;
+  // Its provider: as the module that serves it names it (the models
+  // module: `openrouter`, `anthropic`, `zai`, `openai`); empty: the
+  // module's id, set by the host.
+  string provider = 5;
+  // What it is; refused unset.
+  ModelKind kind = 6;
+  // What it takes; at least one.
+  repeated Modality input = 7;
+  // What it gives; at least one.
+  repeated Modality output = 8;
+  // What it can do.
+  repeated ModelFeature features = 9;
+  // What it costs; unset: not known.
+  ModelPrice price = 10;
+  // Was whether a person turned it on (owner 2026-11-09: every model a
+  // provider lists may be named).
+  reserved 11;
+  reserved "enabled";
+}
+
+// What a model is.
+enum ModelKind {
+  // Not set; refused.
+  MODEL_KIND_UNSPECIFIED = 0;
+  // Answers a conversation.
+  MODEL_KIND_CHAT = 1;
+  // Turns text (or another input) into vectors.
+  MODEL_KIND_EMBEDDING = 2;
+  // Makes images.
+  MODEL_KIND_IMAGE = 3;
+  // Speaks text.
+  MODEL_KIND_SPEECH = 4;
+  // Writes down speech.
+  MODEL_KIND_TRANSCRIPTION = 5;
+  // Makes video.
+  MODEL_KIND_VIDEO = 6;
+  // Orders documents by how they answer a query.
+  MODEL_KIND_RERANK = 7;
+}
+
+// What a model takes or gives.
+enum Modality {
+  // Not set; refused.
+  MODALITY_UNSPECIFIED = 0;
+  // Text.
+  MODALITY_TEXT = 1;
+  // Images.
+  MODALITY_IMAGE = 2;
+  // Sound.
+  MODALITY_AUDIO = 3;
+  // Video.
+  MODALITY_VIDEO = 4;
+  // Files, such as PDF.
+  MODALITY_FILE = 5;
+}
+
+// What a model can do beyond its kind.
+enum ModelFeature {
+  // Not set; refused.
+  MODEL_FEATURE_UNSPECIFIED = 0;
+  // Thinks before it answers.
+  MODEL_FEATURE_REASONING = 1;
+  // Calls tools.
+  MODEL_FEATURE_TOOLS = 2;
+  // Answers in a given schema.
+  MODEL_FEATURE_STRUCTURED_OUTPUT = 3;
+  // Keeps a prompt's prefix cached between calls.
+  MODEL_FEATURE_PROMPT_CACHE = 4;
+}
+
+// What a model costs, in US micro-dollars per million tokens.
+message ModelPrice {
+  // Per million tokens in.
+  uint64 input = 1;
+  // Per million tokens out.
+  uint64 output = 2;
+  // Per million tokens in read from the cache; unset: not known.
+  optional uint64 cached_input = 3;
+}
+
+// ListModules input.
+message ListModulesRequest {}
+
+// ListModules result.
+message ListModulesResponse {
+  // The running modules, in load order.
+  repeated ModuleInfo modules = 1;
+  // The built-in modules the host can turn on that do not run
+  // (`GrantModule`); empty where modules are not granted through it.
+  repeated string available = 2;
+}
+
+// A running module as its host's clients see it.
+message ModuleInfo {
+  // What it is.
+  Manifest manifest = 1;
+  // 2: the configuration as JSON (W23: `config`, 5).
+  reserved 2;
+  // The secrets set, as paths of field names (`token`, `slack.token`).
+  repeated string secrets_set = 3;
+  // How it fares.
+  ModuleHealth health = 4;
+  // Its configuration, a message of its `config_type`, with its secrets
+  // cleared; unset when it takes none.
+  google.protobuf.Any config = 5;
+  // What its sandbox lets it use, as the operator granted it (W25); its
+  // `error` is never set.
+  SandboxPolicyResponse sandbox = 6;
+  // The packages of the messages it defines, in `ListModules`: which module
+  // to ask for a message's type, without its descriptors.
+  repeated string packages = 7;
+}
+
+// GetModule input.
+message GetModuleRequest {
+  // The module.
+  string id = 1;
+}
+
+// GetModule result.
+message GetModuleResponse {
+  // The module, its manifest with its descriptors; unset when no such
+  // module runs.
+  ModuleInfo module = 1;
+}
+
+// ModuleLog input.
+message ModuleLogRequest {
+  // The module.
+  string id = 1;
+}
+
+// Who wrote a line of a module's log.
+enum LogSource {
+  // Not given.
+  LOG_SOURCE_UNSPECIFIED = 0;
+  // The host, of what it saw of the module.
+  LOG_SOURCE_HOST = 1;
+  // The module's process, on its stderr.
+  LOG_SOURCE_PROCESS = 2;
+}
+
+// A line of a module's log.
+message LogLine {
+  // When it was written.
+  google.protobuf.Timestamp at = 1;
+  // Who wrote it.
+  LogSource source = 2;
+  // The line.
+  string text = 3;
+}
+
+// ModuleLog result.
+message ModuleLogResponse {
+  // Its newest lines, the newest last.
+  repeated LogLine lines = 1;
+}
+
+// The health of one module.
+message ModuleHealth {
+  // Calls and events it was given.
+  uint64 calls = 1;
+  // Calls that returned an error.
+  uint64 errors = 2;
+  // Calls that ran past their deadline.
+  uint64 timeouts = 3;
+  // Calls that panicked.
+  uint64 panics = 4;
+  // Calls the caller cancelled.
+  uint64 cancelled = 5;
+  // Calls its open breaker refused.
+  uint64 refused = 6;
+  // Whether its breaker is open (it keeps failing).
+  bool breaker_open = 7;
+  // Median latency in milliseconds, as the upper bound of its bucket;
+  // unset before the first call.
+  optional uint64 p50_ms = 8;
+  // 99th percentile latency in milliseconds, likewise.
+  optional uint64 p99_ms = 9;
+  // What stops it from doing its work, as it reported (`Host.Report`);
+  // empty: nothing it knows of.
+  string problem = 10;
+}
+
+// ConfigureModule input.
+message ConfigureModuleRequest {
+  // The module.
+  string id = 1;
+  // 2: the configuration as JSON (W23: `config`, 3).
+  reserved 2;
+  // Its new configuration, a message of its `config_type`; a secret it
+  // leaves unset keeps its value.
+  google.protobuf.Any config = 3;
+  // The secrets to remove, as paths of field names.
+  repeated string clear = 4;
+}
+
+// ConfigureModule result.
+message ConfigureModuleResponse {
+  // Set when the configuration was refused (INVALID_ARGUMENT naming the
+  // field), the module is unknown (NOT_FOUND), the host cannot change
+  // configurations (FAILED_PRECONDITION), or the module did not start with
+  // it (UNAVAILABLE; the previous configuration stays).
+  ModuleError error = 1;
+}
+
+// GrantModule input.
+message GrantModuleRequest {
+  // The module.
+  string id = 1;
+  // The directories it may use (each absolute and existing), the first
+  // the default of a relative path; none: no filesystem grant.
+  repeated SandboxRoot roots = 2;
+  // Whether its processes may use the network.
+  bool network = 3;
+  // Whether it may start processes.
+  bool spawn = 4;
+}
+
+// GrantModule result.
+message GrantModuleResponse {
+  // Set when the grant was refused (INVALID_ARGUMENT naming the root), the
+  // module is unknown (NOT_FOUND), the host does not grant through it
+  // (FAILED_PRECONDITION), or the module did not start with it
+  // (UNAVAILABLE; the previous grants stay).
+  ModuleError error = 1;
+}
+
+// GetResource input.
+message GetResourceRequest {
+  // The `ui://` URI.
+  string uri = 1;
+}
+
+// GetResource result.
+message GetResourceResponse {
+  // Exactly one is set.
+  oneof result {
+    // The resource.
+    Resource resource = 1;
+    // Why there is none (NOT_FOUND for a URI the module does not serve).
+    ModuleError error = 2;
+  }
+}
+
+// An HTML resource of a module.
+message Resource {
+  // Its `ui://` URI.
+  string uri = 1;
+  // `text/html;profile=mcp-app`.
+  string mime_type = 2;
+  // The HTML.
+  string text = 3;
+}
+
+// ListPrompts input.
+message ListPromptsRequest {
+  // Who and what the listing is for.
+  Scope scope = 1;
+}
+
+// ListPrompts result.
+message ListPromptsResponse {
+  // Exactly one is set.
+  oneof result {
+    // The prompts.
+    PromptList prompts = 1;
+    // Why they cannot be listed.
+    ModuleError error = 2;
+  }
+}
+
+// The prompts of a module.
+message PromptList {
+  // In the module's order.
+  repeated Prompt prompts = 1;
+}
+
+// A prompt a module offers (MCP `prompts/list`).
+message Prompt {
+  // Its name, unique in the module.
+  string name = 1;
+  // What it is for.
+  string description = 2;
+  // The arguments it takes.
+  repeated PromptArgument arguments = 3;
+}
+
+// An argument of a prompt.
+message PromptArgument {
+  // Its name.
+  string name = 1;
+  // What it is.
+  string description = 2;
+  // Whether a `get` must give it.
+  bool required = 3;
+}
+
+// GetPrompt input.
+message GetPromptRequest {
+  // Who and what the prompt is for.
+  Scope scope = 1;
+  // The prompt.
+  string name = 2;
+  // Its arguments, by name.
+  map<string, string> arguments = 3;
+}
+
+// GetPrompt result.
+message GetPromptResponse {
+  // Exactly one is set.
+  oneof result {
+    // The prompt, filled.
+    PromptContent prompt = 1;
+    // Why there is none (NOT_FOUND for a name the module does not offer).
+    ModuleError error = 2;
+  }
+}
+
+// A prompt filled with its arguments (MCP `prompts/get`).
+message PromptContent {
+  // What it is for.
+  string description = 1;
+  // Its messages, in order.
+  repeated PromptMessage messages = 2;
+}
+
+// Who speaks a prompt's message.
+enum PromptRole {
+  // Not set; refused.
+  PROMPT_ROLE_UNSPECIFIED = 0;
+  // The person (or agent) asking.
+  PROMPT_ROLE_USER = 1;
+  // The model.
+  PROMPT_ROLE_ASSISTANT = 2;
+}
+
+// One message of a prompt.
+message PromptMessage {
+  // Who speaks it.
+  PromptRole role = 1;
+  // Its text.
+  string text = 2;
+}
+
+// ListViews input.
+message ListViewsRequest {}
+
+// ListViews result.
+message ListViewsResponse {
+  // Every running module's views, in load order.
+  repeated ModuleView views = 1;
+}
+
+// A view and the module it belongs to.
+message ModuleView {
+  // The module.
+  string module_id = 1;
+  // The view.
+  pcx.view.v1.View view = 2;
+}
+
+// GetView input.
+message GetViewRequest {
+  // The module.
+  string module_id = 1;
+  // The view.
+  string view_id = 2;
+}
+
+// GetView result.
+message GetViewResponse {
+  // The view.
+  pcx.view.v1.View view = 1;
+  // Its HTML, when the view is a resource.
+  Resource resource = 2;
+  // Set when the module or the view is unknown (NOT_FOUND) or the module
+  // did not serve the view's HTML; `view` and `resource` are then unset.
+  ModuleError error = 3;
+  // 4: the names of the tools its views may call (W23: `rpcs`).
+  reserved 4;
+  reserved "tools";
+  // The module's `FileDescriptorSet` (its manifest's `descriptors`): the
+  // app builds a tree view's requests from it and reads its responses
+  // (W23).
+  bytes descriptors = 5;
+  // The module's RPCs its views may call as tools (their visibility has
+  // TOOL_VISIBILITY_APP): an HTML view's bridge calls a tool by name as
+  // its RPC, and no other.
+  repeated Rpc rpcs = 6;
+}
+
+// Policy input.
+message SandboxPolicyRequest {}
+
+// A directory a module may use.
+message SandboxRoot {
+  // The directory, absolute.
+  string path = 1;
+  // Whether the module may write under it.
+  bool write = 2;
+}
+
+// Policy result.
+message SandboxPolicyResponse {
+  // The roots, the first one the default of a relative path.
+  repeated SandboxRoot roots = 1;
+  // Whether its processes may use the network.
+  bool network = 2;
+  // Whether it may start processes.
+  bool spawn = 3;
+  // Set when there is no sandbox.
+  ModuleError error = 4;
+  // The names (globs) under the roots the module never reaches.
+  repeated string deny = 5;
+}
+
+// A path under a root: relative to `root` (empty: the first root), or
+// absolute under any root.
+message SandboxPath {
+  // The root it is relative to; empty: the first.
+  string root = 1;
+  // The path.
+  string path = 2;
+}
+
+// A failure, or nothing.
+message SandboxResponse {
+  // Set when the call failed.
+  ModuleError error = 1;
+}
+
+// Read input.
+message ReadFileRequest {
+  // The file.
+  SandboxPath file = 1;
+  // Most bytes to read.
+  uint64 limit = 2;
+}
+
+// Read result.
+message ReadFileResponse {
+  // The bytes, or why not.
+  oneof result {
+    // The file's bytes.
+    bytes data = 1;
+    // Why it could not be read.
+    ModuleError error = 2;
+  }
+}
+
+// Write input.
+message WriteFileRequest {
+  // The file.
+  SandboxPath file = 1;
+  // Its new bytes.
+  bytes data = 2;
+}
+
+// What a directory entry is.
+enum EntryKind {
+  // Not set; refused.
+  ENTRY_KIND_UNSPECIFIED = 0;
+  // A regular file.
+  ENTRY_KIND_FILE = 1;
+  // A directory.
+  ENTRY_KIND_DIR = 2;
+  // A symbolic link (not followed).
+  ENTRY_KIND_SYMLINK = 3;
+  // Anything else.
+  ENTRY_KIND_OTHER = 4;
+}
+
+// What a path holds.
+message FileMetadata {
+  // Its kind.
+  EntryKind kind = 1;
+  // Its size in bytes.
+  uint64 size = 2;
+  // When it last changed, if known.
+  google.protobuf.Timestamp modified = 3;
+}
+
+// List input.
+message ListDirRequest {
+  // The directory.
+  SandboxPath dir = 1;
+}
+
+// One entry of a directory.
+message DirEntry {
+  // Its name.
+  string name = 1;
+  // What it holds.
+  FileMetadata metadata = 2;
+}
+
+// List result.
+message ListDirResponse {
+  // The entries, by name.
+  repeated DirEntry entries = 1;
+  // Set when the directory could not be listed.
+  ModuleError error = 2;
+}
+
+// Stat input.
+message StatRequest {
+  // The path.
+  SandboxPath path = 1;
+}
+
+// Stat result.
+message StatResponse {
+  // What it holds.
+  FileMetadata metadata = 1;
+  // Set when it could not be read.
+  ModuleError error = 2;
+}
+
+// Remove input.
+message RemoveRequest {
+  // The path.
+  SandboxPath path = 1;
+}
+
+// Rename input.
+message RenameRequest {
+  // The path moved.
+  SandboxPath from = 1;
+  // Where to.
+  SandboxPath to = 2;
+}
+
+// One environment variable.
+message EnvVar {
+  // Its name.
+  string name = 1;
+  // Its value.
+  string value = 2;
+}
+
+// Exec input.
+message ExecRequest {
+  // The program.
+  string program = 1;
+  // Its arguments.
+  repeated string args = 2;
+  // Its working directory; unset: the first root.
+  SandboxPath cwd = 3;
+  // Its whole environment.
+  repeated EnvVar env = 4;
+  // What it reads on stdin; unset: nothing.
+  optional bytes stdin = 5;
+  // Longest it may run, in milliseconds.
+  uint32 timeout_ms = 6;
+  // Most bytes of each output stream the caller keeps.
+  uint64 output_limit = 7;
+}
+
+// How a process ended.
+message ExecExit {
+  // One of these.
+  oneof how {
+    // Its exit code.
+    int32 code = 1;
+    // A signal ended it.
+    bool signal = 2;
+    // It ran past its timeout.
+    bool timed_out = 3;
+    // Its caller cancelled it.
+    bool cancelled = 4;
+  }
+}
+
+// One event of a running process.
+message ExecReply {
+  // What happened.
+  oneof event {
+    // Bytes on stdout.
+    bytes stdout = 1;
+    // Bytes on stderr.
+    bytes stderr = 2;
+    // It ended; last.
+    ExecExit exit = 3;
+    // It could not start.
+    ModuleError error = 4;
+  }
+}
+
+// The launcher of the pot `pcx-modules` (docs/modules/dynamic.md): the one
+// service there, on a socket the pot shares with the cloud. It starts a
+// module's process confined. A request has no field for the network or for
+// starting processes, so a host cannot ask for them: a program of the
+// catalog has the network when the launcher's own configuration says so.
+service Launcher {
+  // Start a module's process and follow it: `started`, its stderr, then how
+  // it ended. The process is killed when the caller stops reading: a host
+  // that goes takes its modules along.
+  rpc Launch(LaunchRequest) returns (stream LaunchEvent);
+  // Prepare a bundle before any of its code runs: unpacked, its dependencies
+  // from its lock file. The one step with the network, the installer's.
+  rpc Prepare(PrepareRequest) returns (PrepareResponse);
+}
+
+// A bundle to prepare.
+message PrepareRequest {
+  // The tar of its files.
+  bytes bundle = 1;
+  // Its SHA-256, in hex.
+  string sha256 = 2;
+}
+
+// A prepared bundle.
+message PrepareResponse {
+  // Its files, read-only.
+  string bundle = 1;
+  // Its packages; empty without a lock file.
+  string environment = 2;
+}
+
+// A module's process to start.
+message LaunchRequest {
+  // The module's id.
+  string module = 1;
+  // Whose it is (an organisation's id): its scratch directory's.
+  string owner = 2;
+  // The program: one of the launcher's runtimes, or of its programs (a
+  // module of the cloud's catalog).
+  string program = 3;
+  // Its arguments.
+  repeated string args = 4;
+  // Its environment, whole.
+  map<string, string> env = 5;
+  // The socket it serves, in a directory of its own under the shared one.
+  string socket = 6;
+  // What it reads, each under the launcher's store; none for a program.
+  repeated string read = 7;
+  // Its working directory, one of `read`; none for a program, which runs in
+  // its scratch directory.
+  string cwd = 8;
+  // Its memory limit, in MB.
+  uint32 memory_mb = 9;
+  // Its limit of open files.
+  uint32 open_files = 10;
+  // A program's approved SHA-256, in hex, checked at each launch; none for a
+  // runtime (the image's).
+  string sha256 = 11;
+}
+
+// What a launched process did.
+message LaunchEvent {
+  // What happened.
+  oneof event {
+    // It started.
+    LaunchStarted started = 1;
+    // A line it wrote on stderr.
+    string line = 2;
+    // How it ended, the last event.
+    LaunchEnded ended = 3;
+  }
+}
+
+// How a launched process ended.
+message LaunchEnded {
+  // How, for the log.
+  string how = 1;
+  // Whether it succeeded.
+  bool success = 2;
+}
+
+// A process started.
+message LaunchStarted {}

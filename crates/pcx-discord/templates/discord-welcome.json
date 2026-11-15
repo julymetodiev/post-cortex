@@ -1,0 +1,26 @@
+{
+  "description": "Gives each member who joins the Discord server the role ${role}.",
+  "graph": {
+    "blocks": [
+      {
+        "id": "joined",
+        "trigger": { "event": { "name": "discord.member_joined" } }
+      },
+      {
+        "id": "role",
+        "retry": { "attempts": 3 },
+        "tool": {
+          "method": "/pcx.discord.v1.Discord/GiveRole",
+          "request": {
+            "fields": {
+              "member_id": { "text": "{{ trigger.event.payload.member_id }}" },
+              "role": { "constant": { "string": "${role}" } }
+            }
+          }
+        }
+      }
+    ],
+    "edges": [{ "from": "joined", "to": "role" }]
+  },
+  "grants": { "modules": ["discord"] }
+}

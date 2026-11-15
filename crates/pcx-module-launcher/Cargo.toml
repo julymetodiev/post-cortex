@@ -1,0 +1,37 @@
+[package]
+name = "pcx-module-launcher"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "A module's process under the OS sandbox with its limits, and the launcher of the pot pcx-modules: the adapters of pcx-host's port ModuleLauncher."
+publish = false
+
+[dependencies]
+pcx-host.workspace = true
+pcx-module-api.workspace = true
+pcx-sandbox.workspace = true
+post-cortex-proto.workspace = true
+async-trait.workspace = true
+hyper-util.workspace = true
+nix = { workspace = true, features = ["signal"] }
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
+tonic.workspace = true
+tower.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

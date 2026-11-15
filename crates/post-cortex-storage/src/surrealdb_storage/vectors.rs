@@ -10,30 +10,75 @@
 // The above copyright notice and this permission notice shall be included in all
 // copies or substantial portions of the Software.
 
-//! [`VectorStorage`] trait implementation for [`SurrealDBStorage`].
-//!
-//! Uses SurrealDB's native HNSW index — see the `idx_embedding_hnsw` index in
-//! `core::initialize_schema` — for O(log n) similarity search.
+//! The [`VectorStore`] port on SurrealDB: the `embedding` table, keyed
+//! `{session}_{content id}`. Search (vectors and BM25) runs on the memory
+//! layer's in-memory index loaded from this table.
 
-use anyhow::Result;
+use crate::port_error::PortResult;
+use crate::port_error::{AdapterError, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
 use surrealdb::types::SurrealValue;
-use tracing::debug;
 
-use crate::traits::VectorStorage;
-use post_cortex_embeddings::{Corpus, SearchMatch, VectorMetadata};
+use post_cortex_ports::VectorMetadata;
+use post_cortex_ports::storage::VectorStore;
 
-use super::MIN_VECTOR_LEN;
-use super::SurrealDBStorage;
-use super::records::{EmbeddingRecord, KnnResult};
+use crate::surrealdb_storage::MIN_VECTOR_LEN;
+use crate::surrealdb_storage::SurrealDBStorage;
+use crate::surrealdb_storage::records::EmbeddingRecord;
 
-pub(super) fn embedding_record(vector: Vec<f32>, metadata: VectorMetadata) -> EmbeddingRecord {
+/// The metadata of a stored embedding row; an unparsable timestamp is
+/// [`Corrupt`](post_cortex_ports::PortError::Corrupt).
+pub fn stored_metadata(
+    id: String,
+    text: String,
+    source: String,
+    content_type: String,
+    timestamp: &str,
+    metadata: std::collections::HashMap<String, String>,
+) -> Result<VectorMetadata> {
+    Ok(VectorMetadata {
+        timestamp: post_cortex_ports::error::parse_timestamp("embedding", &id, timestamp)?,
+        id,
+        text: text.into(),
+        source,
+        content_type,
+        metadata,
+    })
+}
+
+/// The row of a `SELECT count() ... GROUP ALL`.
+#[derive(Deserialize, SurrealValue)]
+struct CountRow {
+    count: i64,
+}
+
+/// The count of a `GROUP ALL` row; no row means no matches.
+fn count_of(row: Option<CountRow>) -> Result<usize> {
+    row.map_or(Ok(0), |c| Ok(usize::try_from(c.count)?))
+}
+
+/// A stored embedding row as a vector and its metadata.
+fn stored_vector(r: EmbeddingRecord) -> Result<(Vec<f32>, VectorMetadata)> {
+    let metadata = stored_metadata(
+        r.content_id,
+        r.text,
+        r.session_id,
+        r.content_type,
+        &r.timestamp,
+        r.metadata,
+    )?;
+    Ok((r.vector, metadata))
+}
+
+pub fn embedding_record(vector: Vec<f32>, metadata: VectorMetadata) -> EmbeddingRecord {
     EmbeddingRecord {
         content_id: metadata.id,
         session_id: metadata.source,
         vector,
-        text: metadata.text,
+        text: metadata.text.to_string(),
         content_type: metadata.content_type,
         timestamp: metadata.timestamp.to_rfc3339(),
         metadata: metadata.metadata,
@@ -48,404 +93,169 @@ struct KeyedEmbedding {
     record: EmbeddingRecord,
 }
 
+/// Upsert embeddings under session-scoped record ids, in one query.
+///
+/// Records written before ids were session-scoped are keyed by the bare
+/// content id; the same session's legacy record is dropped first (the
+/// `(session_id, content_id)` index is unique), other sessions' records
+/// are left alone.
+async fn upsert_embeddings(db: &Surreal<Any>, records: Vec<EmbeddingRecord>) -> Result<()> {
+    if records.is_empty() {
+        return Ok(());
+    }
+    let rows: Vec<KeyedEmbedding> = records
+        .into_iter()
+        .map(|record| KeyedEmbedding {
+            key: format!("{}_{}", record.session_id, record.content_id),
+            record,
+        })
+        .collect();
+    db.query(
+        "FOR $e IN $rows { \
+             DELETE type::record('embedding', $e.record.content_id) \
+                 WHERE session_id = $e.record.session_id; \
+             UPSERT type::record('embedding', $e.key) CONTENT $e.record; };",
+    )
+    .bind(("rows", rows))
+    .await?
+    .check()?;
+    Ok(())
+}
+
 impl SurrealDBStorage {
-    /// Upsert embeddings under session-scoped record ids, in one query.
-    ///
-    /// Records written before ids were session-scoped are keyed by the bare
-    /// content id; the same session's legacy record is dropped first (the
-    /// `(session_id, content_id)` index is unique), other sessions' records
-    /// are left alone.
-    pub(super) async fn upsert_embeddings(&self, records: Vec<EmbeddingRecord>) -> Result<()> {
-        if records.is_empty() {
-            return Ok(());
+    /// Reject vectors this storage was not configured for.
+    fn validate_vector(&self, vector: &[f32]) -> Result<()> {
+        match self.vector_dimension {
+            Some(dim) if vector.len() != dim => Err(AdapterError::Dimension {
+                expected: dim,
+                got: vector.len(),
+            }),
+            None if vector.len() < MIN_VECTOR_LEN => Err(AdapterError::TooShort {
+                got: vector.len(),
+                min: MIN_VECTOR_LEN,
+            }),
+            _ => Ok(()),
         }
-        let rows: Vec<KeyedEmbedding> = records
-            .into_iter()
-            .map(|record| KeyedEmbedding {
-                key: format!("{}_{}", record.session_id, record.content_id),
-                record,
-            })
-            .collect();
-        self.db
-            .query(
-                "FOR $e IN $rows { \
-                 DELETE type::record('embedding', $e.record.content_id) \
-                     WHERE session_id = $e.record.session_id; \
-                 UPSERT type::record('embedding', $e.key) CONTENT $e.record; };",
-            )
-            .bind(("rows", rows))
-            .await?
-            .check()?;
-        Ok(())
     }
 }
 
 #[async_trait]
-impl VectorStorage for SurrealDBStorage {
-    async fn add_vector(&self, vector: Vec<f32>, metadata: VectorMetadata) -> Result<String> {
-        if vector.len() < MIN_VECTOR_LEN {
-            return Err(anyhow::anyhow!(
-                "Vector too short: got {} dims, need at least {}",
-                vector.len(),
-                MIN_VECTOR_LEN,
-            ));
-        }
-
-        debug!(
-            "SurrealDBStorage: Adding vector for content {}",
-            metadata.id
-        );
-
-        let id = metadata.id.clone();
-        self.upsert_embeddings(vec![embedding_record(vector, metadata)])
-            .await?;
-        Ok(id)
-    }
-
+impl VectorStore for SurrealDBStorage {
     /// All vectors in one query.
-    async fn add_vectors_batch(
-        &self,
-        vectors: Vec<(Vec<f32>, VectorMetadata)>,
-    ) -> Result<Vec<String>> {
-        if let Some((v, _)) = vectors.iter().find(|(v, _)| v.len() < MIN_VECTOR_LEN) {
-            return Err(anyhow::anyhow!(
-                "Vector too short: got {} dims, need at least {}",
-                v.len(),
-                MIN_VECTOR_LEN,
-            ));
-        }
-        let ids = vectors.iter().map(|(_, m)| m.id.clone()).collect();
-        let records = vectors
-            .into_iter()
-            .map(|(vector, metadata)| embedding_record(vector, metadata))
-            .collect();
-        self.upsert_embeddings(records).await?;
-        Ok(ids)
-    }
-
-    async fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchMatch>> {
-        if query.len() < MIN_VECTOR_LEN {
-            return Err(anyhow::anyhow!(
-                "Query vector dimension mismatch: at least {}, got {}",
-                MIN_VECTOR_LEN,
-                query.len()
-            ));
-        }
-
-        debug!("SurrealDBStorage: HNSW search for {} nearest vectors", k);
-
-        // Use native HNSW KNN search - O(log n) instead of O(n)!
-        // The <|K|> operator uses the HNSW index for fast approximate nearest neighbor search
-        let query_vec: Vec<f32> = query.to_vec();
-        let mut response = self
-            .db
-            .query("SELECT *, vector::distance::knn() AS distance FROM embedding WHERE vector <|$k|> $query_vec")
-            .bind(("k", k as i64))
-            .bind(("query_vec", query_vec))
-            .await?;
-
-        let records: Vec<KnnResult> = response.take(0)?;
-
-        let matches: Vec<SearchMatch> = records
-            .into_iter()
-            .map(|r| {
-                // Convert distance to similarity (cosine distance -> similarity)
-                let similarity = 1.0 - r.distance.min(1.0);
-                SearchMatch {
-                    vector_id: 0,
-                    similarity,
-                    metadata: VectorMetadata {
-                        id: r.content_id,
-                        text: r.text,
-                        source: r.session_id,
-                        content_type: r.content_type,
-                        timestamp: Self::parse_datetime(&r.timestamp),
-                        metadata: r.metadata,
-                    },
+    async fn upsert_vectors(&self, vectors: Vec<(Vec<f32>, VectorMetadata)>) -> PortResult<()> {
+        self.breaker
+            .guard(async {
+                for (vector, _) in &vectors {
+                    self.validate_vector(vector)?;
                 }
+                let records = vectors
+                    .into_iter()
+                    .map(|(vector, metadata)| embedding_record(vector, metadata))
+                    .collect();
+                upsert_embeddings(&self.db(), records).await
             })
-            .collect();
-
-        debug!("SurrealDBStorage: HNSW found {} matches", matches.len());
-
-        Ok(matches)
-    }
-
-    async fn search_in_session(
-        &self,
-        query: &[f32],
-        k: usize,
-        session_id: &str,
-    ) -> Result<Vec<SearchMatch>> {
-        if query.len() < MIN_VECTOR_LEN {
-            return Err(anyhow::anyhow!(
-                "Query vector dimension mismatch: at least {}, got {}",
-                MIN_VECTOR_LEN,
-                query.len()
-            ));
-        }
-
-        debug!(
-            "SurrealDBStorage: HNSW search for {} nearest vectors in session {}",
-            k, session_id
-        );
-
-        // Use HNSW with post-filtering: fetch more results, filter by session
-        // This is more efficient than full table scan for large datasets
-        let fetch_count = (k * 5).max(50); // Fetch 5x more to ensure enough after filtering
-        let query_vec: Vec<f32> = query.to_vec();
-
-        let mut response = self
-            .db
-            .query("SELECT *, vector::distance::knn() AS distance FROM embedding WHERE vector <|$fetch_count|> $query_vec")
-            .bind(("fetch_count", fetch_count as i64))
-            .bind(("query_vec", query_vec))
-            .await?;
-
-        let records: Vec<KnnResult> = response.take(0)?;
-
-        // Post-filter by session and convert to SearchMatch
-        let matches: Vec<SearchMatch> = records
-            .into_iter()
-            .filter(|r| r.session_id == session_id)
-            .take(k)
-            .map(|r| {
-                let similarity = 1.0 - r.distance.min(1.0);
-                SearchMatch {
-                    vector_id: 0,
-                    similarity,
-                    metadata: VectorMetadata {
-                        id: r.content_id,
-                        text: r.text,
-                        source: r.session_id,
-                        content_type: r.content_type,
-                        timestamp: Self::parse_datetime(&r.timestamp),
-                        metadata: r.metadata,
-                    },
-                }
-            })
-            .collect();
-
-        debug!(
-            "SurrealDBStorage: HNSW found {} matches in session",
-            matches.len()
-        );
-
-        Ok(matches)
-    }
-
-    async fn search_by_content_type(
-        &self,
-        query: &[f32],
-        k: usize,
-        content_type: &str,
-    ) -> Result<Vec<SearchMatch>> {
-        if query.len() < MIN_VECTOR_LEN {
-            return Err(anyhow::anyhow!(
-                "Query vector dimension mismatch: at least {}, got {}",
-                MIN_VECTOR_LEN,
-                query.len()
-            ));
-        }
-
-        debug!(
-            "SurrealDBStorage: HNSW search for {} nearest vectors of type {}",
-            k, content_type
-        );
-
-        // Use HNSW with post-filtering by content type
-        let fetch_count = (k * 5).max(50);
-        let query_vec: Vec<f32> = query.to_vec();
-
-        let mut response = self
-            .db
-            .query("SELECT *, vector::distance::knn() AS distance FROM embedding WHERE vector <|$fetch_count|> $query_vec")
-            .bind(("fetch_count", fetch_count as i64))
-            .bind(("query_vec", query_vec))
-            .await?;
-
-        let records: Vec<KnnResult> = response.take(0)?;
-
-        // Post-filter by content_type
-        let matches: Vec<SearchMatch> = records
-            .into_iter()
-            .filter(|r| r.content_type == content_type)
-            .take(k)
-            .map(|r| {
-                let similarity = 1.0 - r.distance.min(1.0);
-                SearchMatch {
-                    vector_id: 0,
-                    similarity,
-                    metadata: VectorMetadata {
-                        id: r.content_id,
-                        text: r.text,
-                        source: r.session_id,
-                        content_type: r.content_type,
-                        timestamp: Self::parse_datetime(&r.timestamp),
-                        metadata: r.metadata,
-                    },
-                }
-            })
-            .collect();
-
-        debug!(
-            "SurrealDBStorage: HNSW found {} matches of type {}",
-            matches.len(),
-            content_type
-        );
-
-        Ok(matches)
-    }
-
-    async fn search_text(
-        &self,
-        query: &str,
-        query_vector: &[f32],
-        k: usize,
-        sources: &[String],
-        corpus: Corpus,
-    ) -> Result<Option<Vec<SearchMatch>>> {
-        self.text_search(query, query_vector, k, sources, corpus)
             .await
-            .map(Some)
     }
 
-    /// Removes the vectors stored under content id `id` in every session.
-    async fn remove_vector(&self, id: &str) -> Result<bool> {
-        let mut response = self
-            .db
-            .query("DELETE embedding WHERE content_id = $content_id RETURN BEFORE")
-            .bind(("content_id", id.to_string()))
-            .await?;
-        let removed: Vec<EmbeddingRecord> = response.take(0)?;
-        Ok(!removed.is_empty())
-    }
-
-    /// Removes one session's vector, under its current or legacy record id.
-    async fn remove_session_vector(&self, session_id: &str, content_id: &str) -> Result<bool> {
-        let mut response = self
-            .db
+    /// One query, under current or legacy record ids.
+    async fn delete_vectors(&self, session_id: &str, content_ids: &[String]) -> PortResult<usize> {
+        self.breaker
+            .guard(async {
+                if content_ids.is_empty() {
+                    return Ok(0);
+                }
+                let mut response = self
+            .db()
             .query(
-                "DELETE embedding WHERE session_id = $session_id AND content_id = $content_id \
+                "DELETE embedding WHERE session_id = $session_id AND content_id IN $content_ids \
                  RETURN BEFORE",
             )
             .bind(("session_id", session_id.to_string()))
-            .bind(("content_id", content_id.to_string()))
-            .await?;
-        let removed: Vec<EmbeddingRecord> = response.take(0)?;
-        Ok(!removed.is_empty())
+            .bind(("content_ids", content_ids.to_vec()))
+            .await?
+            .check()?;
+                let removed: Vec<EmbeddingRecord> = response.take(0)?;
+                Ok(removed.len())
+            })
+            .await
     }
 
-    async fn has_session_embeddings(&self, session_id: &str) -> bool {
-        let count = self.count_session_embeddings(session_id).await;
-        count > 0
+    async fn has_session_embeddings(&self, session_id: &str) -> PortResult<bool> {
+        self.breaker
+            .guard(async { Ok(self.count_session_embeddings(session_id).await? > 0) })
+            .await
     }
 
-    async fn count_session_embeddings(&self, session_id: &str) -> usize {
-        let result = self
-            .db
-            .query("SELECT count() FROM embedding WHERE session_id = $session_id GROUP ALL")
-            .bind(("session_id", session_id.to_string()))
-            .await;
-
-        if let Ok(mut response) = result {
-            #[derive(Deserialize, SurrealValue)]
-            struct CountResult {
-                count: i64,
-            }
-            if let Ok(Some(count)) = response.take::<Option<CountResult>>(0) {
-                return count.count as usize;
-            }
-        }
-
-        0
+    async fn count_session_embeddings(&self, session_id: &str) -> PortResult<usize> {
+        self.breaker
+            .guard(async {
+                let mut response = self
+                    .db()
+                    .query("SELECT count() FROM embedding WHERE session_id = $session_id GROUP ALL")
+                    .bind(("session_id", session_id.to_string()))
+                    .await?
+                    .check()?;
+                count_of(response.take(0)?)
+            })
+            .await
     }
 
-    async fn total_count(&self) -> usize {
-        let result = self
-            .db
-            .query("SELECT count() FROM embedding GROUP ALL")
-            .await;
-
-        if let Ok(mut response) = result {
-            #[derive(Deserialize, SurrealValue)]
-            struct CountResult {
-                count: i64,
-            }
-            if let Ok(Some(count)) = response.take::<Option<CountResult>>(0) {
-                return count.count as usize;
-            }
-        }
-
-        0
+    async fn total_count(&self) -> PortResult<usize> {
+        self.breaker
+            .guard(async {
+                let mut response = self
+                    .db()
+                    .query("SELECT count() FROM embedding GROUP ALL")
+                    .await?
+                    .check()?;
+                count_of(response.take(0)?)
+            })
+            .await
     }
 
     async fn get_session_vectors(
         &self,
         session_id: &str,
-    ) -> Result<Vec<(Vec<f32>, VectorMetadata)>> {
-        let mut response = self
-            .db
-            .query("SELECT * FROM embedding WHERE session_id = $session_id")
-            .bind(("session_id", session_id.to_string()))
-            .await?;
-
-        let records: Vec<EmbeddingRecord> = response.take(0)?;
-
-        Ok(records
-            .into_iter()
-            .map(|r| {
-                (
-                    r.vector,
-                    VectorMetadata {
-                        id: r.content_id,
-                        text: r.text,
-                        source: r.session_id,
-                        content_type: r.content_type,
-                        timestamp: Self::parse_datetime(&r.timestamp),
-                        metadata: r.metadata,
-                    },
-                )
+    ) -> PortResult<Vec<(Vec<f32>, VectorMetadata)>> {
+        self.breaker
+            .guard(async {
+                let mut response = self
+                    .db()
+                    .query("SELECT * FROM embedding WHERE session_id = $session_id")
+                    .bind(("session_id", session_id.to_string()))
+                    .await?
+                    .check()?;
+                let records: Vec<EmbeddingRecord> = response.take(0)?;
+                records.into_iter().map(stored_vector).collect()
             })
-            .collect())
+            .await
     }
 
-    async fn get_all_vectors(&self) -> Result<Vec<(Vec<f32>, VectorMetadata)>> {
-        let mut all_vectors = Vec::new();
-        let limit = 1000;
-        let mut start = 0;
-
-        loop {
-            let mut response = self
-                .db
-                .query("SELECT * FROM embedding LIMIT $limit START $start")
-                .bind(("limit", limit))
-                .bind(("start", start))
-                .await?;
-
-            let records: Vec<EmbeddingRecord> = response.take(0)?;
-
-            if records.is_empty() {
-                break;
-            }
-
-            for r in records {
-                all_vectors.push((
-                    r.vector,
-                    VectorMetadata {
-                        id: r.content_id,
-                        text: r.text,
-                        source: r.session_id,
-                        content_type: r.content_type,
-                        timestamp: Self::parse_datetime(&r.timestamp),
-                        metadata: r.metadata,
-                    },
-                ));
-            }
-
-            start += limit;
-        }
-
-        Ok(all_vectors)
+    async fn get_all_vectors(&self) -> PortResult<Vec<(Vec<f32>, VectorMetadata)>> {
+        self.breaker
+            .guard(async {
+                let mut all_vectors = Vec::new();
+                let limit = 1000;
+                let mut start = 0;
+                loop {
+                    let mut response = self
+                        .db()
+                        .query("SELECT * FROM embedding LIMIT $limit START $start")
+                        .bind(("limit", limit))
+                        .bind(("start", start))
+                        .await?
+                        .check()?;
+                    let records: Vec<EmbeddingRecord> = response.take(0)?;
+                    if records.is_empty() {
+                        break;
+                    }
+                    for r in records {
+                        all_vectors.push(stored_vector(r)?);
+                    }
+                    start += limit;
+                }
+                Ok(all_vectors)
+            })
+            .await
     }
 }

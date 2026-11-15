@@ -19,7 +19,7 @@ use std::net::Ipv4Addr;
 use std::sync::LazyLock;
 
 use crate::core::context_update::{EntityRelationship, UpdateContent};
-use crate::core::message::NewMessage;
+use crate::core::message::{MessageBlock, NewMessage};
 use crate::services::UpdateContextRequest;
 
 /// Redaction settings carried by the system config.
@@ -58,66 +58,96 @@ struct Rule {
     replace: Replace,
 }
 
-fn rule(kind: &'static str, pattern: &str, replace: Replace) -> Rule {
-    Rule {
+/// Why a [`Redactor`] could not be built: redaction never runs with fewer
+/// rules than configured.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum RedactError {
+    /// A built-in rule does not compile (a defect of this build).
+    #[error("built-in redaction rule {kind} does not compile: {source}")]
+    Builtin {
+        /// The rule.
+        kind: &'static str,
+        /// The regex error.
+        #[source]
+        source: regex::Error,
+    },
+    /// A configured extra pattern does not compile.
+    #[error("redaction pattern {pattern:?} does not compile: {source}")]
+    Pattern {
+        /// The pattern.
+        pattern: String,
+        /// The regex error.
+        #[source]
+        source: regex::Error,
+    },
+}
+
+fn rule(kind: &'static str, pattern: &str, replace: Replace) -> Result<Rule, RedactError> {
+    Ok(Rule {
         kind,
-        re: Regex::new(pattern).expect("built-in redaction pattern must compile"),
+        re: Regex::new(pattern).map_err(|source| RedactError::Builtin { kind, source })?,
         replace,
-    }
+    })
 }
 
 // Order matters: specific credential shapes run before the generic
 // `key = value` rule, and URLs with credentials before e-mail addresses
 // (`user:pass@host` would otherwise read as an address).
-static BUILTIN: LazyLock<Vec<Rule>> = LazyLock::new(|| {
-    vec![
+static BUILTIN: LazyLock<Result<Vec<Rule>, RedactError>> = LazyLock::new(|| {
+    Ok(vec![
         rule(
             "private_key",
             r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
             Replace::Whole,
-        ),
+        )?,
         rule(
             "jwt",
             r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
             Replace::Whole,
-        ),
+        )?,
         rule(
             "api_key",
             r"\b(?:sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{40,}|glpat-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[abps]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35})",
             Replace::Whole,
-        ),
+        )?,
         rule(
             "telegram_token",
             r"\b\d{8,10}:[A-Za-z0-9_-]{35}\b",
             Replace::Whole,
-        ),
+        )?,
+        // A Discord bot's: its user id in base64, a time, a signature.
+        rule(
+            "discord_token",
+            r"\b[MNO][A-Za-z0-9_-]{23,27}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,40}",
+            Replace::Whole,
+        )?,
         rule(
             "bearer",
             r"(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]{16,}",
             Replace::KeepPrefix,
-        ),
+        )?,
         rule(
             "url_password",
             r"(?i)(\b[a-z][a-z0-9+.-]*://[^\s:/@]+:)[^\s@/]+(@)",
             Replace::KeepPrefix,
-        ),
+        )?,
         rule(
             "secret",
             r#"(?i)(\b(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)["']?\s*[:=]\s*["']?)[^\s"',;]{4,}"#,
             Replace::KeepPrefix,
-        ),
+        )?,
         rule(
             "email",
             r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
             Replace::Whole,
-        ),
+        )?,
         rule(
             "phone",
             r"(?:\+\d{1,3}[\s-]?\(?\d{1,4}\)?(?:[\s-]?\d{2,4}){2,4}|\b0[89]\d[\s-]?\d{3}[\s-]?\d{3,4}\b)",
             Replace::Whole,
-        ),
-        rule("ip", r"\b(?:\d{1,3}\.){3}\d{1,3}\b", Replace::PublicIpv4),
-    ]
+        )?,
+        rule("ip", r"\b(?:\d{1,3}\.){3}\d{1,3}\b", Replace::PublicIpv4)?,
+    ])
 });
 
 fn is_public(ip: Ipv4Addr) -> bool {
@@ -134,6 +164,7 @@ fn is_public(ip: Ipv4Addr) -> bool {
 /// Redacts text with the built-in rules plus configured extras.
 pub struct Redactor {
     enabled: bool,
+    builtin: &'static [Rule],
     extra: Vec<Regex>,
 }
 
@@ -141,25 +172,28 @@ pub struct Redactor {
 pub type RedactionCounts = BTreeMap<&'static str, usize>;
 
 impl Redactor {
-    /// Build from config. Invalid extra patterns are skipped and returned
-    /// so the caller can log them; they never disable the built-in rules.
-    #[must_use]
-    pub fn new(config: &RedactionConfig) -> (Self, Vec<String>) {
-        let mut extra = Vec::new();
-        let mut invalid = Vec::new();
-        for p in &config.extra_patterns {
-            match Regex::new(p) {
-                Ok(re) => extra.push(re),
-                Err(e) => invalid.push(format!("{p}: {e}")),
-            }
-        }
-        (
-            Self {
-                enabled: config.enabled,
-                extra,
-            },
-            invalid,
-        )
+    /// Build from config.
+    ///
+    /// # Errors
+    /// A built-in rule or a configured extra pattern that does not compile:
+    /// redaction never runs with fewer rules than configured.
+    pub fn new(config: &RedactionConfig) -> Result<Self, RedactError> {
+        let builtin = BUILTIN.as_ref().map_err(Clone::clone)?;
+        let extra = config
+            .extra_patterns
+            .iter()
+            .map(|p| {
+                Regex::new(p).map_err(|source| RedactError::Pattern {
+                    pattern: p.clone(),
+                    source,
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            enabled: config.enabled,
+            builtin,
+            extra,
+        })
     }
 
     /// Redactor that changes nothing.
@@ -167,6 +201,7 @@ impl Redactor {
     pub fn disabled() -> Self {
         Self {
             enabled: false,
+            builtin: &[],
             extra: Vec::new(),
         }
     }
@@ -177,7 +212,7 @@ impl Redactor {
             return text.to_string();
         }
         let mut out = text.to_string();
-        for r in BUILTIN.iter() {
+        for r in self.builtin {
             let mut n = 0;
             let replaced = r.re.replace_all(&out, |c: &Captures| {
                 let whole = &c[0];
@@ -262,6 +297,20 @@ impl Redactor {
         }
         message.text = self.redact_str(&message.text, counts);
         self.redact_vec(&mut message.files, counts);
+        for block in &mut message.blocks {
+            match block {
+                MessageBlock::Text { text }
+                | MessageBlock::Thinking { text, .. }
+                | MessageBlock::Summary { text } => {
+                    *text = self.redact_str(text, counts);
+                }
+                MessageBlock::ToolUse { input, .. } => self.redact_json(input, counts),
+                MessageBlock::ToolResult { content, .. } => {
+                    *content = self.redact_str(content, counts);
+                }
+                MessageBlock::End { detail, .. } => *detail = self.redact_str(detail, counts),
+            }
+        }
     }
 
     /// Redact every string inside a JSON document (used for imports, whose
@@ -289,7 +338,7 @@ mod tests {
     use super::*;
 
     fn red(text: &str) -> (String, RedactionCounts) {
-        let (r, _) = Redactor::new(&RedactionConfig::default());
+        let r = Redactor::new(&RedactionConfig::default()).unwrap();
         let mut counts = RedactionCounts::new();
         let out = r.redact_str(text, &mut counts);
         (out, counts)
@@ -319,8 +368,13 @@ mod tests {
         let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyMTIzIn0.c2lnbmF0dXJlLXZhbHVl";
         let api_key = format!("sk-ant-{}", "x".repeat(24));
         let bot = format!("{}:{}", "1".repeat(10), "x".repeat(35));
-        let (out, c) = red(&format!("jwt {jwt} key {api_key} bot {bot}"));
+        let discord = format!("M{}.{}.{}", "T".repeat(25), "G".repeat(6), "x".repeat(38));
+        let (out, c) = red(&format!(
+            "jwt {jwt} key {api_key} bot {bot} discord {discord}"
+        ));
         assert!(!out.contains(jwt), "{out}");
+        assert!(!out.contains(&discord), "{out}");
+        assert_eq!(c["discord_token"], 1);
         assert_eq!(c["jwt"], 1);
         assert_eq!(c["api_key"], 1);
         assert_eq!(c["telegram_token"], 1);
@@ -354,18 +408,28 @@ mod tests {
 
     #[test]
     fn disabled_and_custom_patterns() {
-        let (off, _) = Redactor::new(&RedactionConfig {
+        let off = Redactor::new(&RedactionConfig {
             enabled: false,
             extra_patterns: vec![],
-        });
+        })
+        .unwrap();
         let mut c = RedactionCounts::new();
         assert_eq!(off.redact_str("a@b.co", &mut c), "a@b.co");
 
-        let (on, invalid) = Redactor::new(&RedactionConfig {
+        // A pattern that does not compile refuses the redactor: it never
+        // runs with fewer rules than configured.
+        assert!(matches!(
+            Redactor::new(&RedactionConfig {
+                enabled: true,
+                extra_patterns: vec![r"ORD-\d{6}".into(), "(".into()],
+            }),
+            Err(RedactError::Pattern { .. })
+        ));
+        let on = Redactor::new(&RedactionConfig {
             enabled: true,
-            extra_patterns: vec![r"ORD-\d{6}".into(), "(".into()],
-        });
-        assert_eq!(invalid.len(), 1);
+            extra_patterns: vec![r"ORD-\d{6}".into()],
+        })
+        .unwrap();
         assert_eq!(
             on.redact_str("order ORD-123456", &mut c),
             "order [REDACTED:custom]"
@@ -374,7 +438,7 @@ mod tests {
 
     #[test]
     fn json_strings_are_redacted_keys_kept() {
-        let (r, _) = Redactor::new(&RedactionConfig::default());
+        let r = Redactor::new(&RedactionConfig::default()).unwrap();
         let mut v = serde_json::json!({"email": "a@b.co", "list": ["x", "pwd=secret123"]});
         let mut c = RedactionCounts::new();
         r.redact_json(&mut v, &mut c);

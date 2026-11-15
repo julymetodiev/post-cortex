@@ -17,44 +17,62 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::query_cache::QueryCacheConfig;
-use post_cortex_embeddings::EmbeddingConfig;
-use post_cortex_embeddings::VectorDbConfig;
 
-/// Content types for vectorization
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum ContentType {
-    /// Update content from context updates
-    UpdateContent,
-    /// Entity descriptions
-    EntityDescription,
-    /// User questions and messages
-    UserMessage,
-    /// Decision points and rationale
-    DecisionPoint,
-    /// Code snippets and technical content
-    CodeSnippet,
-    /// Problem-solution pairs
-    ProblemSolution,
-    /// General session metadata
-    SessionMetadata,
-    /// A raw conversation turn from the message stream
-    /// (`post_cortex_core::core::message`)
-    Message,
+pub use post_cortex_core::core::content::ContentKind;
+
+/// Size of the search index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct VectorizationStats {
+    /// Vectors in the index.
+    pub total_vectors: usize,
+    /// Memory the index uses, in MiB.
+    pub memory_usage_mb: usize,
+    /// Dimension of the embeddings.
+    pub embedding_dimension: usize,
 }
 
-impl ContentType {
-    /// Get the importance weight for this content type
+/// What a document hit is: its kind and the version found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentHit {
+    /// The document's kind, `<module>/<name>`.
+    pub kind: String,
+    /// Its latest version.
+    pub version: u64,
+}
+
+/// Where a search hit lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum HitSource {
+    /// A session's record, entity or turn.
+    Session(Uuid),
+    /// A workspace's document.
+    Workspace(Uuid),
+}
+
+impl HitSource {
+    /// The session, for a session's hit.
     #[must_use]
-    pub const fn importance_weight(&self) -> f32 {
+    pub const fn session(self) -> Option<Uuid> {
         match self {
-            Self::DecisionPoint => 1.0,
-            Self::ProblemSolution => 0.9,
-            Self::UserMessage => 0.8,
-            Self::UpdateContent => 0.7,
-            Self::CodeSnippet => 0.6,
-            Self::EntityDescription => 0.5,
-            Self::Message => 0.4,
-            Self::SessionMetadata => 0.3,
+            Self::Session(id) => Some(id),
+            Self::Workspace(_) => None,
+        }
+    }
+
+    /// The workspace, for a document hit.
+    #[must_use]
+    pub const fn workspace(self) -> Option<Uuid> {
+        match self {
+            Self::Workspace(id) => Some(id),
+            Self::Session(_) => None,
+        }
+    }
+
+    /// The session's or the workspace's id: the source of its index entry.
+    #[must_use]
+    pub const fn id(self) -> Uuid {
+        match self {
+            Self::Session(id) | Self::Workspace(id) => id,
         }
     }
 }
@@ -64,15 +82,16 @@ impl ContentType {
 pub struct SemanticSearchResult {
     /// Unique identifier of the vectorised content.
     pub content_id: String,
-    /// Session that owns this content.
-    pub session_id: Uuid,
+    /// Where the content lives: a session (records, entities, turns) or a
+    /// workspace (documents).
+    pub source: HitSource,
     /// Classification of the content (decision, code, etc.).
-    pub content_type: ContentType,
+    pub content_type: ContentKind,
     /// Raw text that was vectorised.
     pub text_content: String,
     /// Cosine similarity to the query vector.
     pub similarity_score: f32,
-    /// Importance weight derived from [`ContentType::importance_weight`].
+    /// Importance weight derived from [`ContentKind::importance_weight`].
     pub importance_score: f32,
     /// When the content was originally stored.
     pub timestamp: DateTime<Utc>,
@@ -86,6 +105,9 @@ pub struct SemanticSearchResult {
     /// Who wrote the record or message, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
+    /// For a record: its title, completed from its session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// For a record: the captured messages it was drawn from
     /// (`message:<seq>`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -103,9 +125,18 @@ pub struct SemanticSearchResult {
     /// search asked for a trace ([`SearchOptions::trace`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signals: Option<Signals>,
+    /// For a document: its kind and version, completed from its latest
+    /// version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document: Option<DocumentHit>,
+    /// Set when `text_content` is the passage of a longer text the search
+    /// showed for its query ([`SearchOptions::passage`]): the whole text's
+    /// length, in characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_chars: Option<usize>,
 }
 
-/// How one result was found (ROADMAP Phase 3 item 10): its place in each
+/// How one result was found: its place in each
 /// ranking (1 = first; none: not in that ranking's candidates), the fused
 /// score and the reranker's.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -184,19 +215,19 @@ pub const CHUNK_PARENT_KEY: &str = "parent";
 /// Metadata key of a message vector: `user` or `assistant`.
 pub const MESSAGE_ROLE_KEY: &str = "role";
 
-/// Metadata key of a record or message vector: who wrote it, when known.
-pub const AUTHOR_KEY: &str = "author";
+pub use post_cortex_ports::AUTHOR_KEY;
 
 /// Metadata key of a message vector: the turn's position in its stream.
 pub const MESSAGE_SEQ_KEY: &str = "seq";
 
-/// Configuration for content vectorization
+/// Metadata key of a document vector: the document's kind
+/// (`<module>/<name>`).
+pub const DOCUMENT_KIND_KEY: &str = "document_kind";
+
+/// Configuration for content vectorization (the model and the index are
+/// the adapters' configuration)
 #[derive(Debug, Clone)]
 pub struct ContentVectorizerConfig {
-    /// Embedding model configuration.
-    pub embedding_config: EmbeddingConfig,
-    /// Vector database configuration.
-    pub vector_db_config: VectorDbConfig,
     /// Minimum character length for text to be vectorised.
     pub min_text_length: usize,
     /// Updates longer than this many characters are embedded as several
@@ -223,8 +254,6 @@ pub struct ContentVectorizerConfig {
 impl Default for ContentVectorizerConfig {
     fn default() -> Self {
         Self {
-            embedding_config: EmbeddingConfig::default(),
-            vector_db_config: VectorDbConfig::default(),
             min_text_length: 10,
             max_text_length: 1000,
             batch_size: 32,
@@ -261,7 +290,7 @@ pub struct SearchOptions {
     pub graph_candidates: Option<std::sync::Arc<[String]>>,
 
     /// Structured records, raw messages or both (default: records).
-    pub corpus: post_cortex_embeddings::Corpus,
+    pub corpus: post_cortex_ports::Corpus,
 
     /// Only records and messages by this author (default: anyone).
     pub author: Option<String>,
@@ -273,6 +302,26 @@ pub struct SearchOptions {
     /// Record which rankings found each result ([`Signals`]). Traced
     /// searches skip the query cache.
     pub trace: bool,
+
+    /// Only records of these interaction types (empty: every result).
+    /// Applied by the Search capability to the ranked hits, by each
+    /// record's own type: entity and message hits are left out when set.
+    pub update_types: Vec<post_cortex_core::core::context_update::UpdateType>,
+
+    /// Show each hit's text as its passage for the query, at most this many
+    /// characters (`post_cortex_core::text::passage`; a shorter text whole);
+    /// none: every text whole. Applied by the Search capability to the
+    /// completed hits.
+    pub passage: Option<usize>,
+
+    /// Leave out the neighbours of the hits (the records and turns around
+    /// each, `SystemConfig::neighbour_radius`; default: with them).
+    pub without_neighbours: bool,
+
+    /// The remote reranker may rank this search (it receives the query and
+    /// the candidates' text). Set by the Search capability from the
+    /// workspaces of the scope: what a caller sets is replaced.
+    pub remote_rerank: bool,
 }
 
 /// What [`SearchOptions::prefer_author`] adds to a matching result's
@@ -281,8 +330,8 @@ pub struct SearchOptions {
 pub const PREFER_AUTHOR_BOOST: f32 = 0.05;
 
 /// How much work a search puts into ranking. LoCoMo all@50 with ±1
-/// neighbours: `fast` 0.789, `local` 0.870 (MiniLM-L4), `accurate` 0.938
-/// (Voyage rerank-3-lite).
+/// neighbours: `fast` 0.803, `local` 0.879 (MiniLM-L4), `accurate` 0.937
+/// (Voyage rerank-3-lite), as docs/DAEMON_MODE.md gives them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchMode {

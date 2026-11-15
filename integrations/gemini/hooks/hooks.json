@@ -1,0 +1,57 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "name": "post-cortex-cards",
+            "description": "The project's post-cortex session, workspace and cards",
+            "command": "sh \"${extensionPath}/scripts/pcx.sh\" hook gemini session-start",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": "read_file",
+        "hooks": [
+          {
+            "type": "command",
+            "name": "post-cortex-file-context",
+            "description": "What the memory knows about the file just read",
+            "command": "sh \"${extensionPath}/scripts/pcx.sh\" hook gemini file-context",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "BeforeAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "name": "post-cortex-rules",
+            "description": "The memory rules before each turn",
+            "command": "sh \"${extensionPath}/scripts/pcx.sh\" hook gemini prompt",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "name": "post-cortex-capture",
+            "description": "The prompt and the reply, when capture is on in ~/.post-cortex/config.json",
+            "command": "sh \"${extensionPath}/scripts/pcx.sh\" hook gemini capture",
+            "timeout": 10000
+          }
+        ]
+      }
+    ]
+  }
+}

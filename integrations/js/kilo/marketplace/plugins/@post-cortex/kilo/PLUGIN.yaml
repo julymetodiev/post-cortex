@@ -1,0 +1,10 @@
+# Draft entry for github.com/Kilo-Org/kilo-marketplace (plugins/<id>/PLUGIN.yaml,
+# fields per plugins/README.md there). Submit by pull request only after
+# @post-cortex/kilo is published to npm; not submitted yet.
+id: '@post-cortex/kilo'
+name: post-cortex
+description: Long-term project memory for Kilo. Puts the user and project cards in every prompt, appends what the memory knows about a file after each edit, and can capture turns; one global install, projects recognised from their git remote.
+category: development
+author: Chronicle Labs Ltd.
+url: https://github.com/julymetodiev/post-cortex/tree/main/integrations/js/kilo
+content: '@post-cortex/kilo'

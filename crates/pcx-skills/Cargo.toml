@@ -1,0 +1,41 @@
+[package]
+name = "pcx-skills"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The pcx skills module: a library of skills kept as documents in memory, offered to every agent as MCP prompts."
+keywords = ["pcx", "skills", "prompts", "agents"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-skills"
+
+[[bin]]
+name = "pcx-skills"
+path = "src/main.rs"
+
+[dependencies]
+pcx-module-api.workspace = true
+pcx-documents.workspace = true
+# Its package, pcx.skills.v1 (W23).
+post-cortex-proto.workspace = true
+prost.workspace = true
+tonic.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# The module process (`pcx-skills`): its runtime.
+tokio.workspace = true
+# The scope of its own calls (the built-in skills added at start).
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+pcx-host.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

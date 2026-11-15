@@ -1,0 +1,1108 @@
+syntax = "proto3";
+package pcx.workflow.v1;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "pcx_blob.proto";
+import "pcx_board.proto";
+import "pcx_module.proto";
+
+// Graphs of steps that run when something happens, over the tools of every
+// module (docs/modules/workflow.md).
+service Workflows {
+  // Add a workflow, once it checks against the tools its author reaches.
+  rpc CreateWorkflow(CreateWorkflowRequest) returns (WorkflowRecord);
+  // Change a workflow from the version read, once it checks.
+  rpc UpdateWorkflow(UpdateWorkflowRequest) returns (WorkflowRecord);
+  // Delete a workflow, none of its runs open: it starts no more, and its ended
+  // runs stay to be read.
+  rpc DeleteWorkflow(DeleteWorkflowRequest) returns (DeleteWorkflowResponse);
+  // Check a workflow; nothing is kept. Answers each tool block's module
+  // and effect, or the first rule it breaks.
+  rpc ValidateWorkflow(ValidateWorkflowRequest) returns (Validation);
+  // The workflows, by name.
+  rpc ListWorkflows(ListWorkflowsRequest) returns (WorkflowList);
+  // The tools a workflow written by the caller may call as `tool` blocks,
+  // with the JSON Schemas of their requests and responses.
+  rpc ListTools(ListToolsRequest) returns (ToolList);
+  // The workflows the modules its caller reaches ship (owner 2026-11-14).
+  rpc ListTemplates(ListTemplatesRequest) returns (TemplateList);
+  // A workflow made from a module's template with the caller's values and
+  // kept as CreateWorkflow keeps one: its grants asked for on the board.
+  rpc InstallTemplate(InstallTemplateRequest) returns (WorkflowRecord);
+  // Run a workflow by hand (its `manual` trigger), as a tool (its `call`
+  // trigger), by the scheduler (`schedule`) or a webhook (`webhook`), the
+  // trigger read from the caller's module; answers the run as it starts.
+  rpc RunWorkflow(RunWorkflowRequest) returns (RunRecord);
+  // Run a workflow, kept or not, with nothing stored: reads are real,
+  // writes answer their fixtures; answers the run and its steps.
+  rpc DryRunWorkflow(DryRunRequest) returns (DryRun);
+  // A workflow's runs, the newest first.
+  rpc ListRuns(ListRunsRequest) returns (RunList);
+  // A run with its steps.
+  rpc GetRun(GetRunRequest) returns (RunDetail);
+  // Cancel a run that has not ended.
+  rpc CancelRun(CancelRunRequest) returns (RunRecord);
+  // A run with its steps, then each change of it or of a step as it is
+  // written; ends after the run ends. The app's (the editor), not a tool.
+  rpc WatchRun(WatchRunRequest) returns (stream RunChange);
+  // One `filter`, `transform` or `validate` block evaluated over the values
+  // a run's steps give it; nothing is kept. The app's (the editor's
+  // preview), not a tool.
+  rpc PreviewBlock(PreviewRequest) returns (Preview);
+}
+
+// ---------------------------------------------------------------- calls
+
+// A workflow to add.
+message CreateWorkflowRequest {
+  // The workflow.
+  Workflow workflow = 1;
+}
+
+// The first rule a workflow breaks.
+message Refused {
+  // The block's id; empty for a field of the workflow.
+  string block = 1;
+  // The field (`tool.request.title`, `condition`, `layout.add`).
+  string field = 2;
+  // What is wrong, for a person.
+  string message = 3;
+}
+
+// A workflow to change from the version read.
+message UpdateWorkflowRequest {
+  // Its id.
+  string id = 1;
+  // The version read.
+  uint64 version = 2;
+  // The workflow.
+  Workflow workflow = 3;
+}
+
+// A workflow to delete.
+message DeleteWorkflowRequest {
+  // Its id.
+  string id = 1;
+}
+
+// A workflow deleted.
+message DeleteWorkflowResponse {}
+
+// A workflow to check.
+message ValidateWorkflowRequest {
+  // The workflow.
+  Workflow workflow = 1;
+}
+
+// What the check found.
+message Validation {
+  // Why the workflow breaks the check; unset: it checks, and `tools` are
+  // its tool blocks.
+  Refused refused = 2;
+  // Each tool block, with its module and effect.
+  repeated ToolUse tools = 1;
+}
+
+// A tool block's tool.
+message ToolUse {
+  // The block's id.
+  string block = 1;
+  // The module it calls.
+  string module = 2;
+  // What calling it does.
+  pcx.module.v1.Effect effect = 3;
+}
+
+// ListWorkflows input.
+message ListWorkflowsRequest {}
+
+// The catalog of `tool` blocks.
+message ListToolsRequest {
+  // Only the tools of this module; empty: every one.
+  string module = 1;
+}
+
+// Tools a `tool` block may call.
+message ToolList {
+  // By gRPC path.
+  repeated ToolEntry tools = 1;
+}
+
+// A tool a `tool` block may call.
+message ToolEntry {
+  // Its gRPC path: the block's `method`.
+  string method = 1;
+  // Its tool's name.
+  string tool = 2;
+  // The module that offers it.
+  string module = 3;
+  // What calling it does.
+  pcx.module.v1.Effect effect = 4;
+  // What it does.
+  string description = 5;
+  // The JSON Schema of its request (the proto JSON mapping): the block's
+  // `request` fields.
+  string request_schema = 6;
+  // The JSON Schema of its response: what `steps.<id>` holds.
+  string response_schema = 7;
+}
+
+// ListTemplates input.
+message ListTemplatesRequest {
+  // Only the templates of this module; empty: every one.
+  string module = 1;
+}
+
+// The templates the modules a caller reaches ship.
+message TemplateList {
+  // By module, then name.
+  repeated TemplateEntry templates = 1;
+}
+
+// A module's template.
+message TemplateEntry {
+  // The module that ships it.
+  string module = 1;
+  // It, as the module's manifest declares it.
+  pcx.module.v1.WorkflowTemplate template = 2;
+  // The name of the workflow made from it already, if one is kept: a
+  // template is installed once under its name.
+  string installed = 3;
+}
+
+// InstallTemplate input.
+message InstallTemplateRequest {
+  // The module that ships it.
+  string module = 1;
+  // Its name.
+  string template = 2;
+  // A value for each parameter to set; one left out takes its default.
+  map<string, string> values = 3;
+}
+
+// The workflows.
+message WorkflowList {
+  // By name.
+  repeated WorkflowRecord workflows = 1;
+}
+
+// A workflow with its id and version.
+message WorkflowRecord {
+  // Its document's id.
+  string id = 1;
+  // Its version.
+  uint64 version = 2;
+  // The workflow.
+  Workflow workflow = 3;
+  // Its run that changed last, in `ListWorkflows` only; unset before its
+  // first.
+  RunRecord last_run = 4;
+}
+
+// A run to start.
+message RunWorkflowRequest {
+  // The workflow's name.
+  string workflow = 1;
+  // Its input, by the input's fields.
+  Map input = 2;
+  // Whether it is called as a tool (its `call` trigger) rather than by
+  // hand (its `manual` one).
+  bool call = 3;
+  // A webhook's source: read only from the `webhooks` module.
+  string source = 4;
+  // A webhook's body, its JSON as sent: read only from the `webhooks`
+  // module.
+  bytes body = 5;
+}
+
+// A dry run.
+message DryRunRequest {
+  // The workflow, kept or not.
+  Workflow workflow = 1;
+  // Its input, by the input's fields.
+  Map input = 2;
+  // Whether its `model` and `agent` blocks are real (they cost); false:
+  // they answer their output's zero values.
+  bool models = 3;
+}
+
+// A dry run's run and its steps, in the order they started.
+message DryRun {
+  // The run.
+  Run run = 1;
+  // Its steps.
+  repeated Step steps = 2;
+}
+
+// A run with its id and version.
+message RunRecord {
+  // Its document's id.
+  string id = 1;
+  // Its version.
+  uint64 version = 2;
+  // The run.
+  Run run = 3;
+}
+
+// A block to preview over a run's values.
+message PreviewRequest {
+  // The workflow, kept or not.
+  Workflow workflow = 1;
+  // The block's id: a `filter`, a `transform` or a `validate`.
+  string block = 2;
+  // The graph it is in, as a run's journal names it (`Step.at`): empty
+  // for the workflow's graph, `<for_each>#<n>` for a body, nested by `/`.
+  string at = 3;
+  // The run's input.
+  Map input = 4;
+  // The run's (or a dry run's) steps: those of its graph and the graphs
+  // around it give the block its values.
+  repeated Step steps = 5;
+}
+
+// What a previewed block gives.
+message Preview {
+  // Its output (`steps.<id>`), by its fields.
+  Map output = 1;
+  // The port it leaves by.
+  string port = 2;
+  // Its failure; unset when it succeeded.
+  Failure failure = 3;
+  // The items it was given; 0 for one value.
+  uint64 items = 4;
+}
+
+// A workflow's runs.
+message ListRunsRequest {
+  // The workflow's name.
+  string workflow = 1;
+  // At most this many; 0: 50.
+  uint32 limit = 2;
+}
+
+// Runs, the most recently changed first.
+message RunList {
+  // The runs.
+  repeated RunRecord runs = 1;
+}
+
+// A run by id.
+message GetRunRequest {
+  // Its id.
+  string id = 1;
+}
+
+// A run and its journal.
+message RunDetail {
+  // The run.
+  RunRecord run = 1;
+  // Its steps, in the order they started.
+  repeated Step steps = 2;
+}
+
+// A run to follow.
+message WatchRunRequest {
+  // Its id.
+  string id = 1;
+}
+
+// What a watched run answers.
+message RunChange {
+  // What changed.
+  oneof change {
+    // The run with its steps: first, and again after the watcher fell
+    // behind.
+    RunDetail whole = 1;
+    // The run, changed.
+    RunRecord run = 2;
+    // One of its steps, written.
+    Step step = 3;
+  }
+}
+
+// A run to cancel.
+message CancelRunRequest {
+  // Its id.
+  string id = 1;
+}
+
+// ------------------------------------------------------------- settings
+
+// The workflow module's settings.
+message WorkflowConfig {
+  // The workspace its workflows, runs and state are kept in.
+  string workspace_id = 1 [(pcx.module.v1.setting) = { title: "Workspace", required: true, workspace: true }];
+  // The board a run's task is added to when it reaches an approval; empty:
+  // a run's approvals name their task.
+  string board = 2 [(pcx.module.v1.setting) = { title: "Board of approvals", board: true }];
+}
+
+// ------------------------------------------------------------ documents
+
+// A workflow (document workflow/workflow, titled by its name, searched by
+// its name and description); each change is the document's next version.
+message Workflow {
+  // Its name: 1 to 64 of a-z, 0-9, '-', unique in the workspace.
+  string name = 1;
+  // What it does.
+  string description = 2;
+  // What a run takes: `input` in its expressions.
+  Schema input = 3;
+  // Its triggers (blocks of kind `trigger`), blocks and edges.
+  Graph graph = 4;
+  // What a run's output is: a CEL expression over `input` and the steps
+  // of the blocks on every path to an end; empty: none.
+  string output = 5;
+  // What one run may spend.
+  Budgets budgets = 6;
+  // What its blocks may reach.
+  Grants grants = 7;
+  // The grants a person approved; written only by the module, kept by an
+  // update. A run starts only when `grants` are within these.
+  Approved approved = 8;
+  // A decision on grants not yet approved; written only by the module.
+  Asked asked = 9;
+  // Where each block is on the editor's canvas, by block id; written only
+  // by the editor, never read by the engine. A block without one is placed
+  // by the editor.
+  map<string, Point> layout = 10;
+}
+
+// A block's top left corner on the editor's canvas, in canvas units.
+message Point {
+  // Rightwards.
+  double x = 1;
+  // Downwards.
+  double y = 2;
+}
+
+// Grants a person approved.
+message Approved {
+  // The grants.
+  Grants grants = 1;
+  // The board's decision, by id.
+  string decision = 2;
+  // Who approved it.
+  string approved_by = 3;
+}
+
+// Grants asked for: a decision of risk `code` on the workflow's task.
+message Asked {
+  // The grants.
+  Grants grants = 1;
+  // The workflow's task (key `workflow:<id>`), by id.
+  string task = 2;
+  // The decision, by id.
+  string decision = 3;
+  // The person who declined the decision; empty: it waits. Grants a
+  // person declined are asked for again when the workflow is written
+  // again.
+  string declined_by = 4;
+}
+
+// Blocks and the edges between them. A `for_each` body and a `parallel`
+// branch is a graph of its own; a block's id is unique in the whole
+// workflow.
+message Graph {
+  // The blocks.
+  repeated Block blocks = 1;
+  // The edges.
+  repeated Edge edges = 2;
+  // A body's or branch's output: a CEL expression over the steps before
+  // its ends (its outer blocks' and its own); empty: none. Unused at the
+  // top, where `Workflow.output` is.
+  string output = 3;
+}
+
+// An edge: when block `from` ends through `port`, block `to` is next.
+message Edge {
+  // The block it leaves.
+  string from = 1;
+  // The block it reaches.
+  string to = 2;
+  // How `from` ended: `next` (empty too), `then`, `else` (an `if`),
+  // `case:<n>` and `default` (a `switch`), `error` (any block, after its
+  // retries).
+  string port = 3;
+}
+
+// A step of a workflow.
+message Block {
+  // Its id: a lowercase letter, then a-z, 0-9 and '_', at most 64; its
+  // output is `steps.<id>` in the expressions after it.
+  string id = 1;
+  // What it is, for a person; empty: its id.
+  string name = 2;
+  // How often a failure is tried again; unset: never.
+  Retry retry = 3;
+  // How long one attempt may take; unset: the module's default.
+  google.protobuf.Duration timeout = 4;
+  // What it does.
+  oneof kind {
+    // What starts a run.
+    Trigger trigger = 10;
+    // One RPC of a module.
+    ToolBlock tool = 11;
+    // One call of a model.
+    ModelBlock model = 12;
+    // A turn of a team member or the host's agent.
+    AgentBlock agent = 13;
+    // Another workflow.
+    CallBlock call = 14;
+    // Two ways, by a condition (`if`).
+    If branch = 15;
+    // The first case that holds, else `default`.
+    Switch switch = 16;
+    // A body for each item of a list.
+    ForEach for_each = 17;
+    // Branches at once.
+    Parallel parallel = 18;
+    // A pause.
+    Wait wait = 19;
+    // A person's (or the autonomy policy's) answer.
+    Approval approval = 20;
+    // Named values.
+    Set set = 21;
+    // A value of the workflow's store.
+    StateGet state_get = 22;
+    // A value put in the workflow's store.
+    StatePut state_put = 23;
+    // A value taken out of the workflow's store.
+    StateDelete state_delete = 24;
+    // A list's items kept by a condition.
+    FilterBlock filter = 25;
+    // A value or a list's items reshaped by a schema.
+    TransformBlock transform = 26;
+    // A value or a list's items checked by a schema and rules.
+    ValidateBlock validate = 27;
+  }
+}
+
+// Why a block failed after its retries: `steps.<id>` after its `error`
+// edge.
+message Failure {
+  // The kind of failure (`unavailable`, `invalid_argument`, `timeout`,
+  // `budget`, `declined` for an approval a person declined).
+  string kind = 1;
+  // What went wrong, for a person.
+  string message = 2;
+}
+
+// How a failed block is tried again: after 1 s, doubling, at most 1 h.
+message Retry {
+  // Attempts in all, the first included; at most 10.
+  uint32 attempts = 1;
+}
+
+// ------------------------------------------------------------- triggers
+
+// What starts a run; its block's output is `trigger`.
+message Trigger {
+  // Which.
+  oneof kind {
+    // A `scheduler` job whose action names this workflow.
+    ScheduleTrigger schedule = 1;
+    // A source of `webhooks` routed to this workflow.
+    WebhookTrigger webhook = 2;
+    // An event of the bus.
+    EventTrigger event = 3;
+    // `workflow_run` by a person or an agent.
+    ManualTrigger manual = 4;
+    // A tool call of an agent or a `call` block of another workflow.
+    CallTrigger call = 5;
+  }
+}
+
+// A scheduler job: the time is the scheduler's.
+message ScheduleTrigger {}
+
+// A source of the webhooks module.
+message WebhookTrigger {
+  // The source's name, as its settings name this workflow.
+  string source = 1;
+}
+
+// An event of the bus.
+message EventTrigger {
+  // Its name (`board.task_moved`).
+  string name = 1;
+  // A CEL condition over `event` (a `pcx.module.v1.BusEvent`); empty:
+  // every one.
+  string filter = 2;
+}
+
+// A run asked for by hand.
+message ManualTrigger {}
+
+// A run asked for as a tool or by another workflow.
+message CallTrigger {}
+
+// What started a run: `trigger` in the expressions.
+message Fired {
+  // The trigger block.
+  string block = 1;
+  // Who asked; empty: not known.
+  string author = 2;
+  // When.
+  google.protobuf.Timestamp at = 3;
+  // An `event` trigger's event.
+  pcx.module.v1.BusEvent event = 4;
+  // A `webhook` trigger's request.
+  Webhook webhook = 5;
+}
+
+// A webhook's request.
+message Webhook {
+  // The source.
+  string source = 1;
+  // Its verified body.
+  Value body = 2;
+}
+
+// -------------------------------------------------------------- actions
+
+// One RPC of a module, as its tool; its output the response message.
+message ToolBlock {
+  // Its gRPC path (`/pcx.board.v1.Boards/AddTask`).
+  string method = 1;
+  // Its request, by the request message's fields.
+  Template request = 2;
+  // What a dry run answers for a `write` or `external` tool, by the
+  // response message's fields; unset: its zero values.
+  Template fixture = 3;
+}
+
+// One call of a model, no tools; the model answers through one forced tool
+// whose input is `output`.
+message ModelBlock {
+  // The model; empty: the first the host's providers list.
+  string model = 1;
+  // The system prompt: text with `{{ }}` parts.
+  string system = 2;
+  // The prompt: text with `{{ }}` parts.
+  string prompt = 3;
+  // What it answers.
+  Schema output = 4;
+}
+
+// A turn of a team member (or the host's agent) with its own tools, under
+// its own grants.
+message AgentBlock {
+  // The team member; empty: the host's agent.
+  string member = 1;
+  // The prompt: text with `{{ }}` parts.
+  string prompt = 2;
+  // What it answers.
+  Schema output = 3;
+}
+
+// Another workflow, at its latest version when the run starts; its run's
+// output is the block's.
+message CallBlock {
+  // Its name.
+  string workflow = 1;
+  // Its input, by its input's fields.
+  Template input = 2;
+}
+
+// ----------------------------------------------------------------- flow
+
+// Edges `then` and `else`; its output is the condition's value.
+message If {
+  // A CEL condition.
+  string condition = 1;
+}
+
+// Edges `case:<n>` (the first case that holds) and `default`; its output
+// is the index of that case, -1 for `default`.
+message Switch {
+  // CEL conditions.
+  repeated string cases = 1;
+}
+
+// A body for each item of a list: `item` and `index` in the body's
+// expressions (an inner `for_each`'s hide an outer's); its output the list
+// of the bodies' outputs in the items' order.
+message ForEach {
+  // A CEL list.
+  string items = 1;
+  // Bodies at once: 0 is 1, at most 16.
+  uint32 concurrency = 2;
+  // The body.
+  Graph body = 3;
+}
+
+// Branches at once, joined.
+message Parallel {
+  // The branches.
+  repeated Graph branches = 1;
+  // How they join.
+  Join join = 2;
+  // With `JOIN_N`: how many.
+  uint32 n = 3;
+}
+
+// How a `parallel` block's branches join.
+enum Join {
+  // Not set; refused.
+  JOIN_UNSPECIFIED = 0;
+  // Every branch; the output the list of their outputs.
+  JOIN_ALL = 1;
+  // The first that ends, the others cancelled; the output its output.
+  JOIN_FIRST = 2;
+  // The first `n`; the output the list of their outputs.
+  JOIN_N = 3;
+}
+
+// A pause: for a duration, until a time, or until an event; its output the
+// event (a `pcx.module.v1.BusEvent`), else null.
+message Wait {
+  // Which.
+  oneof until {
+    // A duration.
+    google.protobuf.Duration duration = 1;
+    // A CEL timestamp.
+    string at = 2;
+    // An event of the bus that matches.
+    EventTrigger event = 3;
+  }
+  // With `event`: how long at most; unset: the run's wall time.
+  google.protobuf.Duration timeout = 4;
+}
+
+// A board decision on the run's task: the run waits until it is approved
+// (a `pcx.board.v1.Decision`, the block's output).
+message Approval {
+  // What is to be decided: text with `{{ }}` parts.
+  string question = 1;
+  // What it risks; `RISK_NONE` is refused (it would need no approval).
+  pcx.board.v1.Risk risk = 2;
+  // The task it is decided on: a CEL string (a task's id); empty: the
+  // run's task, added to the settings' board.
+  string task = 3;
+  // Only a person approves it, whatever the team's trust (a ban of a
+  // Discord member): the decision's `pcx.team.v1.Stakes.person`.
+  bool person = 4;
+}
+
+// ----------------------------------------------------------------- data
+
+// Named values computed by CEL; its output has them as fields
+// (`steps.<id>.<name>`).
+message Set {
+  // The values: a name (a lowercase letter or '_', then letters, digits
+  // and '_') and a CEL expression.
+  map<string, string> values = 1;
+}
+
+// A list's items kept by a condition, in their order; its output
+// `steps.<id>.items` (of the input's item type) and `steps.<id>.dropped`
+// (`int`, the items not kept).
+message FilterBlock {
+  // The items: a CEL list.
+  string items = 1;
+  // Whether an item is kept: a CEL bool over `item` and `index`.
+  string where = 2;
+  // A CEL key over `item` (a string, an int, a uint or a bool): of items
+  // with one key only the first is kept; empty: every item.
+  string distinct_by = 3;
+  // Items kept at most; the rest are not evaluated. 0: no limit.
+  uint32 limit = 4;
+}
+
+// A value, or a list's items, reshaped into records of a schema.
+message TransformBlock {
+  // One value: its output is the schema's fields (`steps.<id>.<field>`).
+  // With `items` instead, one record for each item
+  // (`steps.<id>.items`).
+  oneof input {
+    // A CEL expression over the block's variables; each field's
+    // expression reads it as `value`.
+    string value = 1;
+    // A CEL list; each field's expression reads `item` and `index`.
+    string items = 2;
+  }
+  // The records' schema.
+  Schema output = 3;
+  // Each field's CEL expression, by the field's name; a required field
+  // has one, another without one is its zero value.
+  map<string, string> fields = 4;
+  // With `items`: a CEL key over `row` (a record) and `index` the records
+  // are sorted by (stable); empty: the items' order.
+  string sort_by = 5;
+  // Whether the sort is from the greatest key.
+  bool descending = 6;
+  // With `items`: a CEL string over `row` the records are grouped by;
+  // the output is then `steps.<id>.groups` (each its `key` and `items`,
+  // in the order each key first appears).
+  string group_by = 7;
+}
+
+// A value, or a list's items, checked by a schema and rules; every
+// violation found, not only the first. Its ports are `valid` and
+// `invalid`; without an edge from `invalid` a violation fails it (kind
+// `invalid`).
+message ValidateBlock {
+  // One value: its output is `steps.<id>.violations`. With `items`
+  // instead, also `steps.<id>.valid` and `steps.<id>.invalid`.
+  oneof input {
+    // A CEL expression over the block's variables, read as `value`.
+    string value = 1;
+    // A CEL list; each item read as `item`, with `index`.
+    string items = 2;
+  }
+  // The schema the value (or each item, a map or a message) is read by:
+  // its required fields, types and constraints. Unset: rules only.
+  Schema schema = 3;
+  // The rules, each checked.
+  repeated Rule rules = 4;
+}
+
+// A rule of a `validate` block.
+message Rule {
+  // Whether it holds: a CEL bool over `value` (or `item` and `index`).
+  string holds = 1;
+  // What is wrong when it does not, for a person: text with `{{ }}` parts.
+  string message = 2;
+  // The path it names (`end`); empty: the value itself.
+  string path = 3;
+}
+
+// A rule or a constraint broken.
+message Violation {
+  // Where: `items[3].email`, `email`; empty: the value itself.
+  string path = 1;
+  // What: a constraint's name (`required`, `type`, `minimum`, `pattern`,
+  // ...) or `rules[<n>]`.
+  string rule = 2;
+  // What is wrong, for a person.
+  string message = 3;
+}
+
+// An item that broke a rule or a constraint: the item is `items[index]` of
+// the block's input.
+message Invalid {
+  // Its place in the list.
+  int64 index = 2;
+  // What it broke.
+  repeated Violation violations = 3;
+  reserved 1;
+}
+
+// A value of the workflow's store; its output the value (`dyn`), null
+// when there is none.
+message StateGet {
+  // Its key: text with `{{ }}` parts.
+  string key = 1;
+}
+
+// A value put in the workflow's store.
+message StatePut {
+  // Its key: text with `{{ }}` parts.
+  string key = 1;
+  // Its value: a CEL expression.
+  string value = 2;
+}
+
+// A value taken out of the workflow's store.
+message StateDelete {
+  // Its key: text with `{{ }}` parts.
+  string key = 1;
+}
+
+// ------------------------------------------------------------ templates
+
+// A message built from constants and expressions, by its fields' proto
+// names (or a `Schema`'s field names).
+message Template {
+  // The fields set; the others are their zero value.
+  map<string, Slot> fields = 1;
+}
+
+// One field of a template.
+message Slot {
+  // What it is.
+  oneof slot {
+    // A constant of the field's type.
+    Value constant = 1;
+    // A string field's text with `{{ }}` parts; one whole `{{ }}` gives a
+    // field of any type, a list or a message included.
+    string text = 2;
+    // A message field, by its fields.
+    Template message = 3;
+    // A repeated field, item by item.
+    Slots list = 4;
+  }
+}
+
+// A repeated field's items.
+message Slots {
+  // The items.
+  repeated Slot items = 1;
+}
+
+// ---------------------------------------------------------- types, values
+
+// What a workflow takes or a model or agent answers.
+message Schema {
+  // Its fields.
+  repeated Field fields = 1;
+}
+
+// A field of a schema.
+message Field {
+  // Its name: a lowercase letter or '_', then letters, digits and '_'.
+  string name = 1;
+  // Its type as CEL writes it: string, int, uint, double, bool, bytes,
+  // timestamp, duration, list<T>, map<string, T>.
+  string type = 2;
+  // What it is.
+  string description = 3;
+  // A value of it, for a dry run and the model's tool.
+  Value example = 4;
+  // Whether a value must be given; otherwise its zero value.
+  bool required = 5;
+  // What a value of it must be; unset: any of its type.
+  Constraints constraints = 6;
+}
+
+// The bounds of a field's values, each unset when it bounds nothing.
+message Constraints {
+  // The least value (a number, a time, a duration), of the field's type.
+  Value minimum = 1;
+  // The greatest value, of the field's type.
+  Value maximum = 2;
+  // The least length: characters of text, bytes, items of a list or a
+  // map.
+  optional uint64 min_length = 3;
+  // The greatest length.
+  optional uint64 max_length = 4;
+  // What text matches whole (the `regex` crate's syntax: linear time, no
+  // backreferences; at most 1 KiB).
+  string pattern = 5;
+  // The values it may be (constants of its type); empty: any.
+  repeated Value one_of = 6;
+}
+
+// A value at run time.
+message Value {
+  // Which.
+  oneof kind {
+    // Null.
+    Null null = 1;
+    // True or false.
+    bool bool = 2;
+    // A signed number.
+    int64 int = 3;
+    // An unsigned number.
+    uint64 uint = 4;
+    // A number.
+    double double = 5;
+    // Text.
+    string string = 6;
+    // Bytes.
+    bytes bytes = 7;
+    // A time.
+    google.protobuf.Timestamp timestamp = 8;
+    // A duration.
+    google.protobuf.Duration duration = 9;
+    // A list.
+    List list = 10;
+    // A map from text.
+    Map map = 11;
+    // A message.
+    google.protobuf.Any message = 12;
+  }
+}
+
+// The null value.
+enum Null {
+  // Null.
+  NULL_VALUE = 0;
+}
+
+// A list of values.
+message List {
+  // The items.
+  repeated Value items = 1;
+}
+
+// A map of values from text.
+message Map {
+  // The entries.
+  map<string, Value> entries = 1;
+}
+
+// ----------------------------------------------------------------- runs
+
+// A run of a workflow (document workflow/run, not searched), pinned to the
+// version it started on.
+message Run {
+  // The workflow's name.
+  string workflow = 1;
+  // Its document's id.
+  string workflow_id = 2;
+  // The version it runs.
+  uint64 version = 3;
+  // What started it.
+  Fired trigger = 4;
+  // Its input, by the input's fields.
+  Map input = 5;
+  // Where it is.
+  RunStatus status = 6;
+  // When it started.
+  google.protobuf.Timestamp started_at = 7;
+  // When it ended; unset: it has not.
+  google.protobuf.Timestamp ended_at = 8;
+  // While it waits: the earliest a step of it may go on (a wait, a retry);
+  // unset: an event or a decision.
+  google.protobuf.Timestamp waits_until = 9;
+  // What it spent.
+  Used used = 10;
+  // Its output, once it succeeded.
+  Value output = 11;
+  // Why it failed or was cancelled.
+  Failure failure = 12;
+  // How many workflow calls deep it is: 0 started by a trigger.
+  uint32 call_depth = 13;
+  // The run whose `call` block started it; empty: none.
+  string parent = 14;
+  // Its task on the board, once an approval added it; empty: none.
+  string task = 15;
+}
+
+// Where a run is.
+enum RunStatus {
+  // Not set.
+  RUN_STATUS_UNSPECIFIED = 0;
+  // Its blocks run.
+  RUN_STATUS_RUNNING = 1;
+  // It waits: for a time, an event, a decision or a called run.
+  RUN_STATUS_WAITING = 2;
+  // It ended with its output.
+  RUN_STATUS_SUCCEEDED = 3;
+  // A block failed with no `error` edge, or a budget ran out.
+  RUN_STATUS_FAILED = 4;
+  // It was cancelled.
+  RUN_STATUS_CANCELLED = 5;
+}
+
+// What a run spent.
+message Used {
+  // Steps written.
+  uint32 steps = 1;
+  // Model tokens, in and out.
+  uint64 tokens = 2;
+  // Model cost in micro-dollars.
+  uint64 cost_micros = 3;
+}
+
+// One attempt of one block of a run (document workflow/step, not
+// searched): the run's journal, written when it starts and when it ends.
+message Step {
+  // The run's id.
+  string run = 1;
+  // The graph it is in: empty for the workflow's; `<block>#<n>` for the
+  // n-th body of a `for_each` or branch of a `parallel`, joined by `/`
+  // when they nest (`each#2/both#0`).
+  string at = 2;
+  // The block's id.
+  string block = 3;
+  // Its attempt, from 1.
+  uint32 attempt = 4;
+  // Where it is.
+  StepStatus status = 5;
+  // What it was given: a request, a prompt, a list's items.
+  Value input = 6;
+  // What it gave, once it succeeded.
+  Value output = 7;
+  // Why it failed.
+  Failure failure = 8;
+  // The port it ended by (`next`, `then`, `case:1`, ...), once it
+  // succeeded.
+  string port = 9;
+  // When it started.
+  google.protobuf.Timestamp started_at = 10;
+  // When it ended; unset: it has not.
+  google.protobuf.Timestamp ended_at = 11;
+  // While it waits for a time: until when (a wait's time, an event's
+  // timeout).
+  google.protobuf.Timestamp waits_until = 12;
+  // While it waits for something else: what (a decision's id, a called
+  // run's id).
+  string waits_for = 13;
+  // Its output when it is above 48 KiB: a blob of the workspace (an
+  // encoded `Value`), `output` unset.
+  pcx.v1.Attachment output_blob = 14;
+}
+
+// A run ended (`workflow.run_succeeded`, `workflow.run_failed`), or a
+// workflow's runs fail in a row (`workflow.failing`).
+message RunEnded {
+  // The run's id.
+  string run = 1;
+  // Its workflow's name.
+  string workflow = 2;
+  // How it ended.
+  RunStatus status = 3;
+  // Why it failed.
+  Failure failure = 4;
+}
+
+// Where a step is.
+enum StepStatus {
+  // Not set.
+  STEP_STATUS_UNSPECIFIED = 0;
+  // It runs.
+  STEP_STATUS_RUNNING = 1;
+  // It waits: for a time, an event, a decision, a called run, its bodies.
+  STEP_STATUS_WAITING = 2;
+  // It ended with its output.
+  STEP_STATUS_SUCCEEDED = 3;
+  // It failed.
+  STEP_STATUS_FAILED = 4;
+}
+
+// A value of a workflow's store (document workflow/state, not searched),
+// one a key, written from the version read.
+message StateEntry {
+  // The workflow's name.
+  string workflow = 1;
+  // Its key.
+  string key = 2;
+  // Its value.
+  Value value = 3;
+}
+
+// ---------------------------------------------------- budgets, grants
+
+// What one run may spend, under the organisation's limits; 0: the default.
+message Budgets {
+  // Steps; 0: 1,000.
+  uint32 steps = 1;
+  // Wall time, waits included; unset: 24 h.
+  google.protobuf.Duration wall = 2;
+  // Model tokens, in and out; 0: no limit but the organisation's.
+  uint64 tokens = 3;
+  // Model cost in micro-dollars; 0: no limit but the organisation's.
+  uint64 cost_micros = 4;
+}
+
+// What a workflow's blocks may reach: a subset of its author's.
+message Grants {
+  // The modules its `tool` blocks may call, and whose tools a turn of the
+  // host's agent (an `agent` block without a member) is given.
+  repeated string modules = 1;
+  // The team members its `agent` blocks name, each with its own tools.
+  // Written only by the module, in what it asks and what was approved
+  // (`Asked`, `Approved`), from the graph: a workflow's own are not read.
+  repeated string members = 2;
+  // The tools of effect `external` its `tool` blocks call, by tool name
+  // (owner 2026-11-14: a person approves each action, not only its
+  // module). Written only by the module, from the graph checked against
+  // its author's tools: a request's are not read. Tools that only read are
+  // covered by their module.
+  repeated string tools = 3;
+}

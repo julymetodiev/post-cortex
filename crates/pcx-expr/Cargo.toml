@@ -1,0 +1,31 @@
+[package]
+name = "pcx-expr"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Templates of text and {{ CEL }} for pcx, checked against declared inputs and filled under limits: the one implementation the mail module and the workflows share."
+keywords = ["pcx", "cel", "templates", "expressions"]
+categories = ["template-engine"]
+documentation = "https://docs.rs/pcx-expr"
+
+[dependencies]
+cel-core.workspace = true
+# Proto messages as CEL values and types, read by their descriptors.
+cel-core-proto.workspace = true
+prost-reflect.workspace = true
+base64.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+prost.workspace = true
+prost-types.workspace = true
+
+[lints]
+workspace = true

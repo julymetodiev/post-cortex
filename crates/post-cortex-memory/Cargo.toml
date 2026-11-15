@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Conversation memory orchestrator for post-cortex. Ties storage + embeddings + graph + session + summary into a single lock-free memory hierarchy with async pipelines and a canonical PostCortexService API."
+description = "Conversation memory orchestrator for post-cortex. Ties storage + embeddings + graph + session + summary into a single lock-free memory hierarchy with async pipelines, exposed as one service per capability."
 keywords = ["post-cortex", "memory", "orchestrator", "conversation", "ai"]
 categories = ["data-structures", "concurrency"]
 readme = "README.md"
@@ -14,11 +14,18 @@ documentation = "https://docs.rs/post-cortex-memory"
 
 [dependencies]
 post-cortex-core.workspace = true
+# The ports the capabilities depend on (ARCHITECTURE section 5).
+post-cortex-ports.workspace = true
+# The module API MemoryModule implements (ARCHITECTURE section 7).
+pcx-module-api.workspace = true
+# The descriptors of pcx.v1, the service the module serves (tools/module.rs).
 post-cortex-proto.workspace = true
-post-cortex-storage.workspace = true
-# model2vec (the default embedding backend) is always on; the heavy BERT
-# stack (candle + tokenizers) is opt-in via this crate's `bert` feature.
-post-cortex-embeddings = { workspace = true, features = ["model2vec"] }
+# A document's data as its kind's message (capabilities/documents/typed.rs).
+pbjson-types.workspace = true
+prost.workspace = true
+prost-reflect.workspace = true
+# A blob's id: the SHA-256 of its bytes (W24).
+sha2.workspace = true
 
 # Observability — OTel exporter is gated behind the `otel` feature so
 # library users that don't want it pay zero cost. The `tracing` crate
@@ -29,10 +36,11 @@ opentelemetry-otlp = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 
 # Async + serialisation
-anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
+# Names the argument at fault when a tool's arguments do not deserialize.
+serde_path_to_error = "0.1"
 bincode.workspace = true
 uuid.workspace = true
 chrono.workspace = true
@@ -56,33 +64,36 @@ rand.workspace = true
 log.workspace = true
 tracing.workspace = true
 
+# Imports spool their archive to a temporary file (capabilities::transfer).
+tempfile.workspace = true
+
 [dev-dependencies]
+# `ExportData`, a whole archive in memory, to build and inspect archives.
+post-cortex-core = { workspace = true, features = ["test-support"] }
+# Tests compose the adapters as the daemon does: RocksDB and SurrealDB
+# `mem://`, the in-memory search index, a model-free hash embedding engine
+# (`test_support::hash_engine`) and model2vec.
+post-cortex-storage = { workspace = true, features = ["surrealdb-storage"] }
+# An in-memory blob store for the blob tests.
+post-cortex-blobs.workspace = true
+post-cortex-embeddings = { workspace = true, features = ["model2vec", "test-support"] }
+post-cortex-ports = { workspace = true, features = ["conformance"] }
 # Raw access to the RocksDB backend, to plant data the public API cannot.
 rocksdb.workspace = true
 tokio-test.workspace = true
-tempfile.workspace = true
 proptest.workspace = true
 serial_test.workspace = true
 tokio-stream.workspace = true
+# A debug-level subscriber, so tests run the code behind debug logs.
+tracing-subscriber.workspace = true
+# The allocation audit of the write and search paths (tests/alloc_audit.rs).
+dhat.workspace = true
 
 [features]
-# `embeddings` and `surrealdb-storage` mirror the legacy single-crate feature
-# names so the ~60 `#[cfg(feature = "...")]` annotations in the moved code
-# resolve without rewriting. memory always pulls in post-cortex-embeddings
-# (with `model2vec`) — the feature flag here is purely a compile-time toggle for
-# the *alternative* paths that fire when the legacy embeddings module was
-# disabled in the old single-crate build.
-default = ["embeddings"]
-embeddings = []
-# BERT embedding backend (MiniLM / MultilingualMiniLM / TinyBERT / BGESmall).
-# Off by default: it pulls candle plus a second tokenizers stack. Selecting a
-# BERT model without it fails at engine load with a clear error.
-bert = ["post-cortex-embeddings/bert"]
-# Local cross-encoder reranking of search results (`SystemConfig::reranker_model`).
-rerank = ["post-cortex-embeddings/rerank"]
-# Voyage AI reranking (`SystemConfig::voyage_api_key`).
-rerank-voyage = ["post-cortex-embeddings/rerank-voyage"]
-surrealdb-storage = ["post-cortex-storage/surrealdb-storage"]
+# The adapters (models, rerankers, storage backends) and their features are
+# the composition root's; whether search runs is the configuration's
+# (`enable_embeddings` and an embedding engine).
+default = []
 # Pulls the OpenTelemetry exporter stack — see services::observability.
 # When disabled, every `#[tracing::instrument]` macro compiles to a
 # no-op via tracing's ZST spans, so library users pay nothing.

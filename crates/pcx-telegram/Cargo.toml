@@ -1,0 +1,37 @@
+[package]
+name = "pcx-telegram"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The pcx Telegram channel: messages to its chats, decisions waiting for a person with buttons that approve them, and talking with the chief."
+keywords = ["pcx", "telegram", "channel", "approvals"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-telegram"
+
+[dependencies]
+pcx-module-api.workspace = true
+pcx-documents.workspace = true
+# Its package, pcx.telegram.v1 (the Bot API mirrored), the channel service
+# and the board's and the chief's it calls.
+post-cortex-proto.workspace = true
+prost.workspace = true
+tonic.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+reqwest.workspace = true
+# The Bot API's JSON, read and written by its mirror messages' proto3 JSON
+# mapping.
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+
+[lints]
+workspace = true

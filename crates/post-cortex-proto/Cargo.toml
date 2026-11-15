@@ -22,9 +22,17 @@ prost-types.workspace = true
 tonic.workspace = true
 # Runtime codec referenced by the generated clients/servers.
 tonic-prost.workspace = true
+# The proto3 JSON form of pcx.module.v1.
+pbjson.workspace = true
+pbjson-types.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [build-dependencies]
 tonic-prost-build.workspace = true
+pbjson-build.workspace = true
 
 [lints]
 workspace = true

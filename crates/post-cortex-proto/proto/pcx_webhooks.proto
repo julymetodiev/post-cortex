@@ -1,0 +1,153 @@
+syntax = "proto3";
+package pcx.webhooks.v1;
+
+import "google/protobuf/timestamp.proto";
+import "pcx_module.proto";
+
+// Events from outside become board tasks (ARCHITECTURE section 8,
+// operations, W27): the daemon's `POST /v1/webhooks/{source}` hands each
+// request here whole.
+service Webhooks {
+  // A request a source sent: checked against the module's token, decoded
+  // by the source's kind, and its group's task added, commented or closed.
+  rpc Receive(ReceiveRequest) returns (ReceiveResponse);
+}
+
+// ------------------------------------------------------------- settings
+
+// The module's settings.
+message WebhooksConfig {
+  // The bearer token every source sends (`Authorization: Bearer <token>`).
+  string token = 1 [(pcx.module.v1.setting) = { title: "Token", required: true, secret: true }];
+  // The sources requests come from.
+  repeated Source sources = 2 [(pcx.module.v1.setting) = { title: "Sources" }];
+}
+
+// What a source sends.
+enum SourceKind {
+  // Not given; refused.
+  SOURCE_KIND_UNSPECIFIED = 0;
+  // Prometheus Alertmanager's webhook (version 4).
+  SOURCE_KIND_ALERTMANAGER = 1;
+  // Any JSON body; only routed to a workflow.
+  SOURCE_KIND_JSON = 2;
+}
+
+// A source of requests: where its tasks go, or the workflow they run
+// (docs/modules/workflow.md, triggers); one of the two.
+message Source {
+  // Its name, the last part of its URL (1 to 64 of a-z, 0-9, '-').
+  string name = 1 [(pcx.module.v1.setting) = { title: "Name", required: true, pattern: "[a-z0-9-]{1,64}", example: "alerts" }];
+  // What it sends.
+  SourceKind kind = 2 [(pcx.module.v1.setting) = { title: "Kind", required: true }];
+  // The workspace of its board.
+  string workspace_id = 3 [(pcx.module.v1.setting) = { title: "Workspace", required: true, workspace: true }];
+  // The board its tasks go to, by id; empty: it names a workflow.
+  string board = 4 [(pcx.module.v1.setting) = { title: "Board" }];
+  // The member its tasks are assigned to; empty: no one.
+  string assignee = 5 [(pcx.module.v1.setting) = { title: "Assignee" }];
+  // The channel destination told at once of a new incident (W29), no
+  // model in the way; empty: none.
+  string notify = 6 [(pcx.module.v1.setting) = { title: "Tell at once", pattern: "([a-z0-9-]{1,64}/)?[a-z0-9-]{1,64}", example: "telegram/ops" }];
+  // The workflow its requests run (its `webhook` trigger of this source),
+  // by name, instead of a board; empty: it names a board.
+  string workflow = 7 [(pcx.module.v1.setting) = { title: "Workflow", pattern: "[a-z0-9-]{1,64}", example: "eq-probe" }];
+  // Alert names it only acknowledges: a group of nothing but them is
+  // answered and adds no task (Alertmanager's Watchdog, sent as the
+  // heartbeat of the path to this module).
+  repeated string heartbeats = 8 [(pcx.module.v1.setting) = { title: "Heartbeat alerts" }];
+}
+
+// ---------------------------------------------------------------- calls
+
+// A request a source sent.
+message ReceiveRequest {
+  // The source, by name.
+  string source = 1;
+  // The bearer token it came with; empty: none.
+  string token = 2;
+  // Its body, as sent.
+  bytes body = 3;
+}
+
+// What a request did.
+enum Handled {
+  // Not given.
+  HANDLED_UNSPECIFIED = 0;
+  // A new group: its task was added.
+  HANDLED_ADDED = 1;
+  // A group firing again: its task got a comment.
+  HANDLED_FIRING_AGAIN = 2;
+  // A group resolved: its task got a comment and stays for its work.
+  HANDLED_RESOLVED = 3;
+  // A group resolved whose task needed nothing: closed.
+  HANDLED_CLOSED = 4;
+  // A group resolved that has no task (it fired before the module ran, or
+  // its task is gone): nothing done.
+  HANDLED_UNKNOWN_GROUP = 5;
+  // A notification with no alerts: nothing done.
+  HANDLED_NO_ALERTS = 6;
+  // The source's workflow was run: its run's id is `run`.
+  HANDLED_RUN = 7;
+  // A heartbeat of the source: acknowledged, nothing done.
+  HANDLED_HEARTBEAT = 8;
+}
+
+// What a request did, and to which task.
+message ReceiveResponse {
+  // What it did.
+  Handled handled = 1;
+  // The group's task, by id; empty: none.
+  string task = 2;
+  // A new incident: whether the source's destination was told (false: it
+  // names none, or the channel failed, which the module's log says).
+  bool told = 3;
+  // The workflow's run, by id; empty: none.
+  string run = 4;
+}
+
+// ------------------------------------------- Alertmanager (its JSON, mirrored)
+
+// Alertmanager's webhook body, version 4, its fields as Alertmanager names
+// them (decoded by the canonical proto3 JSON mapping, unknown fields
+// skipped).
+message AlertmanagerWebhook {
+  // The body's version: "4".
+  string version = 1;
+  // The group's key: the same for every request of one group.
+  string group_key = 2;
+  // How many alerts were left out of `alerts`.
+  uint32 truncated_alerts = 3;
+  // "firing" or "resolved".
+  string status = 4;
+  // The receiver that sent it.
+  string receiver = 5;
+  // The labels the group is grouped by.
+  map<string, string> group_labels = 6;
+  // The labels every alert of the group has.
+  map<string, string> common_labels = 7;
+  // The annotations every alert of the group has.
+  map<string, string> common_annotations = 8;
+  // Alertmanager's URL.
+  string external_url = 9 [json_name = "externalURL"];
+  // The group's alerts.
+  repeated AlertmanagerAlert alerts = 10;
+}
+
+// One alert of a group.
+message AlertmanagerAlert {
+  // "firing" or "resolved".
+  string status = 1;
+  // Its labels (`alertname`, `severity`, its target's).
+  map<string, string> labels = 2;
+  // Its annotations (`summary`, `description`, `runbook_url`).
+  map<string, string> annotations = 3;
+  // When it started firing.
+  google.protobuf.Timestamp starts_at = 4;
+  // When it resolved; year 1 while it fires.
+  google.protobuf.Timestamp ends_at = 5;
+  // The rule's URL in Prometheus.
+  string generator_url = 6 [json_name = "generatorURL"];
+  // Its fingerprint.
+  string fingerprint = 7;
+}

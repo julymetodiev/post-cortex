@@ -1,0 +1,44 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.julymetodiev/post-cortex",
+  "title": "post-cortex",
+  "description": "Long-term project memory for coding agents: typed records, entity graph, hybrid search.",
+  "version": "0.6.0",
+  "websiteUrl": "https://post-cortex.com",
+  "repository": {
+    "url": "https://github.com/julymetodiev/post-cortex",
+    "source": "github",
+    "id": "1098441122"
+  },
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/julymetodiev/post-cortex/main/integrations/cursor/assets/logo.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "1024x1024"
+      ]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://api.pcx.is/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Your post-cortex API key as a bearer token. Create a key at https://app.pcx.is (Connections → API keys).",
+          "value": "Bearer {api_key}",
+          "isRequired": true,
+          "isSecret": true,
+          "variables": {
+            "api_key": {
+              "description": "post-cortex API key",
+              "isRequired": true,
+              "isSecret": true
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

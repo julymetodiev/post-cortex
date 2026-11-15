@@ -1,0 +1,29 @@
+// pcx.models.v1: the models module's settings (docs/modules/agent.md, the
+// providers; owner 2026-11-09: every provider in one module, each on with
+// its API key, not a module for each).
+syntax = "proto3";
+package pcx.models.v1;
+
+import "pcx_module.proto";
+
+// Its settings: a provider is on when its API key is set; with none set,
+// the module lists no model.
+message ModelsConfig {
+  // Every model OpenRouter routes (Claude, GPT, Gemini, Llama and more),
+  // each with its price and window.
+  Keyed openrouter = 1 [(pcx.module.v1.setting) = { title: "OpenRouter" }];
+  // Anthropic's Claude models.
+  Keyed anthropic = 2 [(pcx.module.v1.setting) = { title: "Anthropic" }];
+  // Z.AI's GLM models, with the key of its coding plan.
+  Keyed zai = 3 [(pcx.module.v1.setting) = { title: "Z.AI" }];
+  // OpenAI's GPT models.
+  Keyed openai = 4 [(pcx.module.v1.setting) = { title: "OpenAI" }];
+}
+
+// A provider called with an API key.
+message Keyed {
+  // Its API key; unset: the provider is off.
+  string api_key = 1 [(pcx.module.v1.setting) = { title: "API key", secret: true }];
+  // Its API's URL; empty: the provider's own.
+  string endpoint = 2 [(pcx.module.v1.setting) = { title: "Endpoint", pattern: "https?://\\S+", example: "https://api.z.ai/api/coding/paas/v4" }];
+}

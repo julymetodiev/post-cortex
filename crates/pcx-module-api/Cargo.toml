@@ -1,0 +1,41 @@
+[package]
+name = "pcx-module-api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The pcx module API: the Module trait, manifests, scope, events and outcomes every pcx module and the host speak (pcx.module.v1)."
+keywords = ["pcx", "module", "plugin", "harness"]
+categories = ["api-bindings"]
+documentation = "https://docs.rs/pcx-module-api"
+
+[dependencies]
+# The wire types (pcx.module.v1) and the runtime types a module needs; no
+# memory crate (ARCHITECTURE section 3).
+post-cortex-proto.workspace = true
+# What a module process speaks without the in-process host, re-exported.
+pcx-module-core.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# A configuration's Any (module.rs), the slots' messages.
+pbjson-types.workspace = true
+thiserror.workspace = true
+# A served turn's id (agent/serve.rs).
+uuid.workspace = true
+# The running turns of a served Agent, by id (agent/serve.rs).
+parking_lot.workspace = true
+tokio-util.workspace = true
+# The services of the slots (models, context, turns) and their clients.
+tonic.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+# A view's messages from a manifest's descriptors (view.rs).
+prost-reflect.workspace = true
+prost.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

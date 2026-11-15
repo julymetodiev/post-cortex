@@ -5,7 +5,7 @@ Read this only when the post-cortex tools are not available, or the user asks ho
 ## Install the `pcx` binary
 
 ```bash
-cargo install post-cortex-daemon --features "embeddings,surrealdb-storage"   # Rust 1.95+
+cargo install post-cortex-daemon --features surrealdb-storage   # Rust 1.95+
 # or a prebuilt binary:
 #   https://github.com/julymetodiev/post-cortex/releases/latest
 ```
@@ -29,7 +29,7 @@ claude mcp add --scope user --transport stdio post-cortex -- pcx
 
 Other MCP clients (Cursor, Codex, Gemini CLI, …): add an MCP server with either the HTTP URL above or the command `pcx`.
 
-Then, inside a repository, `pcx setup` creates a session and workspace and writes their IDs plus memory rules into `CLAUDE.md` (and installs Claude Code hooks). For other agents, put the session ID and workspace ID in whatever project-instruction file they read.
+Then `pcx setup` sets the agents up once for every project: for Claude Code it prints the commands that install the post-cortex plugin, whose hooks recognise each project from its git remote and print its session ID and workspace ID at session start. Inside a repository, `pcx setup --project` instead creates a session and workspace and pins their IDs in `.post-cortex.json`, which the plugin's hooks read first; for Claude Code it writes nothing else and takes out what setups before the plugin wrote (the PCX section of `CLAUDE.md`, the project hooks and the old sub-agents). For other agents, put the session ID and workspace ID in whatever project-instruction file they read.
 
 ## Remote / shared daemons
 
@@ -42,7 +42,7 @@ auth_token = "<long random string>"  # clients send Authorization: Bearer <token
 allowed_hosts = ["my-mac.tailnet.ts.net", "100.64.0.7"]  # Host headers clients use
 storage_backend = "rocksdb"          # or "surrealdb" + surrealdb_endpoint / _username / _password
 reranker_model = "cross-encoder/ms-marco-MiniLM-L4-v2"  # local reranker; Linux needs ORT_DYLIB_PATH
-voyage_api_key = "pa-..."            # optional: Voyage reranking (sends candidate text to Voyage)
+voyage_api_key = "pa-..."            # optional: Voyage reranking in workspaces that allow it (sends candidate text to Voyage)
 search_mode = "local"                # default ranking effort: fast | local | accurate
 ```
 

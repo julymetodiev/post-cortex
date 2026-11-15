@@ -1,0 +1,483 @@
+syntax = "proto3";
+package pcx.team.v1;
+
+import "google/protobuf/timestamp.proto";
+import "pcx_module.proto";
+
+// The team (ARCHITECTURE section 8): teams of members (agents of the
+// harness or names that take part through the board), what each may do
+// on the team's boards, and the trust a person gives a team.
+service Teams {
+  // The trust a team has (supervised while a person has set none).
+  rpc GetAutonomy(GetAutonomyRequest) returns (AutonomyRecord);
+  // Set the trust a team has: supervised (every decision with a risk
+  // waits for a person), classes (those listed approve themselves within
+  // their limits) or full within limits; exceptions for a member or a
+  // role. Only a person sets it.
+  rpc SetAutonomy(SetAutonomyRequest) returns (AutonomyRecord);
+  // Pause a team's autonomy (every decision with a risk waits for a
+  // person) or go on. Only a person pauses it.
+  rpc PauseAutonomy(PauseAutonomyRequest) returns (AutonomyRecord);
+  // Create a team of members (by name) in the workspace; a board of the
+  // workspace then checks its authors against it.
+  rpc CreateTeam(CreateTeamRequest) returns (TeamRecord);
+  // The teams of the workspace (or one team), each with its members'
+  // roles and authority and the trust it has.
+  rpc ListTeams(ListTeamsRequest) returns (RosterList);
+  // Add a member: an agent of the harness, or one known by its name
+  // (Claude Code, Codex, a person).
+  rpc AddAgent(AddAgentRequest) returns (AgentRecord);
+  // Change a member from the version you read; what you leave out stays.
+  // Its name does not change.
+  rpc UpdateAgent(UpdateAgentRequest) returns (AgentRecord);
+  // Add a member to a team, from the team's version you read.
+  rpc AddMember(MemberRequest) returns (TeamRecord);
+  // Remove a member from a team, from the team's version you read.
+  rpc RemoveMember(MemberRequest) returns (TeamRecord);
+  // The members' work on tasks (W25): each member's task, the session it
+  // works in, how many turns it took and when, and whether a turn of it
+  // runs now.
+  rpc ListWork(ListWorkRequest) returns (WorkList);
+  // Stop a member's running turn on a task, and the turn that waits after it.
+  rpc StopWork(StopWorkRequest) returns (StopWorkResponse);
+}
+
+// What a member may do on its team's boards, each including the ones
+// before it.
+enum Authority {
+  // Not given.
+  AUTHORITY_UNSPECIFIED = 0;
+  // Comment and work on tasks.
+  AUTHORITY_DISCUSS = 1;
+  // Record decisions too.
+  AUTHORITY_DECIDE = 2;
+  // Close tasks too (move them into the board's last column).
+  AUTHORITY_CLOSE = 3;
+}
+
+// What a decision risks, as a team's policy counts it.
+enum Class {
+  // Not given.
+  CLASS_UNSPECIFIED = 0;
+  // Code.
+  CLASS_CODE = 1;
+  // Money.
+  CLASS_MONEY = 2;
+  // Data.
+  CLASS_DATA = 3;
+  // Operations: an action on a running system (W31).
+  CLASS_OPERATIONS = 4;
+}
+
+// How much a policy approves by itself.
+enum Mode {
+  // Not given: supervised.
+  MODE_UNSPECIFIED = 0;
+  // Nothing: every decision with a risk waits for a person.
+  MODE_SUPERVISED = 1;
+  // The classes it lists, within their limits.
+  MODE_CLASSES = 2;
+  // Every class, within its limits.
+  MODE_FULL = 3;
+}
+
+// ------------------------------------------------------------- documents
+
+// A member (document team/agent, titled by name).
+message Agent {
+  // Its name: the author it acts as (1 to 64 of A-Z, a-z, 0-9, '.', '_',
+  // '-'; @name mentions it).
+  string name = 1;
+  // Its role, in a line.
+  string role = 2;
+  // What it may do.
+  Authority authority = 3;
+  // Whether it is an agent of the harness (the team runs its turns); else
+  // it is known by its name (Claude Code, Codex, a person) and takes part
+  // through the board.
+  bool harness = 4;
+  // The skills it carries, by name (the library's).
+  repeated string skills = 5;
+  // Its model; unset: the agent's.
+  optional string model = 6;
+  // The modules whose tools it may use; empty: all the agent may.
+  repeated string modules = 7;
+  // The tools it may use; empty: all of those modules'.
+  repeated string tools = 8;
+  // The workspaces its turns reach, by id (docs/connect.md, a member's
+  // reach); empty: every one whoever woke or asked it reaches. A turn
+  // reaches the workspaces both name, and runs in one of them.
+  repeated string reach = 9;
+}
+
+// A team (document team/team, titled by name).
+message Team {
+  // Its name.
+  string name = 1;
+  // Its members, by name.
+  repeated string members = 2;
+}
+
+// A member's work on a task (document team/work, titled by agent).
+message Work {
+  // The member.
+  string agent = 1;
+  // The task.
+  string task = 2;
+  // The session its turns on the task are kept in.
+  string session_id = 3;
+  // The turns it took on the task.
+  uint32 turns = 4;
+  // The worktree it works in (W32), absolute; empty: none (the task's
+  // board names no repository).
+  string worktree = 5;
+  // The worktree's branch; empty: none.
+  string branch = 6;
+  // The turn that goes on it; unset: none. Kept while a turn runs or waits
+  // for its runner, so that a team that starts again goes on with it.
+  optional GoingWork going = 7;
+}
+
+// What a turn that goes on a task needs to go on.
+message GoingWork {
+  // The comment its answer answers; empty: a comment of its own.
+  string answers = 1;
+  // Whether the write that woke the member had a reach; not: every workspace.
+  bool reached = 2;
+  // That reach: the workspaces its turn acts in.
+  repeated string reach = 3;
+}
+
+// The limits of a code decision.
+message CodeLimit {
+  // The branch prefixes it may change (feature/).
+  repeated string branches = 1;
+  // Branches it never changes (main), whatever the prefixes say.
+  repeated string protected = 2;
+}
+
+// The limits of a money decision.
+message MoneyLimit {
+  // The currency the limits are in; a decision in another waits.
+  string currency = 1;
+  // The most one decision may spend, in whole units of the currency.
+  uint64 per_decision = 2;
+  // The most a day's approved decisions may spend together.
+  uint64 per_day = 3;
+}
+
+// The limits of a data decision.
+message DataLimit {
+  // Whether a deletion (a change that cannot be undone) approves too;
+  // else only reversible changes.
+  bool deletions = 1;
+}
+
+// One level of trust.
+message Trust {
+  // Its mode.
+  Mode mode = 1;
+  // For MODE_CLASSES: which.
+  repeated Class classes = 2;
+  // The limits of code; unset: code always waits.
+  CodeLimit code = 3;
+  // The limits of money; unset: money always waits.
+  MoneyLimit money = 4;
+  // The limits of data; unset: data always waits.
+  DataLimit data = 5;
+  // The limits of operations; unset: operations always wait (W31).
+  OperationsLimit operations = 6;
+}
+
+// What operations a policy approves by itself (W31): an action it names,
+// in an environment it names.
+message OperationsLimit {
+  // The ops module's actions, by name (restart, delete_pod, clean_jobs,
+  // scale, resize_volume; in a Nomad environment new_allocation,
+  // run_periodic). A revert of jobs is approved by a person only.
+  repeated string actions = 1;
+  // The environments, by name (e.g. staging; prod only when it is meant).
+  repeated string environments = 2;
+}
+
+// The trust of a member or a role where it differs from the team's.
+message Exception {
+  // A member's name, or a role.
+  string of = 1;
+  // Its trust.
+  Trust trust = 2;
+}
+
+// The trust a person gives a team (document team/autonomy, titled by
+// team).
+message Autonomy {
+  // The team.
+  string team = 1;
+  // Whether a person paused it: every decision with a risk waits.
+  bool paused = 2;
+  // The team's trust.
+  Trust trust = 3;
+  // Where a member or a role differs.
+  repeated Exception exceptions = 4;
+}
+
+// What a decision puts at stake, as a team's policy weighs it.
+message Stakes {
+  // For money: how much, in whole units of its currency.
+  optional uint64 amount = 1;
+  // For money: the currency.
+  optional string currency = 2;
+  // For code: the branch it changes.
+  optional string branch = 3;
+  // For data: whether it can be undone.
+  optional bool reversible = 4;
+  // For operations: the action, by name (W31).
+  optional string action = 5;
+  // For operations: the environment it acts in.
+  optional string environment = 6;
+  // For operations: what it acts on, e.g. equal-rust/svc-music.
+  optional string target = 7;
+  // Only a person approves it, whatever the team's trust (ops' revert of
+  // a release).
+  optional bool person = 8;
+}
+
+// ------------------------------------------------------------- settings
+
+// The team's settings (W32): how long a member's work on a task may take
+// and how often it is tried before the task is blocked.
+message TeamConfig {
+  // Minutes a member's turn on a task may run; 0: 30.
+  uint32 work_minutes = 1 [(pcx.module.v1.setting) = { title: "Minutes a turn may run" }];
+  // Times a member's work is tried before its task is blocked; 0: 2.
+  uint32 tries = 2 [(pcx.module.v1.setting) = { title: "Tries" }];
+}
+
+// ------------------------------------------------------------------ calls
+
+// A team as the team keeps it.
+message TeamRecord {
+  // Its document's id.
+  string id = 1;
+  // Its version: a change names it.
+  uint64 version = 2;
+  // The team.
+  Team team = 3;
+  // When it was last changed.
+  google.protobuf.Timestamp updated_at = 4;
+}
+
+// A member as the team keeps it.
+message AgentRecord {
+  // Its document's id.
+  string id = 1;
+  // Its version: a change names it.
+  uint64 version = 2;
+  // The member.
+  Agent agent = 3;
+  // When it was last changed.
+  google.protobuf.Timestamp updated_at = 4;
+}
+
+// A team's trust as it applies.
+message AutonomyRecord {
+  // Its version; 0: none is set, the team is supervised.
+  uint64 version = 1;
+  // The trust.
+  Autonomy autonomy = 2;
+}
+
+// A team with its members and its trust.
+message Roster {
+  // The team.
+  TeamRecord team = 1;
+  // Its members.
+  repeated AgentRecord agents = 2;
+  // Its trust as it applies.
+  AutonomyRecord autonomy = 3;
+}
+
+// The trust of a team.
+message GetAutonomyRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The team's name.
+  string team = 2;
+}
+
+// Set the trust of a team.
+message SetAutonomyRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The team's name.
+  string team = 2;
+  // The autonomy's version you read; 0 when none is set.
+  uint64 version = 3;
+  // The team's trust.
+  Trust trust = 4;
+  // Where a member or a role differs; unset: the ones set stay.
+  Exceptions exceptions = 5;
+}
+
+// Where members or roles differ.
+message Exceptions {
+  // The exceptions.
+  repeated Exception exceptions = 1;
+}
+
+// Pause a team's autonomy or go on.
+message PauseAutonomyRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The team's name.
+  string team = 2;
+  // The autonomy's version you read; 0 when none is set.
+  uint64 version = 3;
+  // true: pause; false: go on.
+  bool paused = 4;
+}
+
+// Create a team.
+message CreateTeamRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The team's name: 1 to 64 of A-Z, a-z, 0-9, '.', '_', '-'.
+  string name = 2;
+  // Its members, by name.
+  repeated string members = 3;
+}
+
+// The teams of a workspace.
+message ListTeamsRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // Only this team, by name; empty: every team.
+  string team = 2;
+}
+
+// Teams with their members and trust.
+message RosterList {
+  // The teams.
+  repeated Roster teams = 1;
+  // The members of no team, by name (every team listed only; none when
+  // the list names one team).
+  repeated AgentRecord unteamed = 2;
+  // The team's built-in agents the workspace has no agent of yet: adding
+  // one's name to a team adds the agent first (docs/modules/team.md).
+  repeated Agent builtin = 3;
+}
+
+// Add a member.
+message AddAgentRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The member.
+  Agent agent = 2;
+}
+
+// The skills, modules, tools or workspaces of a member.
+message Names {
+  // By name.
+  repeated string names = 1;
+}
+
+// Change a member.
+message UpdateAgentRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The member's name.
+  string name = 2;
+  // The version of the member you read: a change since then is a
+  // conflict.
+  uint64 version = 3;
+  // Its role, in a line; unset: unchanged.
+  optional string role = 4;
+  // What it may do; unset: unchanged.
+  optional Authority authority = 5;
+  // The skills it carries; unset: unchanged.
+  Names skills = 6;
+  // Its model; unset: unchanged, empty: the agent's.
+  optional string model = 7;
+  // The modules whose tools it may use; unset: unchanged.
+  Names modules = 8;
+  // The tools it may use; unset: unchanged.
+  Names tools = 9;
+  // Whether it is an agent of the harness (the team runs its turns) or
+  // known by its name (a person, an outside agent); unset: unchanged.
+  optional bool harness = 10;
+  // The workspaces its turns reach, by id; unset: unchanged, no names:
+  // every one whoever woke or asked it reaches.
+  Names reach = 11;
+}
+
+// Add or remove a member of a team.
+message MemberRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The team's name.
+  string team = 2;
+  // The version of the team you read: a change since then is a conflict.
+  uint64 version = 3;
+  // The member's name.
+  string member = 4;
+}
+
+// The members' work in a workspace.
+message ListWorkRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // Only the work of this team's members, by name; empty: every team's.
+  string team = 2;
+  // Only the work on this task; empty: on every task.
+  string task = 3;
+  // Only the work a turn of which runs now: what a board polls.
+  bool busy_only = 4;
+  // At most this many, the most recent first; 0: 50, at most 500.
+  uint32 limit = 5;
+}
+
+// StopWork input.
+message StopWorkRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The task, by id.
+  string task = 2;
+  // The member, by name.
+  string member = 3;
+}
+
+// StopWork output.
+message StopWorkResponse {
+  // Whether its work was running (else there was nothing to stop).
+  bool stopped = 1;
+}
+
+// A member's work on a task, as it stands.
+message WorkEntry {
+  // The member.
+  string agent = 1;
+  // The task, by id.
+  string task = 2;
+  // The task's title; empty: the task is gone.
+  string title = 3;
+  // The task's column.
+  string column = 4;
+  // The session its turns on the task are kept in.
+  string session_id = 5;
+  // The turns it took on the task.
+  uint32 turns = 6;
+  // When it last took one (or started on the task).
+  google.protobuf.Timestamp updated_at = 7;
+  // Whether a turn of it on the task runs now.
+  bool busy = 8;
+  // While one runs: the seconds since it last received or did anything.
+  uint64 quiet_seconds = 9;
+  // While one runs: what its model sent so far, in characters.
+  uint64 received = 10;
+}
+
+// The members' work, the most recent first.
+message WorkList {
+  // The work.
+  repeated WorkEntry work = 1;
+}

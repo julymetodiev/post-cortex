@@ -2,7 +2,7 @@
 // MIT License
 
 //! Whole-graph analytics over a [`SimpleEntityGraph`]: centrality-based
-//! importance (ROADMAP Phase 3 item 11) and topic communities (item 5).
+//! importance and topic communities.
 //!
 //! Both treat the graph as undirected with each pair's weight the sum of
 //! its relations' [`RelationType::weight`](crate::core::context_update::RelationType::weight),
@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
 
-use super::entity_graph::SimpleEntityGraph;
+use crate::graph::entity_graph::SimpleEntityGraph;
 
 /// PageRank damping factor.
 const DAMPING: f64 = 0.85;
@@ -34,7 +34,12 @@ struct Undirected<'a> {
 
 impl<'a> Undirected<'a> {
     fn new(graph: &'a SimpleEntityGraph) -> Self {
-        let names: Vec<&str> = graph.entities.keys().map(String::as_str).collect();
+        let names: Vec<&str> = graph
+            .entities
+            .sorted()
+            .into_iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
         let index: HashMap<&str, usize> = names.iter().enumerate().map(|(i, n)| (*n, i)).collect();
         let mut pairs: BTreeMap<(usize, usize), f64> = BTreeMap::new();
         for rel in graph.relationships() {
@@ -72,7 +77,10 @@ pub fn importance(graph: &SimpleEntityGraph) -> BTreeMap<String, f32> {
     }
 
     let mentions = |name: &str| -> f64 {
-        let linked = graph.entity_mentions.get(name).map_or(0, Vec::len);
+        let linked = graph
+            .entity_mentions
+            .get(name)
+            .map_or(0, crate::collections::SharedVec::len);
         let counted = graph
             .entities
             .get(name)
@@ -84,35 +92,23 @@ pub fn importance(graph: &SimpleEntityGraph) -> BTreeMap<String, f32> {
     teleport.iter_mut().for_each(|t| *t /= total);
 
     let strength: Vec<f64> = (0..n).map(|i| g.strength(i)).collect();
-    let mut rank = teleport.clone();
-    for _ in 0..PAGERANK_ITERATIONS {
-        // Mass of nodes without edges goes back through the teleport.
-        let dangling: f64 = (0..n)
-            .filter(|&i| strength[i] == 0.0)
-            .map(|i| rank[i])
-            .sum();
-        let mut next: Vec<f64> = teleport
-            .iter()
-            .map(|t| (1.0 - DAMPING + DAMPING * dangling) * t)
-            .collect();
-        for (i, neighbours) in g.adjacency.iter().enumerate() {
-            if strength[i] == 0.0 {
-                continue;
-            }
-            let share = DAMPING * rank[i] / strength[i];
-            for &(j, w) in neighbours {
-                next[j] += share * w;
-            }
-        }
-        let delta: f64 = next.iter().zip(&rank).map(|(a, b)| (a - b).abs()).sum();
-        rank = next;
-        if delta < PAGERANK_TOLERANCE {
-            break;
-        }
-    }
+    let rank = personalised_pagerank(
+        &g.adjacency,
+        &strength,
+        &teleport,
+        PageRank {
+            damping: DAMPING,
+            max_iterations: PAGERANK_ITERATIONS,
+            tolerance: PAGERANK_TOLERANCE,
+        },
+    );
 
     let top = rank.iter().copied().fold(f64::MIN, f64::max);
-    let latest = graph.entities.values().map(|e| e.last_mentioned).max();
+    let latest = graph
+        .entities
+        .values_unordered()
+        .map(|e| e.last_mentioned)
+        .max();
     g.names
         .iter()
         .zip(&rank)
@@ -124,6 +120,72 @@ pub fn importance(graph: &SimpleEntityGraph) -> BTreeMap<String, f32> {
             (name.to_string(), ((r / top) * (0.5 + 0.5 * fade)) as f32)
         })
         .collect()
+}
+
+/// The bucket of a score of [`importance`], on its `(0, 1]` scale (the
+/// most central, recently mentioned entity scores 1): critical from 0.8,
+/// high from 0.5, medium from 0.25, low from 0.1, else minimal.
+pub fn importance_level(score: f32) -> crate::summary::ImportanceLevel {
+    use crate::summary::ImportanceLevel;
+    match score {
+        s if s >= 0.8 => ImportanceLevel::Critical,
+        s if s >= 0.5 => ImportanceLevel::High,
+        s if s >= 0.25 => ImportanceLevel::Medium,
+        s if s >= 0.1 => ImportanceLevel::Low,
+        _ => ImportanceLevel::Minimal,
+    }
+}
+
+/// Parameters of [`personalised_pagerank`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PageRank {
+    /// Share of the mass that follows edges each step.
+    pub damping: f64,
+    /// Steps at most.
+    pub max_iterations: usize,
+    /// Stop once a step moves less than this (L1); 0 runs every step.
+    pub tolerance: f64,
+}
+
+/// Personalised PageRank over weighted adjacency lists: the one PageRank
+/// of the crate (entity importance and the retrieval graph). `strength` is
+/// each node's total edge weight and `teleport` the restart distribution
+/// (summing to 1). The mass of nodes without edges restarts through
+/// `teleport`.
+pub(crate) fn personalised_pagerank(
+    adjacency: &[Vec<(usize, f64)>],
+    strength: &[f64],
+    teleport: &[f64],
+    params: PageRank,
+) -> Vec<f64> {
+    let n = adjacency.len();
+    let mut rank = teleport.to_vec();
+    let mut next = vec![0.0; n];
+    for _ in 0..params.max_iterations {
+        let dangling: f64 = (0..n)
+            .filter(|&i| strength[i] == 0.0)
+            .map(|i| rank[i])
+            .sum();
+        let restart = 1.0 - params.damping + params.damping * dangling;
+        for (x, t) in next.iter_mut().zip(teleport) {
+            *x = restart * t;
+        }
+        for (i, neighbours) in adjacency.iter().enumerate() {
+            if strength[i] == 0.0 {
+                continue;
+            }
+            let share = params.damping * rank[i] / strength[i];
+            for &(j, w) in neighbours {
+                next[j] += share * w;
+            }
+        }
+        let delta: f64 = next.iter().zip(&rank).map(|(a, b)| (a - b).abs()).sum();
+        std::mem::swap(&mut rank, &mut next);
+        if delta < params.tolerance {
+            break;
+        }
+    }
+    rank
 }
 
 /// `0.5^(days since last / half-life)`.
@@ -253,82 +315,4 @@ fn louvain_level(adjacency: &[Vec<(usize, f64)>]) -> Vec<usize> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::context_update::{EntityRelationship, EntityType, RelationType};
-
-    fn graph(edges: &[(&str, &str, RelationType)]) -> SimpleEntityGraph {
-        let mut g = SimpleEntityGraph::new();
-        let now = Utc::now();
-        for (a, b, _) in edges {
-            g.add_or_update_entity(a.to_string(), EntityType::Concept, now, "");
-            g.add_or_update_entity(b.to_string(), EntityType::Concept, now, "");
-        }
-        for (a, b, r) in edges {
-            g.add_relationship(EntityRelationship {
-                from_entity: a.to_string(),
-                to_entity: b.to_string(),
-                relation_type: r.clone(),
-                context: String::new(),
-            });
-        }
-        g
-    }
-
-    #[test]
-    fn hub_is_most_important() {
-        let g = graph(&[
-            ("hub", "a", RelationType::DependsOn),
-            ("hub", "b", RelationType::DependsOn),
-            ("hub", "c", RelationType::DependsOn),
-            ("c", "d", RelationType::RelatedTo),
-        ]);
-        let scores = importance(&g);
-        assert_eq!(scores["hub"], 1.0);
-        assert!(scores.values().all(|s| *s > 0.0 && *s <= 1.0));
-        assert!(scores["a"] < scores["hub"]);
-        assert!(scores["d"] < scores["c"]);
-    }
-
-    #[test]
-    fn stale_entities_fade() {
-        let mut g = graph(&[("x", "y", RelationType::DependsOn)]);
-        g.entities.get_mut("y").unwrap().last_mentioned -= chrono::Duration::days(90);
-        let scores = importance(&g);
-        // Symmetric pair: same centrality, y faded to 75%.
-        assert!(
-            (scores["y"] / scores["x"] - 0.75).abs() < 1e-3,
-            "{scores:?}"
-        );
-    }
-
-    #[test]
-    fn two_cliques_are_two_communities() {
-        use RelationType::DependsOn as D;
-        let g = graph(&[
-            ("a1", "a2", D),
-            ("a2", "a3", D),
-            ("a1", "a3", D),
-            ("b1", "b2", D),
-            ("b2", "b3", D),
-            ("b1", "b3", D),
-            ("a3", "b1", RelationType::RelatedTo),
-        ]);
-        let c = communities(&g);
-        assert_eq!(c["a1"], c["a2"]);
-        assert_eq!(c["a1"], c["a3"]);
-        assert_eq!(c["b1"], c["b2"]);
-        assert_eq!(c["b1"], c["b3"]);
-        assert_ne!(c["a1"], c["b1"]);
-        assert_eq!(communities(&g), c, "deterministic");
-    }
-
-    #[test]
-    fn isolated_entities_have_no_community() {
-        let mut g = graph(&[("a", "b", RelationType::DependsOn)]);
-        g.add_or_update_entity("lonely".into(), EntityType::Concept, Utc::now(), "");
-        let c = communities(&g);
-        assert!(!c.contains_key("lonely"));
-        assert_eq!(c.len(), 2);
-    }
-}
+mod tests;

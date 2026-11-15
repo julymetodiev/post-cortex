@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Storage backends for post-cortex — lock-free RocksDB (default) and optional SurrealDB. Implements the Storage trait against the post-cortex domain types."
+description = "Storage backends for post-cortex — RocksDB (default) and optional SurrealDB, behind one storage port per capability, plus the pcx export archive."
 keywords = ["post-cortex", "storage", "rocksdb", "surrealdb", "kv"]
 categories = ["database-implementations"]
 readme = "README.md"
@@ -17,16 +17,12 @@ documentation = "https://docs.rs/post-cortex-storage"
 # structured_context, error) come from post-cortex-core.
 post-cortex-core.workspace = true
 
-# Vector data types (VectorMetadata, SearchMatch, VectorDbStats). We only
-# need the types — the HNSW impl + Candle ML stack is gated behind the
-# `bert` feature of post-cortex-embeddings, which we leave off.
-post-cortex-embeddings.workspace = true
+# The ports these adapters implement and the types they speak.
+post-cortex-ports.workspace = true
 
-# gRPC proto types (Source tracking, FreshnessEntry, CascadeInvalidateReport,
-# SymbolId — referenced from the Storage trait API and the freshness
-# subsystem). Storage backends serialise these directly into RocksDB /
-# SurrealDB.
-post-cortex-proto.workspace = true
+# Reads the protobuf source-reference rows of 0.5.0 (a frozen copy of
+# that schema) during the one-time RocksDB migration; the freshness port
+# and the stored rows use domain types and the backends' own layouts.
 prost.workspace = true
 
 # Storage engines
@@ -35,7 +31,6 @@ surrealdb = { workspace = true, optional = true }
 surrealdb-types = { workspace = true, optional = true }
 
 # Async + serialisation
-anyhow.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -62,6 +57,11 @@ log.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+# `ExportData`, a whole archive in memory, to build and inspect archives.
+post-cortex-core = { workspace = true, features = ["test-support"] }
+# The shared port conformance suites, run against each adapter.
+post-cortex-ports = { workspace = true, features = ["conformance"] }
+tokio.workspace = true
 tempfile.workspace = true
 serial_test.workspace = true
 tokio-test.workspace = true

@@ -1,0 +1,31 @@
+{
+  "name": "post-cortex",
+  "displayName": "post-cortex",
+  "version": "0.6.0",
+  "description": "Long-term project memory for Cursor: the post-cortex MCP server (post-cortex cloud by default, or your own daemon), an always-on rule, the post-cortex-memory skill, and hooks that bring the project's memory into every chat.",
+  "author": {
+    "name": "Julius ML"
+  },
+  "homepage": "https://post-cortex.com",
+  "repository": "https://github.com/julymetodiev/post-cortex",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "mcp",
+    "knowledge-graph",
+    "semantic-search",
+    "context",
+    "post-cortex"
+  ],
+  "category": "productivity",
+  "tags": [
+    "memory",
+    "context",
+    "knowledge-graph"
+  ],
+  "logo": "assets/logo.png",
+  "mcpServers": "./mcp.json",
+  "hooks": "./hooks/hooks.json",
+  "skills": "./skills/",
+  "rules": "./rules/"
+}

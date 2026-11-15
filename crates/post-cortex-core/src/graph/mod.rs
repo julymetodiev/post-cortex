@@ -18,10 +18,9 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-//! Graph module for entity relationships and Graph-RAG enrichment
+//! Graph module: the entity graph, retrieval graph, temporal views and analytics
 
 pub mod analytics;
 pub mod entity_graph;
-pub mod graph_rag;
 pub mod retrieval_graph;
 pub mod temporal;

@@ -1,0 +1,7 @@
+# Rust files still over the 500-line limit (docs/ARCHITECTURE.md rule 6).
+# scripts/check-file-size.sh fails on any other file over the limit and on
+# entries here that are back within it. Each migration wave removes the
+# files it splits; the list is empty by the end of W7.
+# Generated after W1 with: scripts/check-file-size.sh --list; W2 and W4 removed
+# the files they split.
+# W7 split the last ones: the list is empty, and stays so.

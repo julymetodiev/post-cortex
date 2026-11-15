@@ -1,25 +1,22 @@
 // Copyright (c) 2025, 2026 Julius ML
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
+// Licensed under the MIT License. See LICENSE at the workspace root.
 
-//! Shared internal helpers: `SearchResult` ordering, bounded top-k, Euclidean distance.
+//! Ranked candidates and the bounded top-k collector every ranking (vector
+//! and BM25) uses.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-/// Internal search result with ordering support for BinaryHeap
-#[derive(Debug, Clone)]
-pub(super) struct SearchResult {
-    pub(super) id: u32,
-    pub(super) similarity: f32,
+/// A row's place in a ranking.
+#[derive(Debug, Clone, Copy)]
+pub struct SearchResult {
+    /// The arena slot.
+    pub slot: u32,
+    /// Similarity or BM25 score.
+    pub score: f32,
+    /// The row's [`tie key`](crate::vector_db::types::tie_key): equal scores
+    /// rank by what the content is, never by where it is stored.
+    pub key: (u64, u64),
 }
 
 impl PartialEq for SearchResult {
@@ -37,24 +34,25 @@ impl PartialOrd for SearchResult {
 }
 
 impl Ord for SearchResult {
-    /// Higher similarity is greater (max-heap pops the best first). Ties go
-    /// to the lower id so result order is deterministic. `total_cmp` keeps
-    /// the order total even if a NaN slips in.
+    /// Higher score is greater (a max-heap pops the best first); ties go
+    /// to the lower key, then the lower slot. `total_cmp` keeps the order
+    /// total even if a NaN slips in.
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.similarity
-            .total_cmp(&other.similarity)
-            .then_with(|| other.id.cmp(&self.id))
+        self.score
+            .total_cmp(&other.score)
+            .then_with(|| other.key.cmp(&self.key))
+            .then_with(|| other.slot.cmp(&self.slot))
     }
 }
 
 /// Bounded top-k collector: O(n log k) instead of sorting all n scores.
-pub(super) struct TopK {
+pub struct TopK {
     k: usize,
     heap: BinaryHeap<Reverse<SearchResult>>,
 }
 
 impl TopK {
-    pub(super) fn new(k: usize) -> Self {
+    pub fn new(k: usize) -> Self {
         Self {
             k,
             heap: BinaryHeap::with_capacity(k.min(1024) + 1),
@@ -63,11 +61,10 @@ impl TopK {
 
     /// Offer a candidate; NaN scores are dropped.
     #[inline]
-    pub(super) fn push(&mut self, id: u32, similarity: f32) {
-        if self.k == 0 || similarity.is_nan() {
+    pub fn push(&mut self, candidate: SearchResult) {
+        if self.k == 0 || candidate.score.is_nan() {
             return;
         }
-        let candidate = SearchResult { id, similarity };
         if self.heap.len() < self.k {
             self.heap.push(Reverse(candidate));
         } else if let Some(Reverse(worst)) = self.heap.peek()
@@ -78,8 +75,16 @@ impl TopK {
         }
     }
 
+    /// The best `k` of both collectors.
+    pub fn merge(mut self, other: Self) -> Self {
+        for Reverse(candidate) in other.heap {
+            self.push(candidate);
+        }
+        self
+    }
+
     /// Results sorted best first.
-    pub(super) fn into_sorted(self) -> Vec<SearchResult> {
+    pub fn into_sorted(self) -> Vec<SearchResult> {
         // Ascending order of `Reverse` is descending order of the score.
         self.heap
             .into_sorted_vec()
@@ -89,34 +94,5 @@ impl TopK {
     }
 }
 
-/// Calculate Euclidean distance between two vectors
-pub(super) fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| (x - y).powi(2))
-        .sum::<f32>()
-        .sqrt()
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn top_k_keeps_the_best_k_sorted_with_id_tiebreak() {
-        let mut top = TopK::new(3);
-        for (id, sim) in [
-            (0, 0.1),
-            (1, 0.9),
-            (2, f32::NAN),
-            (3, 0.5),
-            (4, 0.9),
-            (5, -1.0),
-        ] {
-            top.push(id, sim);
-        }
-        let got: Vec<_> = top.into_sorted().iter().map(|r| r.id).collect();
-        assert_eq!(got, vec![1, 4, 3]);
-        assert!(TopK::new(0).into_sorted().is_empty());
-    }
-}
+mod tests;

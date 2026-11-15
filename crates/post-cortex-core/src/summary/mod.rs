@@ -24,14 +24,14 @@
 pub mod presentation;
 
 pub use presentation::{
-    ConceptSummary, DecisionSummary, EntitySummary, QuestionSummary, SessionStats,
+    ConceptSummary, DecisionSummary, EntitySummary, ImportanceLevel, QuestionSummary, SessionStats,
     StructuredSummaryView,
 };
 
 use crate::core::structured_context::{ConceptItem, DecisionItem, QuestionItem};
 use crate::graph::entity_graph::top_k_by;
 use crate::session::active_session::ActiveSession;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
 /// Sorted top `limit` of `items` (all of them, sorted, when `limit` is None).
 fn top_k<T>(
@@ -95,15 +95,20 @@ impl SummaryOptions {
 pub struct SummaryGenerator;
 
 impl SummaryGenerator {
-    /// Generate structured summary from existing ActiveSession data
-    pub fn generate_structured_summary(session: &ActiveSession) -> StructuredSummaryView {
-        Self::generate_structured_summary_filtered(session, &SummaryOptions::default())
+    /// Generate structured summary from existing ActiveSession data, as of
+    /// `now` (ages and recency are measured from it).
+    pub fn generate_structured_summary(
+        session: &ActiveSession,
+        now: DateTime<Utc>,
+    ) -> StructuredSummaryView {
+        Self::generate_structured_summary_filtered(session, &SummaryOptions::default(), now)
     }
 
-    /// Generate filtered/limited structured summary
+    /// Generate filtered/limited structured summary, as of `now`.
     pub fn generate_structured_summary_filtered(
         session: &ActiveSession,
         options: &SummaryOptions,
+        now: DateTime<Utc>,
     ) -> StructuredSummaryView {
         let session_stats = Self::calculate_session_stats(session);
 
@@ -116,7 +121,7 @@ impl SummaryGenerator {
 
         // Top-k entity analysis: only the survivors are materialised.
         let entity_analysis = session
-            .entity_graph
+            .entity_graph()
             .analyze_entity_importance_top(entity_limit);
 
         // Derive important_entities from entity_analysis (already sorted by importance)
@@ -125,7 +130,7 @@ impl SummaryGenerator {
             .map(|e| e.entity_name.clone())
             .collect();
 
-        let state = &session.current_state;
+        let state = session.current_state();
 
         // Filter, then select the top decisions by reference; clone only
         // the survivors. Order: confidence (highest first), then timestamp
@@ -149,15 +154,15 @@ impl SummaryGenerator {
             .collect();
 
         // Questions and concepts: most recent first.
-        let open_questions: Vec<QuestionSummary> = top_k(
-            state.open_questions.iter().enumerate().collect(),
+        let answered_questions: Vec<QuestionSummary> = top_k(
+            state.answered_questions.iter().enumerate().collect(),
             options.questions_limit,
             |(ia, a): &(usize, &QuestionItem), (ib, b)| {
                 b.timestamp.cmp(&a.timestamp).then_with(|| ia.cmp(ib))
             },
         )
         .into_iter()
-        .map(|(_, q)| QuestionSummary::from_question_item(q))
+        .map(|(_, q)| QuestionSummary::from_question_item(q, now))
         .collect();
 
         let key_concepts: Vec<ConceptSummary> = top_k(
@@ -173,18 +178,18 @@ impl SummaryGenerator {
 
         StructuredSummaryView {
             session_id: session.id(),
-            generated_at: Utc::now(),
+            generated_at: now,
 
             // Filtered and limited data
             key_decisions,
-            open_questions,
+            answered_questions,
             key_concepts,
 
             // From SimpleEntityGraph (limited)
             important_entities,
             entity_summaries: entity_analysis
                 .into_iter()
-                .map(|analysis| EntitySummary::from_entity_analysis(&analysis))
+                .map(|analysis| EntitySummary::from_entity_analysis(&analysis, now))
                 .collect(),
 
             // Session metadata
@@ -197,21 +202,24 @@ impl SummaryGenerator {
     pub fn calculate_session_stats(session: &ActiveSession) -> SessionStats {
         use crate::summary::presentation::SessionStatsBuilder;
 
-        SessionStatsBuilder::new(session.id(), session.created_at(), session.last_updated)
-            .with_context_sizes(
-                session.hot_context.len(),
-                session.warm_context.len(),
-                session.cold_context.len(),
-            )
+        let state = session.current_state();
+        SessionStatsBuilder::new(session.id(), session.created_at(), session.last_updated())
+            // The warm and cold tiers are gone: the hot window is the
+            // newest records, and every record is in the list.
+            .with_context_sizes(session.hot_records().len(), 0, 0)
             .with_counts(
-                session.incremental_updates.len(),
-                session.entity_graph.entities.len(),
-                session.current_state.key_decisions.len(),
+                session.records().len(),
+                session.entity_graph().entities.len(),
+                state.key_decisions.len(),
             )
             .with_references(
-                session.current_state.open_questions.len(),
-                session.current_state.key_concepts.len(),
-                session.code_references.values().map(|v| v.len()).sum(),
+                state.answered_questions.len(),
+                state.key_concepts.len(),
+                session
+                    .records()
+                    .iter()
+                    .filter(|u| u.related_code.is_some())
+                    .count(),
             )
             .build()
     }
@@ -226,10 +234,11 @@ impl SummaryGenerator {
         const CONCEPT_AVG_TOKENS: usize = 120;
         const BASE_OVERHEAD_TOKENS: usize = 500;
 
-        let decision_count = session.current_state.key_decisions.len();
-        let entity_count = session.entity_graph.entities.len();
-        let question_count = session.current_state.open_questions.len();
-        let concept_count = session.current_state.key_concepts.len();
+        let state = session.current_state();
+        let decision_count = state.key_decisions.len();
+        let entity_count = session.entity_graph().entities.len();
+        let question_count = state.answered_questions.len();
+        let concept_count = state.key_concepts.len();
 
         let estimated_tokens = BASE_OVERHEAD_TOKENS
             + (decision_count * DECISION_AVG_TOKENS)
@@ -245,7 +254,7 @@ impl SummaryGenerator {
         let mut insights = Vec::new();
 
         // Insights from decisions
-        for decision in &session.current_state.key_decisions {
+        for decision in &session.current_state().key_decisions {
             if decision.confidence > 0.8 {
                 insights.push(format!(
                     "High-confidence decision: {}",
@@ -255,7 +264,7 @@ impl SummaryGenerator {
         }
 
         // Insights from entity importance
-        let top_entities = session.entity_graph.get_most_important_entities(3);
+        let top_entities = session.entity_graph().get_most_important_entities(3);
         if !top_entities.is_empty() {
             let entity_names: Vec<String> = top_entities.iter().map(|e| e.name.clone()).collect();
             let entity_list = entity_names.join(", ");
@@ -263,7 +272,7 @@ impl SummaryGenerator {
         }
 
         // Insights from update patterns
-        let total_updates = session.incremental_updates.len();
+        let total_updates = session.records().len();
         if total_updates > 10 {
             insights.push(format!(
                 "Comprehensive discussion with {} updates",
@@ -272,11 +281,11 @@ impl SummaryGenerator {
         }
 
         // Insights from code references
-        let code_files: Vec<_> = session.code_references.keys().collect();
-        if code_files.len() > 1 {
+        let code_files = session.code_references().len();
+        if code_files > 1 {
             insights.push(format!(
                 "Multi-file code analysis covering {} files",
-                code_files.len()
+                code_files
             ));
         }
 
@@ -288,7 +297,7 @@ impl SummaryGenerator {
     /// Extract decision timeline from existing data
     pub fn extract_decision_timeline(session: &ActiveSession) -> Vec<DecisionSummary> {
         let mut decisions: Vec<_> = session
-            .current_state
+            .current_state()
             .key_decisions
             .iter()
             .map(DecisionSummary::from_decision_item)
@@ -301,142 +310,4 @@ impl SummaryGenerator {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::session::active_session::ActiveSession;
-    use uuid::Uuid;
-
-    #[test]
-    fn test_summary_generation() {
-        let session = ActiveSession::new(
-            Uuid::new_v4(),
-            Some("Test Session".to_string()),
-            Some("Test session for summary generation".to_string()),
-        );
-
-        let summary = SummaryGenerator::generate_structured_summary(&session);
-
-        assert_eq!(summary.session_id, session.id());
-        assert!(summary.generated_at <= Utc::now());
-        assert_eq!(summary.session_stats.hot_context_size, 0); // Empty session
-    }
-
-    #[test]
-    fn test_key_insights_extraction() {
-        let session = ActiveSession::new(
-            Uuid::new_v4(),
-            Some("Test Session".to_string()),
-            Some("Test session for insights".to_string()),
-        );
-
-        let insights = SummaryGenerator::extract_key_insights(&session, 5);
-
-        // Empty session should have minimal insights
-        assert!(insights.len() <= 5);
-    }
-
-    #[test]
-    fn test_limited_summary_matches_full_sort_then_truncate() {
-        use crate::core::context_update::EntityType;
-        use crate::core::structured_context::{ConceptItem, DecisionItem, QuestionItem};
-        use chrono::TimeZone;
-        use std::sync::Arc;
-
-        let mut session = ActiveSession::new(Uuid::new_v4(), None, None);
-        let ts = |s: u32| Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, s).unwrap();
-        {
-            let state = Arc::make_mut(&mut session.current_state);
-            for i in 0..30u32 {
-                state.key_decisions.push(DecisionItem::new(
-                    format!("d{i}"),
-                    String::new(),
-                    vec![],
-                    (i % 4) as f32 / 4.0,
-                    ts(i % 7),
-                ));
-                state.open_questions.push(QuestionItem {
-                    question: format!("q{i}"),
-                    timestamp: ts(i % 5),
-                    ..Default::default()
-                });
-                state.key_concepts.push(ConceptItem {
-                    name: format!("c{i}"),
-                    timestamp: ts(i % 3),
-                    ..Default::default()
-                });
-            }
-            state.key_decisions[3].confidence = f32::NAN; // must not panic
-        }
-        let graph = Arc::make_mut(&mut session.entity_graph);
-        for i in 0..25u32 {
-            graph.add_or_update_entity(format!("e{i:02}"), EntityType::Concept, ts(0), "");
-            // No relations: importance follows the mentions.
-            graph
-                .entities
-                .get_mut(&format!("e{i:02}"))
-                .unwrap()
-                .mention_count = i % 3 + 1;
-        }
-
-        let options = SummaryOptions {
-            decisions_limit: Some(5),
-            entities_limit: Some(4),
-            questions_limit: Some(6),
-            concepts_limit: Some(7),
-            min_confidence: Some(0.25),
-            compact: false,
-        };
-        let view = SummaryGenerator::generate_structured_summary_filtered(&session, &options);
-
-        // Reference: the previous full stable sort + truncate.
-        let mut decisions: Vec<&DecisionItem> = session
-            .current_state
-            .key_decisions
-            .iter()
-            .filter(|d| d.confidence >= 0.25)
-            .collect();
-        decisions.sort_by(|a, b| {
-            b.confidence
-                .total_cmp(&a.confidence)
-                .then_with(|| b.timestamp.cmp(&a.timestamp))
-        });
-        let expected: Vec<&str> = decisions
-            .iter()
-            .take(5)
-            .map(|d| d.description.as_str())
-            .collect();
-        let got: Vec<&str> = view
-            .key_decisions
-            .iter()
-            .map(|d| d.description.as_str())
-            .collect();
-        assert_eq!(got, expected);
-
-        let mut questions: Vec<&QuestionItem> =
-            session.current_state.open_questions.iter().collect();
-        questions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-        let expected: Vec<&str> = questions
-            .iter()
-            .take(6)
-            .map(|q| q.question.as_str())
-            .collect();
-        let got: Vec<&str> = view
-            .open_questions
-            .iter()
-            .map(|q| q.question.as_str())
-            .collect();
-        assert_eq!(got, expected);
-
-        let mut concepts: Vec<&ConceptItem> = session.current_state.key_concepts.iter().collect();
-        concepts.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-        let expected: Vec<&str> = concepts.iter().take(7).map(|c| c.name.as_str()).collect();
-        let got: Vec<&str> = view.key_concepts.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(got, expected);
-
-        let mut all = session.entity_graph.analyze_entity_importance();
-        all.truncate(4);
-        let expected: Vec<String> = all.into_iter().map(|a| a.entity_name).collect();
-        assert_eq!(view.important_entities, expected);
-        assert_eq!(view.important_entities, vec!["e02", "e05", "e08", "e11"]);
-    }
-}
+mod tests;

@@ -69,8 +69,7 @@ impl Visit for MessageCapture {
 
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         if field.name() == "message" {
-            use std::fmt::Write;
-            let _ = write!(&mut self.0, "{value:?}");
+            self.0.push_str(&format!("{value:?}"));
         }
     }
 }
@@ -179,7 +178,7 @@ mod otel {
 
     use std::env;
 
-    use super::TracingInitError;
+    use crate::daemon::observability::TracingInitError;
 
     /// Detect whether the OTLP endpoint env var is set; if so the full
     /// exporter wiring would install here.
@@ -190,14 +189,14 @@ mod otel {
     /// prove the otel layer doesn't regress p95 on the hot path. Today
     /// this returns `Some(())` when the env var is set so observability
     /// logs surface the right state, and `None` otherwise.
-    pub(super) fn try_install_global() -> Result<Option<()>, TracingInitError> {
+    pub fn try_install_global() -> Result<Option<()>, TracingInitError> {
         match env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
             Ok(v) if !v.is_empty() => Ok(Some(())),
             _ => Ok(None),
         }
     }
 
-    pub(super) fn shutdown() {
+    pub fn shutdown() {
         // No-op placeholder; real impl calls
         // opentelemetry_sdk::global::shutdown_tracer_provider() etc.
     }

@@ -17,23 +17,21 @@ documentation = "https://docs.rs/post-cortex"
 # one dependency line and the full stack.
 post-cortex-proto.workspace = true
 post-cortex-core.workspace = true
+post-cortex-ports.workspace = true
 post-cortex-embeddings.workspace = true
 post-cortex-storage.workspace = true
 post-cortex-memory.workspace = true
-post-cortex-mcp.workspace = true
+post-cortex-transport.workspace = true
 post-cortex-daemon.workspace = true
 
 [dev-dependencies]
-# The integration tests live under tests/. They use the full transport
-# stack (axum, tonic, rmcp) plus the test helpers shared across crates.
+# The integration tests under tests/ drive the memory system, the MCP
+# transport and the vector DB through this facade.
+post-cortex-memory.workspace = true
 anyhow.workspace = true
-async-trait.workspace = true
 tokio.workspace = true
-tokio-test.workspace = true
-tokio-stream.workspace = true
 tempfile.workspace = true
 serial_test.workspace = true
-portpicker.workspace = true
 proptest.workspace = true
 criterion.workspace = true
 serde.workspace = true
@@ -41,30 +39,19 @@ serde_json.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 futures.workspace = true
-axum.workspace = true
-tower.workspace = true
-tower-http.workspace = true
-hyper.workspace = true
-tonic.workspace = true
-prost.workspace = true
-reqwest.workspace = true
-schemars.workspace = true
-tracing.workspace = true
 tracing-subscriber.workspace = true
-arc-swap.workspace = true
 
 [[bench]]
 name = "query_cache_bench"
 harness = false
 
 [features]
-default = ["embeddings"]
-embeddings = ["post-cortex-memory/embeddings", "post-cortex-mcp/embeddings", "post-cortex-daemon/embeddings"]
-surrealdb-storage = ["post-cortex-memory/surrealdb-storage", "post-cortex-daemon/surrealdb-storage"]
+default = []
+surrealdb-storage = ["post-cortex-daemon/surrealdb-storage"]
 # Opt-in BERT embedding backend; default builds use model2vec only.
-bert = ["post-cortex-memory/bert", "post-cortex-daemon/bert"]
-rerank = ["post-cortex-memory/rerank", "post-cortex-daemon/rerank"]
-rerank-voyage = ["post-cortex-memory/rerank-voyage", "post-cortex-daemon/rerank-voyage"]
+bert = ["post-cortex-daemon/bert"]
+rerank = ["post-cortex-daemon/rerank"]
+rerank-voyage = ["post-cortex-daemon/rerank-voyage"]
 surrealdb-tikv = ["surrealdb-storage", "post-cortex-storage/surrealdb-tikv"]
 otel = []
 

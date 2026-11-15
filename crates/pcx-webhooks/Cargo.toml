@@ -1,0 +1,36 @@
+[package]
+name = "pcx-webhooks"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The pcx webhooks module: events from outside (Alertmanager first) become board tasks, one per incident, commented and closed as they fire and resolve."
+keywords = ["pcx", "webhooks", "alertmanager", "board"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-webhooks"
+
+[[bin]]
+name = "pcx-webhooks"
+path = "src/main.rs"
+
+[dependencies]
+pcx-module-api.workspace = true
+# Its package, pcx.webhooks.v1, and the board's and memory's it calls.
+post-cortex-proto.workspace = true
+tonic.workspace = true
+async-trait.workspace = true
+# Alertmanager's JSON, decoded by its mirror messages' proto3 JSON mapping.
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+prost.workspace = true
+parking_lot.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+pbjson-types.workspace = true
+
+[lints]
+workspace = true

@@ -1,255 +1,90 @@
 <p align="center">
-  <img src="design/v1.svg" width="128" height="128" alt="Post-Cortex Logo">
+  <img src="design/v1.svg" width="112" height="112" alt="pcx logo">
 </p>
 
-<h1 align="center">Post-Cortex</h1>
+<h1 align="center">pcx</h1>
 
-<p align="center"><strong>Persistent Memory for AI Assistants</strong></p>
+<p align="center"><strong>The harness your AI agents work in, with a memory that lasts.</strong></p>
 
-Post-Cortex is an MCP server that gives AI assistants long-term memory. It stores conversations, decisions, and insights in a searchable knowledge base with automatic entity extraction.
+<p align="center">
+  <a href="https://pcx.is">Website</a> ·
+  <a href="https://docs.pcx.is">Documentation</a> ·
+  <a href="https://docs.pcx.is/start/quickstart/">Quickstart</a> ·
+  <a href="https://app.pcx.is">App</a>
+</p>
 
-## Features
+> **Post-Cortex is now PCX.** Post-Cortex started as a memory for AI agents. Around it we
+> built a harness that we use every day: one binary that hosts the memory and the other
+> modules. With 0.6.0 we open that harness, with its modules and tools. Post-Cortex is still
+> here, as the memory module, and still works on its own.
 
-- **Persistent Memory** — conversations survive across sessions
-- **Semantic Search** — `potion-multilingual-128M` (Model2Vec) by default. ~50 MB on disk, ms-per-text inference, multilingual (Latin / Cyrillic / CJK / Greek / Arabic) out of the box. Heavier BERT models stay available behind the `bert` feature.
-- **Measured retrieval** — vector + BM25 search fused with RRF, an optional local cross-encoder or Voyage reranker (`mode`: `fast` / `local` / `accurate`), and each hit returned with its neighbouring records. LoCoMo all@50: 0.793 / 0.878 / 0.936
-- **Graph-RAG** — search results enriched with entity-graph traversal and relationship paths
-- **Conversation capture** (opt-in) — a Claude Code hook keeps the raw turns in a per-session message stream, searchable apart from the records (`sources`: `records` / `messages` / `all`); records can link to the turns they came from (`derived_from`)
-- **Cards** — a short, versioned project card per workspace and a user card, put in front of every session
-- **Authorship** — records and messages carry who wrote them; search can filter by author or prefer one
-- **Knowledge Graph** — every write carries typed `entities` + `relations` (MCP contract since 0.3.0); the graph stays in sync with the prose
-- **Single-entrypoint architecture** — every transport (gRPC, MCP, future REST) routes through the same canonical `MemoryServiceImpl::update_context`; no parallel codepaths to drift between
-- **Durable, non-blocking writes** — a write returns once the storage backend has acknowledged it (`durable` in the response); embeddings + entity-graph merge + summary refresh land on a bounded background pipeline. Persists are coalesced and ordered per session.
-- **Redaction** — credentials, e-mail addresses, phone numbers and public IPv4 addresses become `[REDACTED:<kind>]` before storage, on every transport (on by default; `PC_REDACT=0` disables)
-- **Auth + Host allowlist** — optional bearer token (`PC_AUTH_TOKEN`) on HTTP and gRPC; `/mcp` and `/api/*` reject unknown `Host` headers (DNS-rebinding protection, `PC_ALLOWED_HOSTS`)
-- **Privacy-first** — all processing runs locally (the embedding and reranker models are downloaded from Hugging Face once, on first use); the only external API is the opt-in Voyage reranker
-- **Lock-free Rust core** — ArcSwap session state, atomic CAS write path; vector search is an exact top-k scan up to 10 000 vectors and HNSW above that, with per-session indexes
-- **Flexible storage** — RocksDB (embedded, default) or SurrealDB (local / remote, distributed)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/overview-dark.png">
+  <img src="docs/images/overview-light.png" alt="The overview of a workspace: its records and entities, the agents writing, recent decisions and code changes, and what needs attention.">
+</picture>
 
-## Workspace layout
+**post-cortex** is the memory. What your agent decides, fixes and learns becomes a typed
+record, linked into a graph and searchable by meaning, so the next session starts from what
+the last one knew. It works on its own.
 
-This repository is a Cargo workspace of 8 publishable crates. Pick the one that matches your need — depending on the facade `post-cortex` pulls everything, but most consumers only want a subset:
+**pcx** is the harness around it. One binary hosts the memory and the other modules, and
+checks every call against what each module is allowed to do. Run it on your own machine, or
+use the hosted service at [pcx.is](https://pcx.is).
 
-| Crate | Pick when you need… | crates.io |
-|-------|---------------------|-----------|
-| [`post-cortex`](crates/post-cortex/) | The full stack in one dep | [![crates.io](https://img.shields.io/crates/v/post-cortex.svg)](https://crates.io/crates/post-cortex) |
-| [`post-cortex-core`](crates/post-cortex-core/) | Domain types + traits only (no I/O, no ML) | [![crates.io](https://img.shields.io/crates/v/post-cortex-core.svg)](https://crates.io/crates/post-cortex-core) |
-| [`post-cortex-proto`](crates/post-cortex-proto/) | gRPC wire types (client-side) | [![crates.io](https://img.shields.io/crates/v/post-cortex-proto.svg)](https://crates.io/crates/post-cortex-proto) |
-| [`post-cortex-embeddings`](crates/post-cortex-embeddings/) | Model2Vec (default) + opt-in BERT embedders + vector DB (exact / HNSW) | [![crates.io](https://img.shields.io/crates/v/post-cortex-embeddings.svg)](https://crates.io/crates/post-cortex-embeddings) |
-| [`post-cortex-storage`](crates/post-cortex-storage/) | RocksDB + SurrealDB backends | [![crates.io](https://img.shields.io/crates/v/post-cortex-storage.svg)](https://crates.io/crates/post-cortex-storage) |
-| [`post-cortex-memory`](crates/post-cortex-memory/) | `ConversationMemorySystem` orchestrator | [![crates.io](https://img.shields.io/crates/v/post-cortex-memory.svg)](https://crates.io/crates/post-cortex-memory) |
-| [`post-cortex-mcp`](crates/post-cortex-mcp/) | MCP tool functions (embed in any MCP host) | [![crates.io](https://img.shields.io/crates/v/post-cortex-mcp.svg)](https://crates.io/crates/post-cortex-mcp) |
-| [`post-cortex-daemon`](crates/post-cortex-daemon/) | `pcx` CLI + rmcp/axum/tonic server | [![crates.io](https://img.shields.io/crates/v/post-cortex-daemon.svg)](https://crates.io/crates/post-cortex-daemon) |
+## What it does
 
-Dependency graph (acyclic):
+- **Memory**: typed records, a graph of what they talk about, search by meaning and by
+  words, project and user cards, captured conversations.
+  [Search](https://docs.pcx.is/why/search/) · [Graph](https://docs.pcx.is/why/graph/) · [Cards](https://docs.pcx.is/why/cards/)
+- **Board and teams**: agents and people share tasks and decisions; a decision with a risk
+  waits for a person. [Board](https://docs.pcx.is/why/board/)
+- **Workflows**: graphs of steps over every module's tools, run by hand, on a schedule, on
+  a webhook or on an event. [Workflows](https://docs.pcx.is/why/workflows/)
+- **Modules**: scheduler, webhooks, HTTP, mail, Telegram, Discord, skills, your own model
+  keys, files, shell and git, and modules you write in Rust, Python or TypeScript.
+  [All modules](https://docs.pcx.is/modules/)
+- **Your agent**: Claude Code through its plugin; Codex, Cursor, Gemini CLI, OpenCode,
+  VS Code and others through `pcx setup`; anything else over MCP, gRPC or REST.
+  [Connect your agent](https://docs.pcx.is/agents/claude-code/)
 
-```text
-post-cortex-proto ──► post-cortex-core ──► post-cortex-storage ◄── post-cortex-embeddings
-                                                  │                        │
-                                                  ▼                        │
-                                           post-cortex-memory ◄────────────┘
-                                                  │
-                                                  ▼
-                                           post-cortex-mcp
-                                                  │
-                                                  ▼
-                                           post-cortex-daemon
-                                                  │
-                                                  ▼
-                                           post-cortex (facade)
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/graph-dark.png">
+  <img src="docs/images/graph-light.png" alt="The graph of a workspace, with what depends on the entity checkout-api and the problems recorded about it.">
+</picture>
 
-`A ──► B` means B depends on A. `post-cortex-embeddings` depends on no other workspace crate.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/board-dark.png">
+  <img src="docs/images/board-light.png" alt="A board with the columns Backlog, Doing, Review and Done. One task is held by a decision that waits for approval.">
+</picture>
 
-`post-cortex-core` carries no storage, ML or server dependencies (only `tonic` / `prost` through `post-cortex-proto`) — downstream Rust projects can take it for the type system alone without dragging in RocksDB, Model2Vec / Candle, or the server stack.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/workflow-editor-dark.png">
+  <img src="docs/images/workflow-editor-light.png" alt="The workflow editor: a schedule trigger, a board tool, a branch, an approval and a loop over the tasks.">
+</picture>
 
-## Installation
+## Quick start
 
-```bash
-# Cargo (any platform with Rust 1.95+) — ships the pcx CLI from crates.io
-cargo install post-cortex-daemon --features "embeddings,surrealdb-storage"
+**Hosted.** Create an account at [app.pcx.is](https://app.pcx.is) and follow the
+[quickstart](https://docs.pcx.is/start/quickstart/): five minutes to an agent that remembers.
 
-# Homebrew (macOS / Linux)
-brew install julymetodiev/tap/post-cortex
-
-# Or download a prebuilt binary from a release
-curl -L https://github.com/julymetodiev/post-cortex/releases/latest/download/pcx-aarch64-apple-darwin -o /usr/local/bin/pcx
-chmod +x /usr/local/bin/pcx
-```
-
-### As a library
-
-```toml
-[dependencies]
-# Everything in one dep — pulls the full stack including the daemon.
-post-cortex = "0.5"
-
-# Or pick the leanest crate for your use case:
-# - post-cortex-core           — types + traits only (no I/O, no ML)
-# - post-cortex-mcp            — MCP tool functions, embed in any MCP host
-# - post-cortex-embeddings     — Model2Vec + vector DB, no orchestrator
-# - post-cortex-memory         — ConversationMemorySystem + canonical service
-```
-
-## Quick Start
-
-### 1. Configure MCP (once, globally)
+**On your own machine.**
 
 ```bash
-# HTTP transport (recommended, requires daemon running)
-claude mcp add --scope user --transport http post-cortex http://127.0.0.1:3737/mcp \
-  --header "X-PCX-Author: claude-code"
-
-# Or stdio transport (no daemon needed)
-claude mcp add --scope user --transport stdio --env PC_AUTHOR=claude-code post-cortex -- pcx
+brew install julymetodiev/tap/post-cortex    # or a binary from the releases page
+pcx start                                    # the daemon, on 127.0.0.1:3737
+pcx setup --self-hosted                      # point your agents at it
 ```
 
-`X-PCX-Author` / `PC_AUTHOR` names who the records come from when a write
-does not say; MCP clients often report only their SDK's name.
+More in [Install and start](https://docs.pcx.is/daemon/install/).
 
-This registers Post-Cortex for all projects on your machine.
+## Build on it
 
-### 2. Set Up Your Project
-
-```bash
-pcx setup
-```
-
-This creates a session, workspace, `CLAUDE.md` with memory rules, hooks (a log check on `Stop`, the cards on `SessionStart`) and the `post-cortex-memory` skill. `pcx setup --capture` also installs the conversation capture hook; `--daemon-url` / `--capture-url` point the hooks at a daemon on another host. See **[Usage Guide](docs/USAGE_GUIDE.md)** for details.
-
-### 3. Start Coding
-
-```bash
-claude
-```
-
-Claude will automatically search past knowledge before answering and log new discoveries.
-
-## MCP Tools
-
-Nine tools:
-
-| Tool | Purpose |
-|------|---------|
-| `session` | Create / list / load / search / update_metadata / delete sessions |
-| `update_conversation_context` | Store knowledge (qa, decisions, problems, code changes); pass an `updates` array for bulk mode. Requires typed `entities` + `relations` arrays (`minItems: 1`, since 0.3.0) so the entity graph is never silently empty |
-| `semantic_search` | Hybrid (vector + BM25, optionally reranked) search across a session, a workspace, or globally; `mode`, `sources`, `author` / `prefer_author`, recency bias. Every scope returns the same result fields |
-| `get_structured_summary` | Get session overview (decisions, insights, entities) |
-| `query_conversation_context` | Structured queries — entity relationships, keyword search, importance scoring |
-| `assemble_context` | Graph-aware retrieval — the cards, entities named in the query, one-hop graph expansion, impact analysis, recency and (with `sources`) conversation excerpts, packed into one token budget |
-| `manage_workspace` | Organize sessions into workspaces; read and edit the project and user cards (`get_card` / `update_card`) |
-| `manage_entity` | Delete entity / single update; cascades typed edges |
-| `admin` | Health, vectorize-session, vectorize-stats, create-checkpoint |
-
-## Daemon Mode
-
-For multiple Claude instances sharing the same memory:
-
-```bash
-pcx start    # Start daemon
-pcx status   # Check status
-pcx stop     # Stop daemon
-```
-
-Configure Claude for HTTP transport:
-```json
-{
-  "mcpServers": {
-    "post-cortex": {
-      "type": "http",
-      "url": "http://localhost:3737/mcp"
-    }
-  }
-}
-```
-
-See [Daemon Mode docs](docs/DAEMON_MODE.md) for details.
-
-## Data Export/Import
-
-```bash
-pcx export --output backup.json       # Full export
-pcx export --output backup.json.gz    # Compressed
-pcx import --input backup.json        # Import
-```
-
-## Storage Backends
-
-| | RocksDB (default) | SurrealDB |
-|---|---|---|
-| Setup | Zero config | Requires server |
-| Distribution | Embedded | Distributed |
-| Vector Search | In-process: exact top-k up to 10 000 vectors, HNSW above | Same in-process index; vectors persisted in an `embedding` table with an HNSW index |
-
-Configure in `~/.post-cortex/daemon.toml`. See [Daemon Mode docs](docs/DAEMON_MODE.md).
-
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PC_HOST` | 127.0.0.1 | Bind address |
-| `PC_PORT` | 3737 | HTTP / MCP port |
-| `PC_GRPC_PORT` | 3738 | gRPC port (`0` disables gRPC) |
-| `PC_DATA_DIR` | ~/.post-cortex/data | Storage location |
-| `PC_STORAGE_BACKEND` | rocksdb | `rocksdb` or `surrealdb` |
-| `PC_SURREALDB_ENDPOINT` | unset | SurrealDB WebSocket endpoint, e.g. `ws://localhost:8000` |
-| `PC_SURREALDB_USER` / `PC_SURREALDB_PASS` | unset | SurrealDB credentials (non-`root` users sign in at namespace level) |
-| `PC_AUTH_TOKEN` | unset | Bearer token for HTTP (except `/health`) and gRPC |
-| `PC_REDACT` | unset (on) | `0` / `false` / `no` / `off` disables redaction on write |
-| `PC_ALLOWED_HOSTS` | loopback + `host` | Extra `Host` headers accepted on `/mcp` and `/api/*` (comma-separated `host` or `host:port`); set when binding to `0.0.0.0` — see [Allowed hosts](docs/DAEMON_MODE.md#allowed-hosts-dns-rebinding) |
-
-## Development
-
-```bash
-# Build the workspace with the full feature set
-cargo build --release --features "embeddings,surrealdb-storage"
-
-# Run the unit-test suite (no network, no external state)
-cargo test --workspace --lib
-
-# Run the live E2E test against a real SurrealDB + HuggingFace Hub
-# (ignored by default; needs POST_CORTEX_E2E_SURREAL_* env vars and
-#  ~50 MB potion-multilingual-128M download on first run)
-POST_CORTEX_E2E_SURREAL_USER=root \
-POST_CORTEX_E2E_SURREAL_PASS=root  \
-cargo test -p post-cortex --features "embeddings,surrealdb-storage" \
-    --test integration_e2e_surrealdb -- --ignored --nocapture
-
-# Benchmarks
-cargo bench
-```
-
-### Supply-chain hygiene
-
-- `cargo fmt --all --check`
-- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- `cargo deny check` — see [`deny.toml`](deny.toml)
-- `cargo audit` — see [`.cargo/audit.toml`](.cargo/audit.toml)
-
-CI enforces all four on every push to `main`.
-
-## Release notes
-
-The current release is `0.5.0` — the measured retrieval pipeline (BM25,
-rerankers, search modes, neighbours), conversation capture, project and
-user cards, and authorship on records and messages.
-
-Before upgrading:
-
-- **SurrealDB:** back up the database first; the daemon adds the full-text
-  index and the message and card tables on start.
-- **RocksDB:** older data loads as is; data written by 0.5.0 is not
-  readable by older binaries.
-- **Local reranker on Linux:** install ONNX Runtime 1.31 and set
-  `ORT_DYLIB_PATH` to `libonnxruntime.so`. With `reranker_model` set and no
-  `search_mode`, searches default to `local` (~1 s); set
-  `search_mode = "fast"` to keep the old latency and ask for `local` per call.
-
-Upgrading from 0.3? See the 0.4.0 notes in the changelog (`allowed_hosts`
-for wildcard binds, the forward-only SurrealDB schema).
-
-See [CHANGELOG.md](CHANGELOG.md) for the full diff and migration notes.
+Write a module, call the APIs or use the client SDKs:
+[Writing a module](https://docs.pcx.is/build/writing-a-module/) ·
+[APIs](https://docs.pcx.is/build/apis/). The specification of the code is
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); what changed is in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

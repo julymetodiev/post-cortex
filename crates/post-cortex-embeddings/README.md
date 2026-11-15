@@ -8,8 +8,8 @@ Embedding engines + in-memory vector database for [post-cortex](https://docs.rs/
 
 Self-contained ML stack — no dependency on any other post-cortex crate, so anyone needing a local text embedder or a nearest-neighbour index can depend on this crate without pulling the daemon or orchestrator.
 
-- **`LocalEmbeddingEngine`** selects an `EmbeddingBackend` from `EmbeddingConfig::model_type`. The default is `PotionMultilingual` — Model2Vec static embeddings (`minishlab/potion-multilingual-128M`, 256 dimensions, multilingual, no GPU). `PotionCode` (`potion-code-16M`) is the other Model2Vec model. The BERT models (`MiniLM`, `MultilingualMiniLM`, `TinyBERT`, `BGESmall`, via Candle) need the opt-in `bert` feature. `StaticSimilarityMRL` is a hash-based fallback that does not produce semantic vectors.
-- **`VectorDB`** is a DashMap-backed in-memory index with per-source (session) and per-content-id indexes. Up to `exact_search_threshold` vectors (default 10 000) searches are exact bounded top-k scans and no HNSW graph is kept; past it the HNSW graph is built once in bulk and maintained incrementally. `search_in_sources` always scans only the given sessions' vectors. Quantization and product quantization are off by default.
+- **`LocalEmbeddingEngine`** selects an `EmbeddingBackend` from `EmbeddingConfig::model_type`. The default is `PotionMultilingual` — Model2Vec static embeddings (`minishlab/potion-multilingual-128M`, 256 dimensions, multilingual, no GPU). `PotionCode` (`potion-code-16M`) is the other Model2Vec model. The BERT models (`MiniLM`, `MultilingualMiniLM`, `TinyBERT`, `BGESmall`, via Candle) need the opt-in `bert` feature. The `test-support` feature adds `test_support::hash_engine`, a model-free hash backend for tests (not semantic).
+- **`VectorDB`** is a DashMap-backed in-memory index with per-source (session) and per-content-id indexes. Up to `exact_search_threshold` vectors (default 10 000) searches are exact bounded top-k scans and no HNSW graph is kept; past it the HNSW graph is built once in bulk and maintained incrementally. `search_in_sources` always scans only the given sessions' vectors.
 
 ## Install
 

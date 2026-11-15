@@ -58,7 +58,18 @@ pub async fn require_bearer(
     }
 }
 
-/// tonic interceptor: same check on the `authorization` metadata.
+/// tonic interceptor of every call from a client: the metadata only the
+/// host sets (the calling module, its depth and turn) is removed, so no
+/// client names itself a module (W23).
+pub fn from_client(mut req: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
+    for key in pcx_module_api::metadata::HOST {
+        req.metadata_mut().remove(key);
+    }
+    Ok(req)
+}
+
+/// tonic interceptor: same check on the `authorization` metadata, then
+/// [`from_client`].
 pub fn grpc_interceptor(
     token: Arc<String>,
 ) -> impl Fn(tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> + Clone {
@@ -68,7 +79,7 @@ pub fn grpc_interceptor(
             .get("authorization")
             .and_then(|v| v.to_str().ok());
         if bearer_matches(presented, &token) {
-            Ok(req)
+            from_client(req)
         } else {
             Err(tonic::Status::unauthenticated(
                 "missing or invalid bearer token",

@@ -1,0 +1,27 @@
+[package]
+name = "pcx-module-py"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "pcx-module: a pcx module in Python, on the Rust core (PyO3, free-threaded CPython)."
+publish = false
+
+[lib]
+name = "_core"
+# Tested through the real host by bindings/tests, not by a test binary of
+# its own (an extension links against the runtime that loads it).
+test = false
+doctest = false
+crate-type = ["cdylib"]
+
+[dependencies]
+pcx-module-core.workspace = true
+# The free-threaded stable ABI of CPython 3.15 and later: one wheel
+# (docs/modules/dynamic.md, the bindings' API).
+pyo3 = { workspace = true, features = ["abi3t-py315"] }
+
+[lints]
+workspace = true

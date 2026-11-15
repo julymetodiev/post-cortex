@@ -1,0 +1,48 @@
+[package]
+name = "pcx-http"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The pcx http module: calls of outside HTTP APIs through connections that keep the organisation's credentials, under rules that keep private networks out, each call kept in a log in memory."
+keywords = ["pcx", "http", "api", "workflow"]
+categories = ["web-programming::http-client"]
+documentation = "https://docs.rs/pcx-http"
+
+[[bin]]
+name = "pcx-http"
+path = "src/main.rs"
+
+[dependencies]
+pcx-module-api.workspace = true
+pcx-documents.workspace = true
+# A response's `expect`: the fields of a schema, and JSON read by them.
+pcx-expr.workspace = true
+# Its package, pcx.http.v1.
+post-cortex-proto.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+# The built-in presets' file, read by its descriptors.
+prost-reflect.workspace = true
+tonic.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+url.workspace = true
+percent-encoding.workspace = true
+base64.workspace = true
+# A body's JSON: pbjson's Value, which has the JSON mapping.
+pbjson-types.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+
+[lints]
+workspace = true

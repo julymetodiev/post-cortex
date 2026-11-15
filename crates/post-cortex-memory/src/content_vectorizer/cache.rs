@@ -12,24 +12,19 @@
 
 //! Query-cache management and recency-bias metrics surface.
 
-use anyhow::Result;
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
-use tracing::{debug, info};
-use uuid::Uuid;
 
-use super::vectorizer::ContentVectorizer;
+use crate::content_vectorizer::vectorizer::ContentVectorizer;
 
 impl ContentVectorizer {
     /// Get query cache statistics, if caching is enabled.
     pub fn get_query_cache_stats(&self) -> Option<crate::query_cache::QueryCacheStatsSnapshot> {
-        self.query_cache.as_ref().map(|cache| cache.get_stats())
+        self.query_cache().map(|cache| cache.get_stats())
     }
 
     /// Get query cache efficiency metrics, if caching is enabled.
     pub fn get_cache_efficiency_metrics(&self) -> Option<HashMap<String, f32>> {
-        self.query_cache
-            .as_ref()
+        self.query_cache()
             .map(|cache| cache.get_efficiency_metrics())
     }
 
@@ -40,13 +35,10 @@ impl ContentVectorizer {
     ///
     /// Returns `None` if no search with recency bias has ever been performed.
     pub fn get_recency_bias_metrics(&self) -> Option<HashMap<String, f32>> {
-        let calculation_count = self.recency_bias_calculation_count.load(Ordering::Relaxed);
+        let (total_duration_ns, total_results, calculation_count) = self.recency_totals();
         if calculation_count == 0 {
             return None;
         }
-
-        let total_duration_ns = self.recency_bias_total_duration_ns.load(Ordering::Relaxed);
-        let total_results = self.recency_bias_total_results.load(Ordering::Relaxed);
 
         let mut metrics = HashMap::new();
         metrics.insert(
@@ -84,32 +76,14 @@ impl ContentVectorizer {
     }
 
     /// Clear the query cache.
-    ///
-    /// # Errors
-    /// Returns an error if the cache clear operation fails.
-    pub async fn clear_query_cache(&self) -> Result<()> {
-        if let Some(ref cache) = self.query_cache {
-            cache.clear()?;
-            info!("Query cache cleared successfully");
+    pub fn clear_query_cache(&self) {
+        if let Some(cache) = self.query_cache() {
+            cache.clear();
         }
-        Ok(())
-    }
-
-    /// Invalidate cache entries for a specific session.
-    /// More efficient than clearing the entire cache.
-    ///
-    /// # Errors
-    /// Returns an error if the cache invalidation fails.
-    pub async fn invalidate_session_cache(&self, session_id: Uuid) -> Result<()> {
-        if let Some(ref cache) = self.query_cache {
-            cache.invalidate_session(session_id)?;
-            debug!("Invalidated cache entries for session {}", session_id);
-        }
-        Ok(())
     }
 
     /// Check whether query caching is enabled.
-    pub const fn is_query_caching_enabled(&self) -> bool {
-        self.query_cache.is_some()
+    pub fn is_query_caching_enabled(&self) -> bool {
+        self.query_cache().is_some()
     }
 }

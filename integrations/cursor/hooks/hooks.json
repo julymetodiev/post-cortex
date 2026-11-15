@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "sh \"${CURSOR_PLUGIN_ROOT}/scripts/pcx.sh\" hook cursor sessionStart",
+        "timeout": 20
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "sh \"${CURSOR_PLUGIN_ROOT}/scripts/pcx.sh\" hook cursor postToolUse",
+        "matcher": "Read",
+        "timeout": 10
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "sh \"${CURSOR_PLUGIN_ROOT}/scripts/pcx.sh\" hook cursor beforeSubmitPrompt",
+        "timeout": 10
+      }
+    ],
+    "afterAgentResponse": [
+      {
+        "command": "sh \"${CURSOR_PLUGIN_ROOT}/scripts/pcx.sh\" hook cursor afterAgentResponse",
+        "timeout": 15
+      }
+    ]
+  }
+}

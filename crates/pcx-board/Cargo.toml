@@ -1,0 +1,43 @@
+[package]
+name = "pcx-board"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The pcx board module: boards, tasks, their discussion and decisions, kept as documents in memory."
+keywords = ["pcx", "board", "tasks", "agents"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-board"
+
+[[bin]]
+name = "pcx-board"
+path = "src/main.rs"
+
+[dependencies]
+pcx-module-api.workspace = true
+pcx-documents.workspace = true
+# Its package, pcx.board.v1, and memory's and the git tools' it calls (W23).
+post-cortex-proto.workspace = true
+pbjson-types.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+tracing.workspace = true
+tonic.workspace = true
+# The team's documents, read to check who may decide or close.
+pcx-team.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# The module process (`pcx-board`): its runtime.
+tokio.workspace = true
+
+[dev-dependencies]
+pcx-host.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

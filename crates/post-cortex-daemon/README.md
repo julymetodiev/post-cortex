@@ -40,7 +40,7 @@ pcx start
 pcx status
 pcx stop
 
-# Scaffold Claude Code integration in the current repo
+# Set up coding agents once for every project (--project: this repo only)
 pcx setup
 ```
 

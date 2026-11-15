@@ -10,14 +10,12 @@
 // The above copyright notice and this permission notice shall be included in all
 // copies or substantial portions of the Software.
 
-//! Cosine-similarity kernels shared by the vector DB and its callers.
+//! Similarity kernels shared by the vector DB and its callers.
 //!
 //! The loops keep `LANES` independent accumulators so LLVM can vectorise
 //! them: a plain `iter().sum()` over `f32` is a single dependency chain the
-//! compiler may not reorder. When scoring many vectors against one query,
-//! compute the query norm once with [`l2_norm`] and call
-//! [`cosine_with_norms`] with each stored vector's precomputed norm — that is
-//! one dot product per candidate instead of three passes and two `sqrt`s.
+//! compiler may not reorder. The index stores rows scaled to length 1
+//! ([`normalize_in_place`]), so a cosine similarity is one [`dot`].
 
 const LANES: usize = 8;
 
@@ -44,16 +42,14 @@ pub fn l2_norm(v: &[f32]) -> f32 {
     dot(v, v).sqrt()
 }
 
-/// Cosine similarity given both norms up front: one pass over the data.
-///
-/// Returns `0.0` when the lengths differ or either norm is zero, matching
-/// [`cosine_similarity`].
+/// Scale `v` to length 1; a zero vector stays zero (it is similar to
+/// nothing).
 #[inline]
-pub fn cosine_with_norms(a: &[f32], b: &[f32], norm_a: f32, norm_b: f32) -> f32 {
-    if a.len() != b.len() || norm_a == 0.0 || norm_b == 0.0 {
-        return 0.0;
+pub fn normalize_in_place(v: &mut [f32]) {
+    let norm = l2_norm(v);
+    if norm > 0.0 {
+        v.iter_mut().for_each(|x| *x /= norm);
     }
-    dot(a, b) / (norm_a * norm_b)
 }
 
 /// Cosine similarity of two vectors in a single fused pass.
@@ -117,8 +113,10 @@ mod tests {
             let b = sample(len, 2.5);
             let expected = naive_cosine(&a, &b);
             assert!((cosine_similarity(&a, &b) - expected).abs() < 1e-5, "{len}");
-            let fused = cosine_with_norms(&a, &b, l2_norm(&a), l2_norm(&b));
-            assert!((fused - expected).abs() < 1e-5, "{len}");
+            let (mut na, mut nb) = (a.clone(), b.clone());
+            normalize_in_place(&mut na);
+            normalize_in_place(&mut nb);
+            assert!((dot(&na, &nb) - expected).abs() < 1e-5, "{len}");
             let d: f32 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
             assert!((dot(&a, &b) - d).abs() < 1e-3, "{len}");
         }
@@ -128,7 +126,8 @@ mod tests {
     fn degenerate_inputs_score_zero() {
         assert_eq!(cosine_similarity(&[0.0; 4], &[1.0; 4]), 0.0);
         assert_eq!(cosine_similarity(&[1.0; 4], &[1.0; 3]), 0.0);
-        assert_eq!(cosine_with_norms(&[1.0; 4], &[1.0; 3], 2.0, 2.0), 0.0);
-        assert_eq!(cosine_with_norms(&[1.0; 4], &[1.0; 4], 0.0, 2.0), 0.0);
+        let mut zero = [0.0; 4];
+        normalize_in_place(&mut zero);
+        assert_eq!(zero, [0.0; 4]);
     }
 }

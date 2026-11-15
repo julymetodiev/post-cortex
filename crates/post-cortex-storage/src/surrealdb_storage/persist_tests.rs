@@ -10,7 +10,7 @@
 // The above copyright notice and this permission notice shall be included in all
 // copies or substantial portions of the Software.
 
-//! Incremental session persistence, bound record ids, single-query
+//! Session saves by their changes, bound record ids, single-query
 //! listings. Run against the embedded engine by default; set
 //! `PCX_STO_TEST_SURREAL_URL` (+ `_USER`, `_PASS`, `_NS`) to run them against
 //! a server, each test in its own throwaway database.
@@ -20,13 +20,13 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use super::SurrealDBStorage;
-use crate::traits::{GraphStorage, Storage, VectorStorage};
 use post_cortex_core::core::context_update::{
     ContextUpdate, EntityType, UpdateContent, UpdateType,
 };
 use post_cortex_core::graph::entity_graph::SimpleEntityGraph;
 use post_cortex_core::session::active_session::ActiveSession;
-use post_cortex_embeddings::{Corpus, MESSAGE_CONTENT_TYPE, VectorMetadata};
+use post_cortex_ports::VectorMetadata;
+use post_cortex_ports::storage::{SessionChanges, SessionStore, VectorStore, WorkspaceStore};
 
 /// Embedded engine, or a throwaway database on the server named by
 /// `PCX_STO_TEST_SURREAL_URL`. The namespace must start with `pcx_sto_test`
@@ -82,9 +82,22 @@ fn plain_update(title: &str, offset_ms: i64) -> ContextUpdate {
     }
 }
 
+/// Every record, the whole graph.
+fn everything(session: &ActiveSession) -> SessionChanges {
+    SessionChanges::everything(session, &[])
+}
+
+/// The whole graph, nothing else.
+fn whole_graph() -> SessionChanges {
+    SessionChanges {
+        whole_graph: true,
+        ..Default::default()
+    }
+}
+
 fn update_titles(session: &ActiveSession) -> Vec<String> {
     session
-        .incremental_updates
+        .records()
         .iter()
         .map(|u| u.content.title.clone())
         .collect()
@@ -92,7 +105,7 @@ fn update_titles(session: &ActiveSession) -> Vec<String> {
 
 async fn count_where(storage: &SurrealDBStorage, table: &str, session_id: Uuid) -> i64 {
     let mut res = storage
-        .db
+        .db()
         .query(format!(
             "SELECT count() AS n FROM {table} WHERE session_id = $s GROUP ALL"
         ))
@@ -103,11 +116,10 @@ async fn count_where(storage: &SurrealDBStorage, table: &str, session_id: Uuid) 
     n.unwrap_or(0)
 }
 
-/// Every persist path leaves a row for every update; updates removed from a
-/// loaded session are deleted (S10); a snapshot this process never loaded
-/// cannot delete rows it does not know about.
+/// A save writes the records it names and deletes the removals it names;
+/// a snapshot that lacks a record (it predates it) deletes nothing.
 #[tokio::test]
-async fn incremental_persist_writes_missing_rows_and_deletes_removed() {
+async fn saves_write_and_remove_the_records_they_name() {
     let storage = test_storage().await;
     let id = Uuid::new_v4();
     let (u1, u2, u3) = (
@@ -116,108 +128,130 @@ async fn incremental_persist_writes_missing_rows_and_deletes_removed() {
         plain_update("u3", 2),
     );
 
-    let mut session = ActiveSession::new(id, Some("s".into()), None);
-    session.set_incremental_updates(vec![u1.clone()]);
-    storage.save_session(&session).await.unwrap();
-
-    // u2 only in the snapshot, u3 passed explicitly: both get rows.
-    session.set_incremental_updates(vec![u1.clone(), u2.clone(), u3.clone()]);
+    let mut session = ActiveSession::new(id, Some("s".into()), None, chrono::Utc::now());
+    session.replace_records(vec![u1.clone()]);
     storage
-        .save_session_with_updates(&session, id, vec![u3.clone()])
+        .save_session(&session, everything(&session))
+        .await
+        .unwrap();
+
+    session.replace_records(vec![u1.clone(), u2.clone(), u3.clone()]);
+    storage
+        .save_session(
+            &session,
+            SessionChanges {
+                updates: vec![u2.clone(), u3.clone()],
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(count_where(&storage, "context_update", id).await, 3);
 
-    let mut loaded = storage.load_session(id).await.unwrap();
+    let mut loaded = storage.load_session(id).await.unwrap().session;
     assert_eq!(update_titles(&loaded), vec!["u1", "u2", "u3"]);
-    assert!(loaded.remove_update_by_id(&u2.id));
+    assert!(loaded.remove_records(&[u2.id]).len() == 1);
     // Lacking u2 is not enough: deletions are named.
     storage
-        .save_session_with_updates(&loaded, id, vec![])
+        .save_session(&loaded, SessionChanges::default())
         .await
         .unwrap();
     assert_eq!(count_where(&storage, "context_update", id).await, 3);
     storage
-        .save_session_with_changes(&loaded, id, vec![], vec![u2.id])
+        .save_session(
+            &loaded,
+            SessionChanges {
+                removed: vec![u2.id],
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(count_where(&storage, "context_update", id).await, 2);
     assert_eq!(
-        update_titles(&storage.load_session(id).await.unwrap()),
+        update_titles(&storage.load_session(id).await.unwrap().session),
         vec!["u1", "u3"]
     );
 
-    // Another process saving an empty snapshot over the session must not
-    // wipe rows it never saw.
-    let other_process = SurrealDBStorage {
-        persisted: Default::default(),
-        ..storage.clone()
-    };
-    other_process
-        .save_session(&ActiveSession::new(id, Some("s".into()), None))
+    // An empty snapshot saved over the session wipes nothing.
+    storage
+        .save_session(
+            &ActiveSession::new(id, Some("s".into()), None, chrono::Utc::now()),
+            SessionChanges::default(),
+        )
         .await
         .unwrap();
     assert_eq!(count_where(&storage, "context_update", id).await, 2);
-
-    // A named removal works without prior knowledge of the session (it was
-    // silently skipped before) and the row does not come back from a later
-    // snapshot that never saw it.
-    let fresh = SurrealDBStorage {
-        persisted: Default::default(),
-        ..storage.clone()
-    };
-    let mut only_u1 = ActiveSession::new(id, Some("s".into()), None);
-    only_u1.set_incremental_updates(vec![u1.clone()]);
-    fresh
-        .save_session_with_changes(&only_u1, id, vec![], vec![u3.id])
-        .await
-        .unwrap();
-    assert_eq!(count_where(&storage, "context_update", id).await, 1);
-    fresh.save_session(&only_u1).await.unwrap();
-    assert_eq!(
-        update_titles(&fresh.load_session(id).await.unwrap()),
-        vec!["u1"]
-    );
 }
 
-/// The incremental path only sends changed entities, but new and changed
-/// ones do reach the database.
+/// A save writes the entities and edges its records name; a whole-graph
+/// save replaces the stored graph, its lost rows included.
 #[tokio::test]
-async fn incremental_persist_writes_changed_graph() {
+async fn saves_write_the_graph_rows_they_change() {
+    use post_cortex_core::core::context_update::{EntityRelationship, RelationType, TypedEntity};
     let storage = test_storage().await;
     let id = Uuid::new_v4();
-    let mut session = ActiveSession::new(id, None, None);
-    let mut graph = SimpleEntityGraph::new();
-    graph.add_or_update_entity("A".into(), EntityType::Concept, Utc::now(), "a");
-    session.entity_graph = std::sync::Arc::new(graph.clone());
-    storage.save_session(&session).await.unwrap();
+    let mut session = ActiveSession::new(id, None, None, chrono::Utc::now());
+    let mut first = plain_update("a", 0);
+    first.typed_entities = vec![TypedEntity {
+        name: "A".into(),
+        entity_type: EntityType::Concept,
+    }];
+    session.apply_record(first);
+    storage
+        .save_session(&session, everything(&session))
+        .await
+        .unwrap();
 
-    graph.add_or_update_entity("B".into(), EntityType::Technology, Utc::now(), "b");
-    graph.add_relationship(post_cortex_core::core::context_update::EntityRelationship {
+    let mut second = plain_update("ab", 1);
+    second.typed_entities = vec![TypedEntity {
+        name: "B".into(),
+        entity_type: EntityType::Technology,
+    }];
+    second.creates_relationships = vec![EntityRelationship {
         from_entity: "A".into(),
         to_entity: "B".into(),
-        relation_type: post_cortex_core::core::context_update::RelationType::DependsOn,
+        relation_type: RelationType::DependsOn,
         context: "ctx".into(),
-    });
-    session.entity_graph = std::sync::Arc::new(graph);
+    }];
+    let second = ContextUpdate::clone(&session.apply_record(second));
     storage
-        .save_session_with_updates(&session, id, vec![])
+        .save_session(
+            &session,
+            SessionChanges {
+                updates: vec![second],
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
-
-    assert_eq!(storage.list_entities(id).await.unwrap().len(), 2);
+    let entities = |storage: &SurrealDBStorage| {
+        let db = std::sync::Arc::clone(&storage.db());
+        async move {
+            crate::surrealdb_storage::graph::load_entities(&db, id)
+                .await
+                .unwrap()
+                .len()
+        }
+    };
+    assert_eq!(entities(&storage).await, 2);
     assert_eq!(
-        storage.find_related_entities(id, "A").await.unwrap(),
-        vec!["B"]
+        crate::surrealdb_storage::graph::load_all_relationships(&storage.db(), id)
+            .await
+            .unwrap()
+            .len(),
+        1
     );
 
-    // After a graph reset the next incremental save rewrites everything.
-    storage.clear_session_entities(id).await.unwrap();
-    storage
-        .save_session_with_updates(&session, id, vec![])
-        .await
-        .unwrap();
-    assert_eq!(storage.list_entities(id).await.unwrap().len(), 2);
+    session.entity_graph_mut().remove_entity("B");
+    storage.save_session(&session, whole_graph()).await.unwrap();
+    assert_eq!(entities(&storage).await, 1);
+    assert!(
+        crate::surrealdb_storage::graph::load_all_relationships(&storage.db(), id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 /// A save/load round trip keeps every entity field, including the ones a
@@ -242,26 +276,26 @@ async fn load_keeps_entity_mention_count_and_importance() {
     });
     graph.add_or_update_entity("Tokio".into(), EntityType::Technology, last, "runtime");
     graph.add_or_update_entity("Tokio".into(), EntityType::Technology, last, "");
-    let mut session = ActiveSession::new(id, None, None);
-    session.entity_graph = std::sync::Arc::new(graph);
-    storage.save_session(&session).await.unwrap();
+    let mut session = ActiveSession::new(id, None, None, chrono::Utc::now());
+    *session.entity_graph_mut() = graph;
+    storage.save_session(&session, whole_graph()).await.unwrap();
 
-    let loaded = storage.load_session(id).await.unwrap();
-    let rust = &loaded.entity_graph.entities["Rust"];
+    let loaded = storage.load_session(id).await.unwrap().session;
+    let rust = &loaded.entity_graph().entities["Rust"];
     assert_eq!(rust.mention_count, 7);
     assert_eq!(rust.importance_score, 2.5);
     assert_eq!(rust.first_mentioned.timestamp(), first.timestamp());
     assert_eq!(rust.last_mentioned.timestamp(), last.timestamp());
     assert_eq!(rust.description, None);
-    let tokio = &loaded.entity_graph.entities["Tokio"];
+    let tokio = &loaded.entity_graph().entities["Tokio"];
     assert_eq!(tokio.mention_count, 2);
     assert_eq!(tokio.description.as_deref(), Some("runtime"));
 
     // Loading again (and saving the loaded copy) does not drift.
-    storage.save_session(&loaded).await.unwrap();
-    let again = storage.load_session(id).await.unwrap();
-    assert_eq!(again.entity_graph.entities["Rust"].mention_count, 7);
-    assert_eq!(again.entity_graph.entities["Tokio"].mention_count, 2);
+    storage.save_session(&loaded, whole_graph()).await.unwrap();
+    let again = storage.load_session(id).await.unwrap().session;
+    assert_eq!(again.entity_graph().entities["Rust"].mention_count, 7);
+    assert_eq!(again.entity_graph().entities["Tokio"].mention_count, 2);
 }
 
 /// Records written with the old interpolated ids (`table:`id``) are the
@@ -271,9 +305,9 @@ async fn bound_ids_address_legacy_backtick_records() {
     let storage = test_storage().await;
     let id = Uuid::new_v4();
     let u1 = plain_update("u1", 0);
-    let entity_id = SurrealDBStorage::entity_id(id, "Rust");
+    let entity_id = crate::surrealdb_storage::ids::entity_id(id, "Rust");
     storage
-        .db
+        .db()
         .query(format!(
             "UPSERT context_update:`{}` CONTENT {{ update_id: '{}', session_id: '{}', \
              timestamp: '{}', update_type: 'ConceptDefined', update_data: {} }}; \
@@ -295,12 +329,15 @@ async fn bound_ids_address_legacy_backtick_records() {
         .check()
         .unwrap();
 
-    let mut session = ActiveSession::new(id, None, None);
-    session.set_incremental_updates(vec![u1.clone()]);
+    let mut session = ActiveSession::new(id, None, None, chrono::Utc::now());
+    session.replace_records(vec![u1.clone()]);
     let mut graph = SimpleEntityGraph::new();
     graph.add_or_update_entity("Rust".into(), EntityType::Technology, Utc::now(), "");
-    session.entity_graph = std::sync::Arc::new(graph);
-    storage.save_session(&session).await.unwrap();
+    *session.entity_graph_mut() = graph;
+    storage
+        .save_session(&session, everything(&session))
+        .await
+        .unwrap();
 
     assert_eq!(count_where(&storage, "context_update", id).await, 1);
     assert_eq!(count_where(&storage, "entity", id).await, 1);
@@ -311,13 +348,16 @@ async fn summaries_workspaces_and_delete_session() {
     let storage = test_storage().await;
     let a = Uuid::new_v4();
     let b = Uuid::new_v4();
-    let mut sa = ActiveSession::new(a, Some("alpha".into()), Some("first".into()));
-    sa.set_incremental_updates((0..3).map(|i| plain_update(&format!("a{i}"), i)).collect());
-    storage.save_session(&sa).await.unwrap();
-    storage
-        .save_session(&ActiveSession::new(b, None, None))
-        .await
-        .unwrap();
+    let mut sa = ActiveSession::new(
+        a,
+        Some("alpha".into()),
+        Some("first".into()),
+        chrono::Utc::now(),
+    );
+    sa.replace_records((0..3).map(|i| plain_update(&format!("a{i}"), i)).collect());
+    storage.save_session(&sa, everything(&sa)).await.unwrap();
+    let sb = ActiveSession::new(b, None, None, chrono::Utc::now());
+    storage.save_session(&sb, everything(&sb)).await.unwrap();
 
     let summaries = storage.list_session_summaries().await.unwrap();
     assert_eq!(summaries.len(), 2);
@@ -330,7 +370,7 @@ async fn summaries_workspaces_and_delete_session() {
 
     let ws = Uuid::new_v4();
     storage
-        .save_workspace_metadata(ws, "ws", "d", &[a, b])
+        .save_workspace_metadata(ws, "ws", &ws.to_string(), "d", &[a, b])
         .await
         .unwrap();
     let workspaces = storage.list_workspaces().await.unwrap();
@@ -338,7 +378,7 @@ async fn summaries_workspaces_and_delete_session() {
     assert_eq!(workspaces[0].sessions.len(), 2);
 
     storage
-        .add_vector(
+        .upsert_vectors(vec![(
             vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             VectorMetadata {
                 id: "entity:x".into(),
@@ -348,7 +388,7 @@ async fn summaries_workspaces_and_delete_session() {
                 timestamp: Utc::now(),
                 metadata: HashMap::new(),
             },
-        )
+        )])
         .await
         .unwrap();
 
@@ -360,233 +400,5 @@ async fn summaries_workspaces_and_delete_session() {
         1
     );
     let err = storage.load_session(a).await.unwrap_err();
-    assert!(crate::is_not_found(&err));
-}
-
-fn vector_meta(content_id: &str, session: &str) -> VectorMetadata {
-    VectorMetadata {
-        id: content_id.to_string(),
-        text: format!("{content_id} in {session}"),
-        source: session.to_string(),
-        content_type: "entity".into(),
-        timestamp: Utc::now(),
-        metadata: HashMap::new(),
-    }
-}
-
-/// `entity:<name>` exists in many sessions: their vectors must not
-/// overwrite each other, legacy records (keyed by the bare content id) are
-/// replaced on rewrite, and removal can target one session.
-#[tokio::test]
-async fn embeddings_are_session_scoped() {
-    let storage = test_storage().await;
-    let (s1, s2) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
-    let v = vec![0.5f32; 8];
-
-    // Legacy record of s1, written under the old id scheme.
-    storage
-        .db
-        .query("CREATE type::record('embedding', 'entity:rust') CONTENT $r")
-        .bind((
-            "r",
-            super::vectors::embedding_record(v.clone(), vector_meta("entity:rust", &s1)),
-        ))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-
-    storage
-        .add_vectors_batch(vec![
-            (v.clone(), vector_meta("entity:rust", &s1)),
-            (v.clone(), vector_meta("entity:rust", &s2)),
-        ])
-        .await
-        .unwrap();
-    assert_eq!(storage.count_session_embeddings(&s1).await, 1);
-    assert_eq!(storage.count_session_embeddings(&s2).await, 1);
-    assert_eq!(storage.total_count().await, 2);
-
-    assert!(
-        storage
-            .remove_session_vector(&s1, "entity:rust")
-            .await
-            .unwrap()
-    );
-    assert!(
-        !storage
-            .remove_session_vector(&s1, "entity:rust")
-            .await
-            .unwrap()
-    );
-    assert_eq!(storage.count_session_embeddings(&s2).await, 1);
-    assert!(storage.remove_vector("entity:rust").await.unwrap());
-    assert_eq!(storage.total_count().await, 0);
-}
-
-fn text_meta(content_id: &str, session: &str, text: &str) -> VectorMetadata {
-    VectorMetadata {
-        text: text.to_string(),
-        content_type: "UpdateContent".into(),
-        ..vector_meta(content_id, session)
-    }
-}
-
-/// BM25 finds records by their words, ranks the record with more matching
-/// terms first, honours the session scope, reports the cosine similarity to
-/// the query vector, and ignores stopword-only queries.
-#[tokio::test]
-async fn text_search_bm25() {
-    let storage = test_storage().await;
-    let (s1, s2) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
-    let (x, y) = (
-        vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-    );
-    storage
-        .add_vectors_batch(vec![
-            (
-                x.clone(),
-                text_meta("a", &s1, "Decided to keep RocksDB for the local daemon"),
-            ),
-            (
-                y.clone(),
-                text_meta("b", &s1, "SurrealDB HNSW index and RocksDB column families"),
-            ),
-            (y.clone(), text_meta("c", &s1, "Lunch plans for Friday")),
-            (x.clone(), text_meta("d", &s2, "RocksDB compaction tuning")),
-            (
-                x.clone(),
-                text_meta("e", &s1, "Решихме да ползваме базата SurrealDB"),
-            ),
-            (
-                x.clone(),
-                VectorMetadata {
-                    content_type: MESSAGE_CONTENT_TYPE.into(),
-                    ..text_meta("m", &s2, "should we drop rocksdb?")
-                },
-            ),
-        ])
-        .await
-        .unwrap();
-
-    let all = storage
-        .search_text(
-            "What about RocksDB and SurrealDB?",
-            &x,
-            10,
-            &[],
-            Corpus::Records,
-        )
-        .await
-        .unwrap()
-        .expect("SurrealDB has a full-text index");
-    let ids: Vec<&str> = all.iter().map(|m| m.metadata.id.as_str()).collect();
-    let pos = |id: &str| ids.iter().position(|i| *i == id).expect(id);
-    assert!(
-        pos("b") < pos("a") && pos("b") < pos("d"),
-        "both query terms beat one: {ids:?}"
-    );
-    assert!(ids.contains(&"e") && !ids.contains(&"c"), "{ids:?}");
-    let a = all.iter().find(|m| m.metadata.id == "a").unwrap();
-    assert!(
-        (a.similarity - 1.0).abs() < 1e-5,
-        "cosine to the query vector"
-    );
-    let b = all.iter().find(|m| m.metadata.id == "b").unwrap();
-    assert!(b.similarity.abs() < 1e-5);
-
-    let scoped = storage
-        .search_text(
-            "rocksdb",
-            &x,
-            10,
-            std::slice::from_ref(&s2),
-            Corpus::Records,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        scoped
-            .iter()
-            .map(|m| m.metadata.id.as_str())
-            .collect::<Vec<_>>(),
-        ["d"]
-    );
-
-    // Messages are searched only when asked for.
-    let corpus_ids = |hits: Vec<post_cortex_embeddings::SearchMatch>| {
-        let mut ids: Vec<String> = hits.into_iter().map(|m| m.metadata.id).collect();
-        ids.sort();
-        ids
-    };
-    for (corpus, expected) in [
-        (Corpus::Records, vec!["d"]),
-        (Corpus::Messages, vec!["m"]),
-        (Corpus::All, vec!["d", "m"]),
-    ] {
-        let hits = storage
-            .search_text("rocksdb", &x, 10, std::slice::from_ref(&s2), corpus)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(corpus_ids(hits), expected, "{corpus:?}");
-    }
-
-    let cyrillic = storage
-        .search_text("базата", &x, 10, &[], Corpus::Records)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(cyrillic.len(), 1);
-    assert_eq!(cyrillic[0].metadata.id, "e");
-
-    assert!(
-        storage
-            .search_text("what is it?", &x, 10, &[], Corpus::Records)
-            .await
-            .unwrap()
-            .unwrap()
-            .is_empty()
-    );
-}
-
-/// Startup reads the HNSW dimension back from `INFO FOR TABLE` to decide
-/// whether the index must be rebuilt; the server's format must parse.
-#[tokio::test]
-async fn hnsw_dimension_reads_back_from_server() {
-    let storage = test_storage().await;
-    let mut response = storage
-        .db
-        .query("RETURN (INFO FOR TABLE embedding).indexes.idx_embedding_hnsw;")
-        .await
-        .unwrap();
-    let definition: Option<String> = response.take(0).unwrap();
-    assert_eq!(
-        definition.as_deref().and_then(super::core::hnsw_dimension),
-        Some(8),
-        "{definition:?}"
-    );
-}
-
-/// Keys in an embedding's `metadata` survive a round trip (the field is an
-/// `object` in a SCHEMAFULL table).
-#[tokio::test]
-async fn embedding_metadata_round_trips() {
-    let storage = test_storage().await;
-    let session = Uuid::new_v4().to_string();
-    let mut meta = text_meta("m", &session, "metadata round trip");
-    meta.metadata
-        .insert("terms".into(), "decid keep rocksdb".into());
-    storage
-        .add_vectors_batch(vec![(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], meta)])
-        .await
-        .unwrap();
-    let loaded = storage.get_session_vectors(&session).await.unwrap();
-    assert_eq!(loaded.len(), 1);
-    assert_eq!(
-        loaded[0].1.metadata.get("terms").map(String::as_str),
-        Some("decid keep rocksdb")
-    );
+    assert!(err.is_not_found());
 }

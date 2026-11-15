@@ -1,0 +1,40 @@
+[package]
+name = "pcx-team"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The pcx team module: agents with roles and authority, teams, and the trust a person gives them, kept as documents in memory."
+keywords = ["pcx", "team", "agents", "autonomy"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-team"
+
+[[bin]]
+name = "pcx-team"
+path = "src/main.rs"
+
+[dependencies]
+pcx-module-api.workspace = true
+pcx-documents.workspace = true
+# Its package, pcx.team.v1, and the board's and the skills' it calls (W23).
+post-cortex-proto.workspace = true
+prost.workspace = true
+tonic.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+pcx-host.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

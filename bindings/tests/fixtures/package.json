@@ -1,0 +1,9 @@
+{
+  "name": "relay-ts",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.16.0",
+    "@post-cortex/module": "file:../../ts"
+  }
+}

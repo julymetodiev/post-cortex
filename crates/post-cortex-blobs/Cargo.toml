@@ -1,0 +1,32 @@
+[package]
+name = "post-cortex-blobs"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The blob adapter of post-cortex: the bytes of the images documents name, by their SHA-256 per workspace, on any S3 endpoint."
+keywords = ["post-cortex", "s3", "blobs", "adapter"]
+categories = ["database"]
+readme = "README.md"
+documentation = "https://docs.rs/post-cortex-blobs"
+
+[dependencies]
+# The port it implements and the types it speaks.
+post-cortex-core.workspace = true
+post-cortex-ports.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+futures.workspace = true
+# Any S3 endpoint (and an in-memory store for tests).
+object_store.workspace = true
+
+[dev-dependencies]
+post-cortex-ports = { workspace = true, features = ["conformance"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

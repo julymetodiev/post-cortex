@@ -1,0 +1,44 @@
+# The JSON edges of the gRPC API (ARCHITECTURE rule 10, section 7, everything
+# gRPC): the JSON-shaped proto fields that stay JSON because what they carry is
+# JSON at its source. Every other one counts against grpc_json_fields, whose
+# budget only falls. One "<file> <message>.<field>" per line; why above it.
+
+# A model's tool call and the tools it is offered: JSON in the providers'
+# APIs and in MCP.
+pcx_agent.proto ToolCall.input
+pcx_chief.proto Action.input
+pcx_blocks.proto ToolUseBlock.input
+pcx_model.proto ModelTool.input_schema
+pcx_module.proto ToolSpec.input_schema
+
+# The hook JSON of Claude Code and Codex, carried as it comes.
+pcx_module.proto Event.tool_input
+pcx_module.proto Event.tool_response
+pcx_module.proto Event.payload
+
+# A view's request templates (the proto JSON mapping of the request, with
+# `{{row.x}}` and `{{form.x}}` in place of values) and its forms' fields.
+pcx_view.proto Source.request
+pcx_view.proto Action.request
+pcx_view.proto Action.form
+pcx_view.proto Form.schema
+
+# Prometheus's and Loki's samples and lines, arrays of mixed types
+# ([seconds, "value"], ["nanoseconds", "line"]) a proto field cannot be;
+# observe's adapters read them into typed samples and lines.
+pcx_observe.proto PromSerie.value
+pcx_observe.proto PromSerie.values
+pcx_observe.proto LokiStream.values
+
+# A mail template's values and its inputs' examples (owner 2026-10-31): their
+# types are the template's inputs, not a proto message's, and pcx-expr reads
+# them strictly by those types (docs/modules/mail.md, templates).
+pcx_mail.proto SendRequest.values
+pcx_mail.proto PreviewTemplateRequest.values
+pcx_mail.proto Input.example
+
+# An outside API's JSON body, sent and answered as it is (docs/modules/http.md,
+# requests): its shape is the API's, not a proto message's; `expect` checks it
+# by a schema through pcx-expr.
+pcx_http.proto HttpRequest.json
+pcx_http.proto HttpResponse.json

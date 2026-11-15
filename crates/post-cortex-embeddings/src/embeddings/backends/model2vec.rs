@@ -18,10 +18,12 @@
 //! orders of magnitude faster than the BERT path — typically ms/text on a
 //! laptop CPU with no GPU.
 
-use anyhow::Result;
-use async_trait::async_trait;
+use std::path::PathBuf;
+
+use crate::error::{Error, Result};
+use hf_hub::Cache;
+use hf_hub::api::sync::ApiBuilder;
 use model2vec_rs::model::StaticModel;
-use std::sync::Arc;
 use tracing::{debug, info};
 
 use crate::embeddings::backend::EmbeddingBackend;
@@ -32,18 +34,83 @@ use crate::embeddings::config::EmbeddingModelType;
 /// can audit the trade-off.
 const DEFAULT_MAX_TOKENS: usize = 512;
 
-/// Default batch size for the underlying `model2vec-rs` encode loop. The
-/// surrounding `LocalEmbeddingEngine` already chunks input batches via its
-/// own adaptive batching, so this just controls model2vec's inner loop.
-const DEFAULT_INNER_BATCH: usize = 1024;
+/// Texts per batch: a static model costs a table lookup per token, so the
+/// engine hands it large slices.
+const BATCH_SIZE: usize = 1024;
+
+/// The files of a Model2Vec model, the weights last.
+const MODEL_FILES: [&str; 3] = ["config.json", "tokenizer.json", "model.safetensors"];
+
+/// The snapshot directory of `model_id` in `cache` when it holds every file
+/// a Model2Vec model needs.
+fn cached_snapshot(cache: &Cache, model_id: &str) -> Option<PathBuf> {
+    let repo = cache.model(model_id.to_string());
+    let dir = repo.get("model.safetensors")?.parent()?.to_path_buf();
+    MODEL_FILES
+        .iter()
+        .all(|file| dir.join(file).exists())
+        .then_some(dir)
+}
+
+/// Fetch the files of `model_id` from the Hugging Face Hub into `cache`
+/// (again, even when cached, with `refresh`) and return its snapshot
+/// directory. The lookup and the fetch share `cache`, so a model fetched
+/// once is found at the next start (`HF_HOME` included).
+fn fetch_snapshot(cache: Cache, model_id: &str, refresh: bool) -> Result<PathBuf> {
+    let load_error = |reason: String| Error::ModelLoad {
+        model: model_id.to_string(),
+        reason,
+    };
+    let repo = ApiBuilder::from_cache(cache)
+        .with_progress(false)
+        .build()
+        .map_err(|e| load_error(format!("{e:#}")))?
+        .model(model_id.to_string());
+    let mut snapshot = None;
+    for file in MODEL_FILES {
+        let path = if refresh {
+            repo.download(file)
+        } else {
+            repo.get(file)
+        }
+        .map_err(|e| load_error(format!("{file}: {e:#}")))?;
+        snapshot = path.parent().map(std::path::Path::to_path_buf);
+    }
+    snapshot.ok_or_else(|| load_error("no snapshot directory".to_string()))
+}
+
+/// Load the Model2Vec model `model_id` from the Hugging Face cache
+/// (`HF_HOME`, else `~/.cache/huggingface`), fetching it into that cache
+/// first when it is not there; a cached snapshot that does not load is
+/// fetched again.
+fn load_static_model(model_id: &str) -> Result<StaticModel> {
+    let cache = Cache::from_env();
+    let load = |dir: PathBuf| {
+        StaticModel::from_pretrained(dir, None, None, None).map_err(|e| Error::ModelLoad {
+            model: model_id.to_string(),
+            reason: format!("{e:#}"),
+        })
+    };
+    match cached_snapshot(&cache, model_id) {
+        Some(dir) => {
+            debug!("Model2Vec {model_id}: loading the cached snapshot {dir:?}");
+            load(dir).or_else(|e| {
+                debug!("Model2Vec {model_id}: the cached snapshot does not load ({e}), fetching it again");
+                load(fetch_snapshot(cache, model_id, true)?)
+            })
+        }
+        None => load(fetch_snapshot(cache, model_id, false)?),
+    }
+}
 
 /// Static-embedding backend powered by `model2vec-rs`.
 ///
 /// Construct via [`Self::load`] — the call is async and offloads the
 /// (blocking) `StaticModel::from_pretrained` download/load onto
-/// [`tokio::task::spawn_blocking`].
+/// [`tokio::task::spawn_blocking`]. Returns the model's own (L2-normalised)
+/// vectors.
 pub struct Model2VecBackend {
-    model: Arc<StaticModel>,
+    model: StaticModel,
     dimension: usize,
     model_type: EmbeddingModelType,
 }
@@ -52,43 +119,40 @@ impl Model2VecBackend {
     /// Download (if needed) and load a Model2Vec model from the HuggingFace
     /// Hub. Verifies the runtime embedding dimension against the
     /// `EmbeddingModelType` constant and returns an error on mismatch —
-    /// silent drift would corrupt every downstream HNSW index.
+    /// silent drift would corrupt the vector index.
     pub async fn load(model_type: EmbeddingModelType) -> Result<Self> {
         let model_id = model_type.model_id().to_string();
         info!("Loading Model2Vec backend for model: {}", model_id);
 
-        // `StaticModel::from_pretrained` does blocking I/O (HF Hub fetch
-        // + safetensors mmap) — keep it off the reactor.
+        // Fetching and loading do blocking I/O (HF Hub fetch + safetensors
+        // mmap) — keep them off the reactor. A model already in the Hugging
+        // Face cache loads from its snapshot directory: going through the Hub
+        // revalidates every file online on each start, which is slow and
+        // fails when the Hub is slow or unreachable.
         let model = tokio::task::spawn_blocking({
             let model_id = model_id.clone();
-            move || -> Result<StaticModel> {
-                StaticModel::from_pretrained(model_id, None, None, None)
-            }
+            move || load_static_model(&model_id)
         })
-        .await
-        .map_err(|e| anyhow::anyhow!("Model2Vec load join error: {e}"))??;
+        .await??;
 
         // Probe the actual dimension by encoding a sentinel — this is the
         // ground-truth source. If it disagrees with the enum constant the
-        // HNSW index would be sized wrong, so fail loudly.
+        // index would be sized wrong, so fail loudly.
         let probe = model.encode_with_args(
             &["dimension probe".to_string()],
             Some(DEFAULT_MAX_TOKENS),
-            DEFAULT_INNER_BATCH,
+            BATCH_SIZE,
         );
         let runtime_dim = probe.first().map(|v| v.len()).unwrap_or(0);
         let declared_dim = model_type.embedding_dimension();
         if runtime_dim == 0 {
-            return Err(anyhow::anyhow!(
-                "Model2Vec ({model_id}) produced an empty vector on the dimension probe"
-            ));
+            return Err(Error::NoEmbedding(model_id.to_string()));
         }
         if runtime_dim != declared_dim {
-            return Err(anyhow::anyhow!(
-                "Model2Vec ({model_id}) reports dimension {runtime_dim} at runtime but \
-                 EmbeddingModelType::{model_type:?}.embedding_dimension() = {declared_dim}; \
-                 update the enum constant before shipping or HNSW indices will be sized wrong"
-            ));
+            return Err(Error::Dimension {
+                expected: declared_dim,
+                actual: runtime_dim,
+            });
         }
 
         info!(
@@ -97,61 +161,34 @@ impl Model2VecBackend {
         );
 
         Ok(Self {
-            model: Arc::new(model),
+            model,
             dimension: runtime_dim,
             model_type,
         })
     }
 }
 
-#[async_trait]
 impl EmbeddingBackend for Model2VecBackend {
     fn embedding_dimension(&self) -> usize {
         self.dimension
     }
 
-    /// Model2Vec is **not** BERT — the engine's BERT branch (concurrency
-    /// controller, adaptive batching, timeout) is bypassed. The static
-    /// path dispatches directly because each call is ms-cheap.
-    fn is_bert_based(&self) -> bool {
-        false
+    fn batch_size(&self) -> usize {
+        BATCH_SIZE
     }
 
-    async fn process_batch(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
-        if texts.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let model = self.model.clone();
-        let dim = self.dimension;
-        let model_type = self.model_type;
-
-        let embeddings = tokio::task::spawn_blocking(move || {
-            model.encode_with_args(&texts, Some(DEFAULT_MAX_TOKENS), DEFAULT_INNER_BATCH)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("Model2Vec encode join error: {e}"))?;
-
-        // Sanity check — `encode_with_args` should produce one vector per
-        // input. A mismatch means the underlying API changed under us.
-        for (i, v) in embeddings.iter().enumerate() {
-            if v.len() != dim {
-                return Err(anyhow::anyhow!(
-                    "Model2Vec ({model_type:?}) produced vector at index {i} with dim {} \
-                     (expected {})",
-                    v.len(),
-                    dim
-                ));
-            }
-        }
-
+    fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let embeddings = self
+            .model
+            .encode_with_args(texts, Some(DEFAULT_MAX_TOKENS), BATCH_SIZE);
         debug!(
-            "Model2Vec encoded {} texts (dim={}) for {:?}",
+            "Model2Vec encoded {} texts for {}",
             embeddings.len(),
-            dim,
-            model_type
+            self.model_type
         );
-
         Ok(embeddings)
     }
 }
+
+#[cfg(test)]
+mod tests;

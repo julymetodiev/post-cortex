@@ -1,0 +1,175 @@
+syntax = "proto3";
+package pcx.chief.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "pcx_agent.proto";
+import "pcx_module.proto";
+
+// The chief (ARCHITECTURE section 8): the host's main agent, which
+// operates every module for the people who own it, under its own grant
+// and a daily budget of tokens, each tool call of its turns recorded.
+service Chief {
+  // Ask the host's chief, its main agent, which operates every module for
+  // the people who own it. It answers when its turn ends; go on with the
+  // same conversation by its id.
+  rpc Ask(AskRequest) returns (AskResponse);
+  // The chief's rights (the person-only tools it may call, the tools
+  // withheld), its tokens per day and its use today.
+  rpc GetRights(GetRightsRequest) returns (Rights);
+  // The chief's conversations, the newest first: who asked, through which
+  // module, the first question.
+  rpc ListTalks(ListTalksRequest) returns (TalkList);
+  // The tool calls of a conversation's turns, the newest first: the tool,
+  // whether it failed, its input, when.
+  rpc ListActions(ListActionsRequest) returns (ActionList);
+  // One tool call of the chief: the tool, whether it failed, its input,
+  // when.
+  rpc GetAction(GetActionRequest) returns (ActionRecord);
+}
+
+// ------------------------------------------------------------- documents
+
+// A conversation with the chief (document chief/talk, titled by
+// asked_by).
+message Talk {
+  // Who started it.
+  string asked_by = 1;
+  // The module it came through; empty: a client of the host.
+  string channel = 2;
+  // The session its turns continue.
+  string session_id = 3;
+  // Whether a turn of it runs now.
+  bool answering = 4;
+  // What its last turn ended with: the chief's last text, or why it failed.
+  string answer = 5;
+}
+
+// One tool call of a chief's turn (document chief/action, titled by tool).
+message Action {
+  // The conversation's id.
+  string talk = 1;
+  // Who asked the turn.
+  string asked_by = 2;
+  // The tool.
+  string tool = 3;
+  // Its input, the arguments the model gave the call (a model's tool call
+  // is JSON, the one edge where JSON comes in).
+  google.protobuf.Struct input = 4;
+  // Whether it failed; unset: no result came (the turn was cancelled).
+  optional bool failed = 5;
+}
+
+// A day's use of the budget (document chief/day, titled by date).
+message Day {
+  // The UTC date, YYYY-MM-DD.
+  string date = 1;
+  // The tokens its turns used.
+  uint64 tokens = 2;
+}
+
+// ------------------------------------------------------------------ calls
+
+// A question to the chief.
+message AskRequest {
+  // What to ask or tell the chief.
+  string question = 1;
+  // The conversation, as an earlier answer named it; empty: a new one.
+  string conversation_id = 2;
+}
+
+// What a question got.
+message AskResponse {
+  // The conversation's id, to go on with it.
+  string conversation_id = 1;
+  // How its turn ended, with the chief's last text.
+  pcx.agent.v1.TurnEnd end = 2;
+}
+
+// The chief's rights.
+message GetRightsRequest {}
+
+// The chief's rights and today's use of its budget.
+message Rights {
+  // Its tokens per day.
+  uint64 budget_tokens = 1;
+  // The tokens its turns used today.
+  uint64 used_today = 2;
+  // The tools only a person calls that it may call.
+  repeated string person_tools = 3;
+  // The tools it is not given.
+  repeated string withheld = 4;
+}
+
+// The chief's conversations.
+message ListTalksRequest {
+  // At most this many, the newest first; 0: 50, at most 500.
+  uint32 limit = 1;
+}
+
+// A conversation as the chief keeps it.
+message TalkRecord {
+  // Its id.
+  string id = 1;
+  // The conversation.
+  Talk talk = 2;
+  // Its first question.
+  string question = 3;
+  // When it was last written.
+  google.protobuf.Timestamp updated_at = 4;
+}
+
+// The chief's conversations, the newest first.
+message TalkList {
+  // The conversations.
+  repeated TalkRecord talks = 1;
+}
+
+// The tool calls of a conversation, or of every one.
+message ListActionsRequest {
+  // The conversation, as an earlier answer named it; empty: every
+  // conversation's (W25).
+  string conversation_id = 1;
+  // At most this many, the newest first; 0: 50, at most 500.
+  uint32 limit = 2;
+}
+
+// A tool call as the chief keeps it.
+message ActionRecord {
+  // Its id.
+  string id = 1;
+  // The call.
+  Action action = 2;
+  // When it was recorded.
+  google.protobuf.Timestamp updated_at = 3;
+}
+
+// The tool calls of a conversation, the newest first.
+message ActionList {
+  // The calls.
+  repeated ActionRecord actions = 1;
+}
+
+// One tool call.
+message GetActionRequest {
+  // The action, as ListActions names it.
+  string id = 1;
+}
+
+// The chief's settings (ARCHITECTURE section 8, its settings).
+message ChiefConfig {
+  // The workspace its conversations, actions and days live in.
+  string workspace_id = 1 [(pcx.module.v1.setting) = { title: "Workspace", required: true, workspace: true }];
+  // Its name, the author of what it writes; empty: chief.
+  string name = 2 [(pcx.module.v1.setting) = { title: "Name" }];
+  // Added to the agent's system prompt.
+  string instructions = 3 [(pcx.module.v1.setting) = { title: "Instructions", multiline: true }];
+  // Its model's id; empty: the agent's.
+  string model = 4 [(pcx.module.v1.setting) = { title: "Model", model: true }];
+  // Input, output and cache writes of its turns in a UTC day; 0: 2000000.
+  uint64 budget_tokens = 5 [(pcx.module.v1.setting) = { title: "Tokens per day" }];
+  // What its turns may call beyond what an agent may: the tools only a
+  // person calls (team management, approvals) granted to it by name, and
+  // the tools it is not given.
+  pcx.module.v1.TurnGrant grant = 6 [(pcx.module.v1.setting) = { title: "Grant" }];
+}

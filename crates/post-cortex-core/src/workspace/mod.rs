@@ -1,36 +1,18 @@
-// Copyright (c) 2025 Julius ML
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
+// Copyright (c) 2025, 2026 Julius ML
+// Licensed under the MIT License. See LICENSE at the workspace root.
 
-//! Workspace module for organizing related sessions (e.g., microservices)
-//!
-//! Provides lock-free workspace management with DashMap-based concurrent access.
-//! Enables logical grouping of sessions that belong to the same project ecosystem.
+//! Workspaces: groups of related sessions (e.g. the services of one
+//! product) as plain values. The registry that holds them is runtime state
+//! of the memory crate.
 
-use arc_swap::ArcSwap;
-use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 use uuid::Uuid;
+
+#[cfg(test)]
+mod tests;
 
 /// Role of a session within a workspace
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,8 +27,25 @@ pub enum SessionRole {
     Shared,
 }
 
+crate::core::wire::wire_names!(SessionRole, "session role", {
+    Primary => "primary",
+    Related => "related",
+    Dependency => "dependency",
+    Shared => "shared",
+});
+
+/// A project resolved to a workspace: its key and the session made for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceProject {
+    /// Project key computed by the client: a normalised git remote such as
+    /// `github.com/owner/repo`, or `local:<hash>` for a checkout without one.
+    pub key: String,
+    /// Session of the project in the workspace.
+    pub session_id: Uuid,
+}
+
 /// Metadata for a workspace
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct WorkspaceMetadata {
     /// Type of project (e.g., "microservices", "monorepo")
     pub project_type: Option<String>,
@@ -56,304 +55,145 @@ pub struct WorkspaceMetadata {
     pub root_paths: Vec<PathBuf>,
     /// Additional user-defined metadata
     pub custom_data: std::collections::HashMap<String, String>,
+    /// Projects resolved to this workspace. Unlike the fields above it is
+    /// persisted with the workspace row.
+    #[serde(default)]
+    pub projects: Vec<WorkspaceProject>,
+    /// When the workspace was archived; `None` while it is active. Archived
+    /// workspaces keep their sessions and data but are left out of default
+    /// listings. Persisted with the workspace row.
+    #[serde(default)]
+    pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Whether its accurate searches may use the remote reranker (Voyage),
+    /// which receives the query and the candidates' text. Off until a
+    /// person turns it on (docs/memory.md, search). Persisted with the
+    /// workspace row.
+    #[serde(default)]
+    pub remote_rerank: bool,
 }
 
-/// A workspace groups related sessions (e.g., microservices in same ecosystem)
-///
-/// All operations are lock-free using DashMap and ArcSwap.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A workspace: its identity, its member sessions with their roles and its
+/// metadata. A value: changing a copy changes only that copy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
     /// Unique workspace identifier
     pub id: Uuid,
     /// Human-readable workspace name
     pub name: String,
+    /// The segment of its addresses ([`crate::slug::workspace_slug`]):
+    /// made when it is created, unique, kept after a rename.
+    pub slug: String,
     /// Workspace description
     pub description: String,
     /// When the workspace was created
     pub created_at: SystemTime,
-
-    /// Lock-free session tracking with roles
-    #[serde(skip)]
-    pub session_ids: Arc<DashMap<Uuid, SessionRole>>,
-
-    /// Atomic metadata updates
-    #[serde(skip)]
-    pub metadata: Arc<ArcSwap<WorkspaceMetadata>>,
+    #[serde(default)]
+    sessions: BTreeMap<Uuid, SessionRole>,
+    #[serde(default)]
+    metadata: WorkspaceMetadata,
 }
 
 impl Workspace {
-    /// Creates a new workspace with the given ID, name, and description
-    pub fn new(id: Uuid, name: String, description: String) -> Self {
+    /// A workspace without sessions, created at `created_at`.
+    pub fn new(
+        id: Uuid,
+        name: String,
+        slug: String,
+        description: String,
+        created_at: SystemTime,
+    ) -> Self {
         Self {
             id,
             name,
+            slug,
             description,
-            created_at: SystemTime::now(),
-            session_ids: Arc::new(DashMap::new()),
-            metadata: Arc::new(ArcSwap::from_pointee(WorkspaceMetadata::default())),
+            created_at,
+            sessions: BTreeMap::new(),
+            metadata: WorkspaceMetadata::default(),
         }
     }
 
-    /// Add a session to this workspace (lock-free)
-    pub fn add_session(&self, session_id: Uuid, role: SessionRole) {
-        self.session_ids.insert(session_id, role);
+    /// Add `session_id` with `role`, or change its role; returns the role
+    /// it had.
+    pub fn add_session(&mut self, session_id: Uuid, role: SessionRole) -> Option<SessionRole> {
+        self.sessions.insert(session_id, role)
     }
 
-    /// Remove a session from this workspace (lock-free)
-    pub fn remove_session(&self, session_id: &Uuid) -> Option<SessionRole> {
-        self.session_ids.remove(session_id).map(|(_, role)| role)
+    /// Remove `session_id`; returns the role it had.
+    pub fn remove_session(&mut self, session_id: &Uuid) -> Option<SessionRole> {
+        self.sessions.remove(session_id)
     }
 
-    /// Get role of a session (lock-free)
+    /// Role of a member session.
     pub fn get_session_role(&self, session_id: &Uuid) -> Option<SessionRole> {
-        self.session_ids.get(session_id).map(|entry| *entry.value())
+        self.sessions.get(session_id).copied()
     }
 
-    /// Get all session IDs (lock-free snapshot)
+    /// Every member session with its role, by session id.
     pub fn get_all_sessions(&self) -> Vec<(Uuid, SessionRole)> {
-        self.session_ids
+        self.sessions
             .iter()
-            .map(|entry| (*entry.key(), *entry.value()))
+            .map(|(id, role)| (*id, *role))
             .collect()
     }
 
-    /// Update metadata atomically
-    pub fn update_metadata<F>(&self, f: F)
-    where
-        F: FnOnce(&mut WorkspaceMetadata),
-    {
-        let current = self.metadata.load();
-        let mut new_metadata = (**current).clone();
-        f(&mut new_metadata);
-        self.metadata.store(Arc::new(new_metadata));
-    }
-}
-
-/// Lock-free workspace manager
-///
-/// Manages all workspaces with zero blocking operations using DashMap.
-pub struct WorkspaceManager {
-    /// Lock-free workspace cache
-    workspaces: Arc<DashMap<Uuid, Arc<ArcSwap<Workspace>>>>,
-
-    /// Lock-free name index for fast lookup
-    name_index: Arc<DashMap<String, Uuid>>,
-
-    /// Atomic counters
-    total_workspaces: Arc<AtomicU64>,
-}
-
-impl WorkspaceManager {
-    /// Creates a new empty workspace manager
-    pub fn new() -> Self {
-        Self {
-            workspaces: Arc::new(DashMap::new()),
-            name_index: Arc::new(DashMap::new()),
-            total_workspaces: Arc::new(AtomicU64::new(0)),
-        }
+    /// How many sessions belong to the workspace.
+    pub fn session_count(&self) -> usize {
+        self.sessions.len()
     }
 
-    /// Create a new workspace (lock-free)
-    pub fn create_workspace(&self, name: String, description: String) -> Uuid {
-        let id = Uuid::new_v4();
-        let workspace = Workspace::new(id, name.clone(), description);
-
-        self.workspaces
-            .insert(id, Arc::new(ArcSwap::from_pointee(workspace)));
-        self.name_index.insert(name, id);
-        self.total_workspaces.fetch_add(1, Ordering::Relaxed);
-
-        id
+    /// The workspace's metadata.
+    pub fn metadata(&self) -> &WorkspaceMetadata {
+        &self.metadata
     }
 
-    /// Restore a workspace from storage (lock-free)
-    pub fn restore_workspace(
-        &self,
-        id: Uuid,
-        name: String,
-        description: String,
-        sessions: Vec<(Uuid, SessionRole)>,
-    ) {
-        let workspace = Workspace::new(id, name.clone(), description);
-
-        // Restore sessions
-        for (session_id, role) in sessions {
-            workspace.add_session(session_id, role);
-        }
-
-        self.workspaces
-            .insert(id, Arc::new(ArcSwap::from_pointee(workspace)));
-        self.name_index.insert(name, id);
-        self.total_workspaces.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Get workspace by ID (lock-free)
-    pub fn get_workspace(&self, id: &Uuid) -> Option<Arc<Workspace>> {
-        self.workspaces.get(id).map(|entry| {
-            let arc_swap = entry.value();
-            arc_swap.load_full()
-        })
-    }
-
-    /// Get workspace by name (lock-free)
-    pub fn get_workspace_by_name(&self, name: &str) -> Option<Arc<Workspace>> {
-        self.name_index.get(name).and_then(|entry| {
-            let id = *entry.value();
-            self.get_workspace(&id)
-        })
-    }
-
-    /// List all workspaces (lock-free snapshot)
-    pub fn list_workspaces(&self) -> Vec<Arc<Workspace>> {
-        self.workspaces
+    /// The project bound to `key`, if any.
+    pub fn project(&self, key: &str) -> Option<WorkspaceProject> {
+        self.metadata
+            .projects
             .iter()
-            .map(|entry| entry.value().load_full())
-            .collect()
+            .find(|p| p.key == key)
+            .cloned()
     }
 
-    /// Delete workspace (lock-free)
-    pub fn delete_workspace(&self, id: &Uuid) -> Option<Arc<Workspace>> {
-        if let Some((_, arc_swap)) = self.workspaces.remove(id) {
-            let workspace = arc_swap.load_full();
-            self.name_index.remove(&workspace.name);
-            self.total_workspaces.fetch_sub(1, Ordering::Relaxed);
-            Some(workspace)
-        } else {
-            None
-        }
+    /// All projects bound to this workspace.
+    pub fn projects(&self) -> Vec<WorkspaceProject> {
+        self.metadata.projects.clone()
     }
 
-    /// Add session to workspace (lock-free)
-    pub fn add_session_to_workspace(
-        &self,
-        workspace_id: &Uuid,
-        session_id: Uuid,
-        role: SessionRole,
-    ) -> Result<(), String> {
-        self.get_workspace(workspace_id)
-            .ok_or_else(|| format!("Workspace {} not found", workspace_id))?
-            .add_session(session_id, role);
-        Ok(())
+    /// Bind `project.key` to this workspace, replacing the session the key
+    /// had here before.
+    pub fn set_project(&mut self, project: WorkspaceProject) {
+        self.metadata.projects.retain(|p| p.key != project.key);
+        self.metadata.projects.push(project);
     }
 
-    /// Remove session from workspace (lock-free)
-    pub fn remove_session_from_workspace(
-        &self,
-        workspace_id: &Uuid,
-        session_id: &Uuid,
-    ) -> Result<Option<SessionRole>, String> {
-        self.get_workspace(workspace_id)
-            .ok_or_else(|| format!("Workspace {} not found", workspace_id))?
-            .remove_session(session_id)
-            .ok_or_else(|| format!("Session {} not in workspace", session_id))
-            .map(Some)
+    /// When the workspace was archived, if it is.
+    pub fn archived_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.metadata.archived_at
     }
 
-    /// Get total workspace count (atomic read)
-    pub fn total_workspaces(&self) -> u64 {
-        self.total_workspaces.load(Ordering::Relaxed)
-    }
-}
-
-impl Default for WorkspaceManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_workspace_creation() {
-        let manager = WorkspaceManager::new();
-
-        let ws_id = manager.create_workspace(
-            "Test Workspace".to_string(),
-            "Testing workspace".to_string(),
-        );
-
-        let workspace = manager.get_workspace(&ws_id).unwrap();
-        assert_eq!(workspace.name, "Test Workspace");
-        assert_eq!(workspace.description, "Testing workspace");
-        assert_eq!(manager.total_workspaces(), 1);
+    /// Whether the workspace is archived.
+    pub fn is_archived(&self) -> bool {
+        self.archived_at().is_some()
     }
 
-    #[test]
-    fn test_session_management() {
-        let manager = WorkspaceManager::new();
-        let ws_id = manager.create_workspace("Test".to_string(), "".to_string());
-
-        let session1 = Uuid::new_v4();
-        let session2 = Uuid::new_v4();
-
-        manager
-            .add_session_to_workspace(&ws_id, session1, SessionRole::Primary)
-            .unwrap();
-        manager
-            .add_session_to_workspace(&ws_id, session2, SessionRole::Related)
-            .unwrap();
-
-        let workspace = manager.get_workspace(&ws_id).unwrap();
-        assert_eq!(workspace.session_ids.len(), 2);
-        assert_eq!(
-            workspace.get_session_role(&session1),
-            Some(SessionRole::Primary)
-        );
-        assert_eq!(
-            workspace.get_session_role(&session2),
-            Some(SessionRole::Related)
-        );
+    /// Archive (`Some(time)`) or unarchive (`None`); returns when it was
+    /// archived before.
+    pub fn set_archived(
+        &mut self,
+        archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        std::mem::replace(&mut self.metadata.archived_at, archived_at)
     }
 
-    #[test]
-    fn test_workspace_lookup_by_name() {
-        let manager = WorkspaceManager::new();
-        let ws_id = manager.create_workspace("MyWorkspace".to_string(), "".to_string());
-
-        let workspace = manager.get_workspace_by_name("MyWorkspace").unwrap();
-        assert_eq!(workspace.id, ws_id);
+    /// Whether its accurate searches may use the remote reranker.
+    pub fn remote_rerank(&self) -> bool {
+        self.metadata.remote_rerank
     }
 
-    #[tokio::test]
-    async fn test_concurrent_workspace_operations() {
-        let manager = Arc::new(WorkspaceManager::new());
-
-        // Spawn 50 concurrent tasks creating workspaces
-        let tasks: Vec<_> = (0..50)
-            .map(|i| {
-                let mgr = manager.clone();
-                tokio::spawn(async move {
-                    let ws_id =
-                        mgr.create_workspace(format!("Workspace {}", i), format!("Test {}", i));
-
-                    // Add 5 sessions to each workspace
-                    for _ in 0..5 {
-                        let session_id = Uuid::new_v4();
-                        mgr.add_session_to_workspace(&ws_id, session_id, SessionRole::Related)
-                            .unwrap();
-                    }
-
-                    ws_id
-                })
-            })
-            .collect();
-
-        // Wait for all tasks
-        let workspace_ids: Vec<_> = futures::future::join_all(tasks)
-            .await
-            .into_iter()
-            .map(|r| r.unwrap())
-            .collect();
-
-        // Verify all workspaces created
-        assert_eq!(manager.total_workspaces(), 50);
-
-        // Verify each workspace has 5 sessions
-        for ws_id in workspace_ids {
-            let workspace = manager.get_workspace(&ws_id).unwrap();
-            assert_eq!(workspace.session_ids.len(), 5);
-        }
+    /// Allow or forbid the remote reranker; returns what it was.
+    pub fn set_remote_rerank(&mut self, allowed: bool) -> bool {
+        std::mem::replace(&mut self.metadata.remote_rerank, allowed)
     }
 }

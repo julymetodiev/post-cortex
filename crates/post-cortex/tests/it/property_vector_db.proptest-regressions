@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 6ce9e53e251e79224a072103977b6aa74a2f55b39d6ba0e4dc57911b7914b21b # shrinks to num_vectors = 2, metadata = VectorMetadata { id: "aaaaa", text: " aa  aa   ", source: "session-0", content_type: "qa", timestamp: 2026-10-22T00:57:48.184184Z, metadata: {} }

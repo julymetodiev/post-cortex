@@ -16,6 +16,11 @@ ExecStart=post-cortex-daemon start
 Restart=on-failure
 RestartSec=10s
 
+# Stop: SIGTERM to the daemon only; it stops its module processes in order
+# and flushes. Whatever is left when it exits is killed.
+KillMode=mixed
+TimeoutStopSec=60s
+
 # Security hardening
 NoNewPrivileges=true
 PrivateTmp=true

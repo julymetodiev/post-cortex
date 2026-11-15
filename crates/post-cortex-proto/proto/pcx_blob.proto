@@ -1,0 +1,77 @@
+syntax = "proto3";
+package pcx.v1;
+
+// Memory's blobs (ARCHITECTURE section 4, Blobs; W24): the bytes of an
+// image, by their SHA-256, per workspace. A document names one by an
+// Attachment; memory keeps a blob while a document of its workspace names
+// it. Apart from pcx.proto, so a module's package imports only this.
+
+// The images documents name, beside memory's PostCortex service.
+service Blobs {
+  // Keep an image (PNG, JPEG, WebP or GIF, at most 10 MB), its bytes in
+  // chunks; answers its SHA-256, size, media type, width and height.
+  rpc PutBlob(stream PutBlobChunk) returns (BlobInfo);
+  // The bytes of a blob, in chunks; the first says what it is.
+  rpc GetBlob(BlobRequest) returns (stream BlobChunk);
+  // What a blob is.
+  rpc StatBlob(BlobRequest) returns (BlobInfo);
+}
+
+// A blob a document names: an image of a task or a comment. Memory checks
+// on a document's write that its workspace has the blob.
+message Attachment {
+  // The blob's SHA-256, in lowercase hex.
+  string sha256 = 1;
+  // The file's name, as it was given.
+  string name = 2;
+  // Its media type (image/png, image/jpeg, image/webp, image/gif).
+  string media_type = 3;
+  // Its size in bytes.
+  uint64 size = 4;
+  // Its width in pixels.
+  uint32 width = 5;
+  // Its height in pixels.
+  uint32 height = 6;
+}
+
+// A blob as memory keeps it.
+message BlobInfo {
+  // Its SHA-256, in lowercase hex.
+  string sha256 = 1;
+  // Its size in bytes.
+  uint64 size = 2;
+  // Its media type, known by its first bytes.
+  string media_type = 3;
+  // Its width in pixels.
+  uint32 width = 4;
+  // Its height in pixels.
+  uint32 height = 5;
+}
+
+// Put a blob, its bytes in chunks; the first chunk names the workspace.
+message PutBlobChunk {
+  // The workspace; read from the first chunk only; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The next bytes.
+  bytes data = 2;
+  // What it is, read from the first chunk only: empty, an image known by
+  // its first bytes; `application/x-protobuf`, a module's message (a
+  // workflow step's output, docs/modules/workflow.md).
+  string media_type = 3;
+}
+
+// One blob of a workspace.
+message BlobRequest {
+  // The workspace; empty: the caller's, when its call has one.
+  string workspace_id = 1;
+  // The blob's SHA-256, in lowercase hex.
+  string sha256 = 2;
+}
+
+// The bytes of a blob, in chunks; the first carries what it is.
+message BlobChunk {
+  // What the blob is; set on the first chunk.
+  BlobInfo info = 1;
+  // The next bytes.
+  bytes data = 2;
+}

@@ -12,27 +12,26 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
 use async_trait::async_trait;
+use post_cortex_ports::Reranker;
 use tracing::warn;
 
+#[cfg(feature = "rerank")]
+mod lazy;
 #[cfg(feature = "rerank")]
 mod onnx;
 #[cfg(feature = "rerank-voyage")]
 mod voyage;
 
 #[cfg(feature = "rerank")]
+pub use lazy::LazyCrossEncoder;
+#[cfg(feature = "rerank")]
 pub use onnx::OnnxCrossEncoder;
 #[cfg(feature = "rerank-voyage")]
 pub use voyage::VoyageReranker;
 
-/// Scores (query, document) pairs.
-#[async_trait]
-pub trait Reranker: Send + Sync {
-    /// One relevance in [0, 1] per document, in input order; higher is more
-    /// relevant.
-    async fn score(&self, query: &str, documents: &[String]) -> Result<Vec<f32>>;
-}
+/// The Voyage rerank API, the default endpoint of `VoyageReranker`.
+pub const VOYAGE_ENDPOINT: &str = "https://api.voyageai.com/v1/rerank";
 
 /// `primary`, or `fallback` when `primary` fails (e.g. a remote reranker
 /// that is down or rate limited, backed by a local one).
@@ -50,7 +49,11 @@ impl FallbackReranker {
 
 #[async_trait]
 impl Reranker for FallbackReranker {
-    async fn score(&self, query: &str, documents: &[String]) -> Result<Vec<f32>> {
+    async fn score(
+        &self,
+        query: &str,
+        documents: &[Arc<str>],
+    ) -> post_cortex_ports::error::Result<Vec<f32>> {
         match self.primary.score(query, documents).await {
             Ok(scores) => Ok(scores),
             Err(e) => {

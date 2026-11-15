@@ -1,0 +1,804 @@
+{
+  "presets": [
+    {
+      "name": "rest-get",
+      "service": "rest",
+      "description": "A GET of a JSON API: set the path (and the connection) to what you call.",
+      "method": "GET",
+      "path": "/"
+    },
+    {
+      "name": "rest-post-json",
+      "service": "rest",
+      "description": "A POST of a JSON body to an API: set the path, the connection and the body.",
+      "method": "POST",
+      "path": "/"
+    },
+    {
+      "connection": "github",
+      "base_url": "https://api.github.com",
+      "auth": "AUTH_BEARER",
+      "headers": [
+        {
+          "name": "Accept",
+          "value": "application/vnd.github+json"
+        },
+        {
+          "name": "X-GitHub-Api-Version",
+          "value": "2022-11-28"
+        }
+      ],
+      "service": "github",
+      "name": "github-repo-get",
+      "description": "A repository of GitHub.",
+      "method": "GET",
+      "path": "/repos/{owner}/{repo}",
+      "params": [
+        {
+          "name": "owner",
+          "in": "PLACE_PATH",
+          "type": "string",
+          "description": "The repository's owner: a user or an organisation.",
+          "example": {
+            "string": "octocat"
+          },
+          "required": true
+        },
+        {
+          "name": "repo",
+          "in": "PLACE_PATH",
+          "type": "string",
+          "description": "The repository's name.",
+          "example": {
+            "string": "hello-world"
+          },
+          "required": true
+        }
+      ],
+      "response": {
+        "fields": [
+          {
+            "name": "full_name",
+            "type": "string",
+            "description": "owner/name.",
+            "required": true
+          },
+          {
+            "name": "private",
+            "type": "bool",
+            "description": "Whether it is private.",
+            "required": true
+          },
+          {
+            "name": "stargazers_count",
+            "type": "int",
+            "description": "Its stars.",
+            "required": true
+          },
+          {
+            "name": "default_branch",
+            "type": "string",
+            "description": "Its default branch.",
+            "required": true
+          },
+          {
+            "name": "html_url",
+            "type": "string",
+            "description": "Its page.",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "connection": "github",
+      "base_url": "https://api.github.com",
+      "auth": "AUTH_BEARER",
+      "headers": [
+        {
+          "name": "Accept",
+          "value": "application/vnd.github+json"
+        },
+        {
+          "name": "X-GitHub-Api-Version",
+          "value": "2022-11-28"
+        }
+      ],
+      "service": "github",
+      "name": "github-issues-list",
+      "description": "The issues of a repository of GitHub (pull requests among them), the newest first.",
+      "method": "GET",
+      "path": "/repos/{owner}/{repo}/issues",
+      "params": [
+        {
+          "name": "owner",
+          "in": "PLACE_PATH",
+          "type": "string",
+          "description": "The repository's owner: a user or an organisation.",
+          "example": {
+            "string": "octocat"
+          },
+          "required": true
+        },
+        {
+          "name": "repo",
+          "in": "PLACE_PATH",
+          "type": "string",
+          "description": "The repository's name.",
+          "example": {
+            "string": "hello-world"
+          },
+          "required": true
+        },
+        {
+          "name": "state",
+          "in": "PLACE_QUERY",
+          "type": "string",
+          "description": "open, closed or all.",
+          "example": {
+            "string": "open"
+          },
+          "required": false
+        },
+        {
+          "name": "per_page",
+          "in": "PLACE_QUERY",
+          "type": "int",
+          "description": "How many, at most 100.",
+          "example": {
+            "int": 30
+          },
+          "required": false
+        }
+      ],
+      "response": {
+        "fields": [
+          {
+            "name": "number",
+            "type": "int",
+            "description": "The issue's number.",
+            "required": true
+          },
+          {
+            "name": "title",
+            "type": "string",
+            "description": "Its title.",
+            "required": true
+          },
+          {
+            "name": "state",
+            "type": "string",
+            "description": "open or closed.",
+            "required": true
+          },
+          {
+            "name": "html_url",
+            "type": "string",
+            "description": "Its page.",
+            "required": true
+          }
+        ]
+      },
+      "response_list": true
+    },
+    {
+      "connection": "github",
+      "base_url": "https://api.github.com",
+      "auth": "AUTH_BEARER",
+      "headers": [
+        {
+          "name": "Accept",
+          "value": "application/vnd.github+json"
+        },
+        {
+          "name": "X-GitHub-Api-Version",
+          "value": "2022-11-28"
+        }
+      ],
+      "service": "github",
+      "name": "github-issue-get",
+      "description": "An issue of a repository of GitHub.",
+      "method": "GET",
+      "path": "/repos/{owner}/{repo}/issues/{number}",
+      "params": [
+        {
+          "name": "owner",
+          "in": "PLACE_PATH",
+          "type": "string",
+          "description": "The repository's owner: a user or an organisation.",
+          "example": {
+            "string": "octocat"
+          },
+          "required": true
+        },
+        {
+          "name": "repo",
+          "in": "PLACE_PATH",
+          "type": "string",
+          "description": "The repository's name.",
+          "example": {
+            "string": "hello-world"
+          },
+          "required": true
+        },
+        {
+          "name": "number",
+          "in": "PLACE_PATH",
+          "type": "string",
+          "description": "The issue's number.",
+          "example": {
+            "string": "1"
+          },
+          "required": true
+        }
+      ],
+      "response": {
+        "fields": [
+          {
+            "name": "number",
+            "type": "int",
+            "description": "The issue's number.",
+            "required": true
+          },
+          {
+            "name": "title",
+            "type": "string",
+            "description": "Its title.",
+            "required": true
+          },
+          {
+            "name": "state",
+            "type": "string",
+            "description": "open or closed.",
+            "required": true
+          },
+          {
+            "name": "html_url",
+            "type": "string",
+            "description": "Its page.",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "connection": "github",
+      "base_url": "https://api.github.com",
+      "auth": "AUTH_BEARER",
+      "headers": [
+        {
+          "name": "Accept",
+          "value": "application/vnd.github+json"
+        },
+        {
+          "name": "X-GitHub-Api-Version",
+          "value": "2022-11-28"
+        }
+      ],
+      "service": "github",
+      "name": "github-issue-create",
+      "description": "Open an issue in a repository of GitHub.",
+      "method": "POST",
+      "path": "/repos/{owner}/{repo}/issues",
+      "params": [
+        {
+          "name": "owner",
+          "in": "PLACE_PATH",
+          "type": "string",
+          "description": "The repository's owner: a user or an organisation.",
+          "example": {
+            "string": "octocat"
+          },
+          "required": true
+        },
+        {
+          "name": "repo",
+          "in": "PLACE_PATH",
+          "type": "string",
+          "description": "The repository's name.",
+          "example": {
+            "string": "hello-world"
+          },
+          "required": true
+        },
+        {
+          "name": "title",
+          "in": "PLACE_BODY",
+          "type": "string",
+          "description": "Its title.",
+          "example": {
+            "string": "The build fails"
+          },
+          "required": true
+        },
+        {
+          "name": "body",
+          "in": "PLACE_BODY",
+          "type": "string",
+          "description": "Its text, in Markdown.",
+          "example": {
+            "string": "Since this morning."
+          },
+          "required": false
+        }
+      ],
+      "response": {
+        "fields": [
+          {
+            "name": "number",
+            "type": "int",
+            "description": "The issue's number.",
+            "required": true
+          },
+          {
+            "name": "html_url",
+            "type": "string",
+            "description": "Its page.",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "connection": "github",
+      "base_url": "https://api.github.com",
+      "auth": "AUTH_BEARER",
+      "headers": [
+        {
+          "name": "Accept",
+          "value": "application/vnd.github+json"
+        },
+        {
+          "name": "X-GitHub-Api-Version",
+          "value": "2022-11-28"
+        }
+      ],
+      "service": "github",
+      "name": "github-issue-comment",
+      "description": "Comment on an issue or a pull request of GitHub.",
+      "method": "POST",
+      "path": "/repos/{owner}/{repo}/issues/{number}/comments",
+      "params": [
+        {
+          "name": "owner",
+          "in": "PLACE_PATH",
+          "type": "string",
+          "description": "The repository's owner: a user or an organisation.",
+          "example": {
+            "string": "octocat"
+          },
+          "required": true
+        },
+        {
+          "name": "repo",
+          "in": "PLACE_PATH",
+          "type": "string",
+          "description": "The repository's name.",
+          "example": {
+            "string": "hello-world"
+          },
+          "required": true
+        },
+        {
+          "name": "number",
+          "in": "PLACE_PATH",
+          "type": "string",
+          "description": "The issue's number.",
+          "example": {
+            "string": "1"
+          },
+          "required": true
+        },
+        {
+          "name": "body",
+          "in": "PLACE_BODY",
+          "type": "string",
+          "description": "The comment, in Markdown.",
+          "example": {
+            "string": "Fixed in main."
+          },
+          "required": true
+        }
+      ],
+      "response": {
+        "fields": [
+          {
+            "name": "id",
+            "type": "int",
+            "description": "The comment's id.",
+            "required": true
+          },
+          {
+            "name": "html_url",
+            "type": "string",
+            "description": "Its page.",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "connection": "github",
+      "base_url": "https://api.github.com",
+      "auth": "AUTH_BEARER",
+      "headers": [
+        {
+          "name": "Accept",
+          "value": "application/vnd.github+json"
+        },
+        {
+          "name": "X-GitHub-Api-Version",
+          "value": "2022-11-28"
+        }
+      ],
+      "service": "github",
+      "name": "github-pulls-list",
+      "description": "The pull requests of a repository of GitHub.",
+      "method": "GET",
+      "path": "/repos/{owner}/{repo}/pulls",
+      "params": [
+        {
+          "name": "owner",
+          "in": "PLACE_PATH",
+          "type": "string",
+          "description": "The repository's owner: a user or an organisation.",
+          "example": {
+            "string": "octocat"
+          },
+          "required": true
+        },
+        {
+          "name": "repo",
+          "in": "PLACE_PATH",
+          "type": "string",
+          "description": "The repository's name.",
+          "example": {
+            "string": "hello-world"
+          },
+          "required": true
+        },
+        {
+          "name": "state",
+          "in": "PLACE_QUERY",
+          "type": "string",
+          "description": "open, closed or all.",
+          "example": {
+            "string": "open"
+          },
+          "required": false
+        },
+        {
+          "name": "per_page",
+          "in": "PLACE_QUERY",
+          "type": "int",
+          "description": "How many, at most 100.",
+          "example": {
+            "int": 30
+          },
+          "required": false
+        }
+      ],
+      "response": {
+        "fields": [
+          {
+            "name": "number",
+            "type": "int",
+            "description": "The issue's number.",
+            "required": true
+          },
+          {
+            "name": "title",
+            "type": "string",
+            "description": "Its title.",
+            "required": true
+          },
+          {
+            "name": "state",
+            "type": "string",
+            "description": "open or closed.",
+            "required": true
+          },
+          {
+            "name": "html_url",
+            "type": "string",
+            "description": "Its page.",
+            "required": true
+          }
+        ]
+      },
+      "response_list": true
+    },
+    {
+      "connection": "slack",
+      "base_url": "https://slack.com/api",
+      "auth": "AUTH_BEARER",
+      "service": "slack",
+      "name": "slack-message-post",
+      "description": "Post a message to a channel of Slack (chat.postMessage). Slack answers 200 with ok false on a failure: read ok.",
+      "method": "POST",
+      "path": "/chat.postMessage",
+      "params": [
+        {
+          "name": "channel",
+          "in": "PLACE_BODY",
+          "type": "string",
+          "description": "The channel's id or name.",
+          "example": {
+            "string": "C0123456789"
+          },
+          "required": true
+        },
+        {
+          "name": "text",
+          "in": "PLACE_BODY",
+          "type": "string",
+          "description": "The message.",
+          "example": {
+            "string": "The deploy is done."
+          },
+          "required": true
+        }
+      ],
+      "response": {
+        "fields": [
+          {
+            "name": "ok",
+            "type": "bool",
+            "description": "Whether Slack took it.",
+            "required": true
+          },
+          {
+            "name": "ts",
+            "type": "string",
+            "description": "The message's time stamp.",
+            "required": false
+          },
+          {
+            "name": "error",
+            "type": "string",
+            "description": "Why not, when not.",
+            "required": false
+          }
+        ]
+      }
+    },
+    {
+      "connection": "slack",
+      "base_url": "https://slack.com/api",
+      "auth": "AUTH_BEARER",
+      "service": "slack",
+      "name": "slack-channels-list",
+      "description": "The channels of the workspace of Slack (conversations.list). Read ok.",
+      "method": "GET",
+      "path": "/conversations.list",
+      "params": [
+        {
+          "name": "types",
+          "in": "PLACE_QUERY",
+          "type": "string",
+          "description": "public_channel, private_channel, mpim, im (joined by commas).",
+          "example": {
+            "string": "public_channel"
+          },
+          "required": false
+        },
+        {
+          "name": "limit",
+          "in": "PLACE_QUERY",
+          "type": "int",
+          "description": "How many, at most 1000.",
+          "example": {
+            "int": 100
+          },
+          "required": false
+        }
+      ],
+      "response": {
+        "fields": [
+          {
+            "name": "ok",
+            "type": "bool",
+            "description": "Whether Slack answered.",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "connection": "stripe",
+      "base_url": "https://api.stripe.com",
+      "auth": "AUTH_BEARER",
+      "idempotency_header": "Idempotency-Key",
+      "service": "stripe",
+      "name": "stripe-customers-list",
+      "description": "The customers of Stripe, the newest first.",
+      "method": "GET",
+      "path": "/v1/customers",
+      "params": [
+        {
+          "name": "limit",
+          "in": "PLACE_QUERY",
+          "type": "int",
+          "description": "How many, 1 to 100.",
+          "example": {
+            "int": 10
+          },
+          "required": false
+        },
+        {
+          "name": "email",
+          "in": "PLACE_QUERY",
+          "type": "string",
+          "description": "Only of this address.",
+          "example": {
+            "string": "jenny@example.com"
+          },
+          "required": false
+        }
+      ],
+      "response": {
+        "fields": [
+          {
+            "name": "object",
+            "type": "string",
+            "description": "list.",
+            "required": true
+          },
+          {
+            "name": "has_more",
+            "type": "bool",
+            "description": "Whether there are more.",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "connection": "stripe",
+      "base_url": "https://api.stripe.com",
+      "auth": "AUTH_BEARER",
+      "idempotency_header": "Idempotency-Key",
+      "service": "stripe",
+      "name": "stripe-customer-get",
+      "description": "A customer of Stripe.",
+      "method": "GET",
+      "path": "/v1/customers/{id}",
+      "params": [
+        {
+          "name": "id",
+          "in": "PLACE_PATH",
+          "type": "string",
+          "description": "The customer's id.",
+          "example": {
+            "string": "cus_123"
+          },
+          "required": true
+        }
+      ],
+      "response": {
+        "fields": [
+          {
+            "name": "id",
+            "type": "string",
+            "description": "Its id.",
+            "required": true
+          },
+          {
+            "name": "object",
+            "type": "string",
+            "description": "customer.",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "connection": "stripe",
+      "base_url": "https://api.stripe.com",
+      "auth": "AUTH_BEARER",
+      "idempotency_header": "Idempotency-Key",
+      "service": "stripe",
+      "name": "stripe-charges-list",
+      "description": "The charges of Stripe, the newest first.",
+      "method": "GET",
+      "path": "/v1/charges",
+      "params": [
+        {
+          "name": "limit",
+          "in": "PLACE_QUERY",
+          "type": "int",
+          "description": "How many, 1 to 100.",
+          "example": {
+            "int": 10
+          },
+          "required": false
+        },
+        {
+          "name": "customer",
+          "in": "PLACE_QUERY",
+          "type": "string",
+          "description": "Only of this customer.",
+          "example": {
+            "string": "cus_123"
+          },
+          "required": false
+        }
+      ],
+      "response": {
+        "fields": [
+          {
+            "name": "object",
+            "type": "string",
+            "description": "list.",
+            "required": true
+          },
+          {
+            "name": "has_more",
+            "type": "bool",
+            "description": "Whether there are more.",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "connection": "stripe",
+      "base_url": "https://api.stripe.com",
+      "auth": "AUTH_BEARER",
+      "idempotency_header": "Idempotency-Key",
+      "service": "stripe",
+      "name": "stripe-invoices-list",
+      "description": "The invoices of Stripe, the newest first.",
+      "method": "GET",
+      "path": "/v1/invoices",
+      "params": [
+        {
+          "name": "limit",
+          "in": "PLACE_QUERY",
+          "type": "int",
+          "description": "How many, 1 to 100.",
+          "example": {
+            "int": 10
+          },
+          "required": false
+        },
+        {
+          "name": "customer",
+          "in": "PLACE_QUERY",
+          "type": "string",
+          "description": "Only of this customer.",
+          "example": {
+            "string": "cus_123"
+          },
+          "required": false
+        },
+        {
+          "name": "status",
+          "in": "PLACE_QUERY",
+          "type": "string",
+          "description": "draft, open, paid, uncollectible or void.",
+          "example": {
+            "string": "open"
+          },
+          "required": false
+        }
+      ],
+      "response": {
+        "fields": [
+          {
+            "name": "object",
+            "type": "string",
+            "description": "list.",
+            "required": true
+          },
+          {
+            "name": "has_more",
+            "type": "bool",
+            "description": "Whether there are more.",
+            "required": true
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+[package]
+name = "post-cortex-ports"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Ports of post-cortex: the storage, vector, embedding and reranker traits the memory capabilities depend on, the types they speak, and the conformance suites every adapter runs. No IO, no adapter."
+keywords = ["post-cortex", "ports", "storage", "hexagonal", "memory"]
+categories = ["data-structures"]
+readme = "README.md"
+documentation = "https://docs.rs/post-cortex-ports"
+
+[dependencies]
+# Only the domain and the non-IO crates the traits need (ARCHITECTURE
+# section 3): no storage engine, no tokio runtime, no HTTP client.
+post-cortex-core.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+# `conformance`: `futures::join!` for the concurrent cases, JSON to
+# compare stored values.
+futures = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[features]
+default = []
+# The shared conformance suites, for adapter crates' tests.
+conformance = ["dep:futures", "dep:serde_json"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true

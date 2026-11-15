@@ -1,0 +1,23 @@
+{
+  "name": "post-cortex",
+  "version": "0.6.0",
+  "description": "Long-term project memory for Gemini CLI: the post-cortex MCP server (cloud by default, or your own daemon), its rules, the post-cortex-memory skill and memory hooks.",
+  "contextFileName": "GEMINI.md",
+  "mcpServers": {
+    "post-cortex": {
+      "httpUrl": "${PC_URL:-https://api.pcx.is}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${PC_AUTH_TOKEN:-}",
+        "X-PCX-Author": "gemini-cli"
+      }
+    }
+  },
+  "settings": [
+    {
+      "name": "post-cortex API key",
+      "description": "Your post-cortex cloud API key (create one at https://app.pcx.is (Connections → API keys)), or the auth_token of your own daemon. Leave empty for a local daemon without auth_token.",
+      "envVar": "PC_AUTH_TOKEN",
+      "sensitive": true
+    }
+  ]
+}

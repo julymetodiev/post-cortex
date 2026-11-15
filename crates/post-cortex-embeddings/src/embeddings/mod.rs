@@ -12,20 +12,16 @@
 
 //! Local Embeddings Engine for semantic understanding.
 //!
-//! The public [`LocalEmbeddingEngine`] wraps any [`EmbeddingBackend`] with
-//! adaptive batching, concurrency control, and timeouts. Backends live under
-//! [`backends`] — currently [`BertBackend`](backends::BertBackend) (Candle +
-//! HuggingFace Hub) and [`StaticHashBackend`](backends::StaticHashBackend)
-//! (hash-based fallback). Swapping in `model2vec-rs` for the
-//! `minishlab/potion-multilingual-128M` migration becomes a new backend impl
-//! plus one branch in [`engine::LocalEmbeddingEngine::new`].
+//! The public [`LocalEmbeddingEngine`] runs any [`EmbeddingBackend`] on the
+//! blocking pool with one concurrency limit and a timeout. Backends live under
+//! [`backends`]: `Model2VecBackend` (feature `model2vec`, default) and
+//! `BertBackend` (feature `bert`, Candle + HuggingFace Hub).
 
 pub mod backend;
 pub mod backends;
-mod concurrency;
 pub mod config;
 pub mod engine;
-mod pool;
+mod port;
 
 #[cfg(test)]
 mod tests;
@@ -33,3 +29,4 @@ mod tests;
 pub use backend::EmbeddingBackend;
 pub use config::{EmbeddingConfig, EmbeddingModelType};
 pub use engine::LocalEmbeddingEngine;
+pub use port::LazyEmbeddingEngine;

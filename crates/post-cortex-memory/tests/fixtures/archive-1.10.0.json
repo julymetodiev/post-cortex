@@ -1,0 +1,369 @@
+{
+  "format_version": "1.10.0",
+  "schema": "https://raw.githubusercontent.com/JuliusDeGroot/post-cortex/main/schemas/export/v1.10.0.json",
+  "metadata": {
+    "exported_at": "2026-10-01T12:01:40Z",
+    "post_cortex_version": "0.6.0",
+    "export_type": {
+      "selective_workspace": {
+        "workspace_id": "00000000-0000-0000-0000-000000000002"
+      }
+    },
+    "compression": "none",
+    "session_count": 1,
+    "workspace_count": 1,
+    "update_count": 2,
+    "checkpoint_count": 1,
+    "embedding_count": 1,
+    "message_count": 2,
+    "card_count": 1,
+    "document_count": 2,
+    "embedding_model": {
+      "model": "PotionMultilingual",
+      "dimension": 3
+    }
+  },
+  "sessions": [
+    {
+      "session": {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "name": "golden",
+        "description": "pinned",
+        "created_at": "2026-10-01T12:00:00Z",
+        "last_updated": "2026-10-01T12:00:02Z",
+        "user_preferences": {
+          "auto_save_enabled": true,
+          "context_retention_days": 30,
+          "max_hot_context_size": 50,
+          "auto_summary_threshold": 100,
+          "important_keywords": []
+        },
+        "hot_context": [],
+        "warm_context": [],
+        "cold_context": [],
+        "incremental_updates": [
+          {
+            "id": "00000000-0000-0000-0000-00000000000a",
+            "timestamp": "2026-10-01T12:00:01Z",
+            "update_type": "DecisionMade",
+            "content": {
+              "title": "storage",
+              "description": "about storage",
+              "details": [
+                "detail"
+              ],
+              "examples": [],
+              "implications": []
+            },
+            "related_code": null,
+            "parent_update": null,
+            "user_marked_important": false,
+            "creates_entities": [
+              "pcx",
+              "RocksDB"
+            ],
+            "creates_relationships": [
+              {
+                "from_entity": "pcx",
+                "to_entity": "RocksDB",
+                "relation_type": "DependsOn",
+                "context": "uses"
+              }
+            ],
+            "references_entities": [],
+            "typed_entities": [
+              {
+                "name": "pcx",
+                "entity_type": "Technology"
+              },
+              {
+                "name": "RocksDB",
+                "entity_type": "Technology"
+              }
+            ],
+            "author": "claude-code",
+            "derived_from": [],
+            "meta": {
+              "valid_from": null,
+              "supersedes": [],
+              "confidence": null,
+              "retired_at": null
+            }
+          },
+          {
+            "id": "00000000-0000-0000-0000-00000000000b",
+            "timestamp": "2026-10-01T12:00:02Z",
+            "update_type": "DecisionMade",
+            "content": {
+              "title": "search",
+              "description": "about search",
+              "details": [
+                "detail"
+              ],
+              "examples": [],
+              "implications": []
+            },
+            "related_code": null,
+            "parent_update": null,
+            "user_marked_important": false,
+            "creates_entities": [
+              "pcx"
+            ],
+            "creates_relationships": [],
+            "references_entities": [],
+            "typed_entities": [
+              {
+                "name": "pcx",
+                "entity_type": "Technology"
+              }
+            ],
+            "author": "claude-code",
+            "derived_from": [],
+            "meta": {
+              "valid_from": null,
+              "supersedes": [],
+              "confidence": null,
+              "retired_at": null
+            }
+          }
+        ],
+        "change_history": [],
+        "entity_graph": {
+          "entities": {
+            "RocksDB": {
+              "name": "RocksDB",
+              "entity_type": "Technology",
+              "first_mentioned": "2026-10-01T12:00:01Z",
+              "last_mentioned": "2026-10-01T12:00:01Z",
+              "mention_count": 1,
+              "importance_score": 1.0,
+              "description": "Provided by caller: storage",
+              "aliases": []
+            },
+            "pcx": {
+              "name": "pcx",
+              "entity_type": "Technology",
+              "first_mentioned": "2026-10-01T12:00:01Z",
+              "last_mentioned": "2026-10-01T12:00:02Z",
+              "mention_count": 2,
+              "importance_score": 1.0,
+              "description": "Provided by caller: storage",
+              "aliases": []
+            }
+          },
+          "entity_mentions": {
+            "RocksDB": [
+              "00000000-0000-0000-0000-00000000000a"
+            ],
+            "pcx": [
+              "00000000-0000-0000-0000-00000000000a",
+              "00000000-0000-0000-0000-00000000000b"
+            ]
+          },
+          "graph": {
+            "nodes": [
+              "RocksDB",
+              "pcx"
+            ],
+            "edges": [
+              [
+                "pcx",
+                "RocksDB",
+                {
+                  "relation_type": "DependsOn",
+                  "context": "uses"
+                }
+              ]
+            ]
+          }
+        },
+        "vectorized_update_ids": [
+          "00000000-0000-0000-0000-00000000000a"
+        ]
+      },
+      "messages": [
+        {
+          "session_id": "00000000-0000-0000-0000-000000000001",
+          "seq": 0,
+          "turn_id": "t1",
+          "role": "user",
+          "author": "julius",
+          "source_session": null,
+          "timestamp": "2026-10-01T12:00:05Z",
+          "text": "pin the archive",
+          "tools": [],
+          "files": []
+        },
+        {
+          "session_id": "00000000-0000-0000-0000-000000000001",
+          "seq": 1,
+          "turn_id": "t2",
+          "role": "assistant",
+          "author": "pcx-agent",
+          "source_session": null,
+          "timestamp": "2026-10-01T12:00:06Z",
+          "text": "",
+          "tools": [
+            "fs_read"
+          ],
+          "files": [],
+          "parent": "t1",
+          "blocks": [
+            {
+              "type": "tool_use",
+              "id": "c1",
+              "name": "fs_read",
+              "input": {
+                "path": "README.md"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "workspaces": [
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "name": "golden ws",
+      "slug": "golden-ws",
+      "description": "pinned",
+      "sessions": [
+        [
+          "00000000-0000-0000-0000-000000000001",
+          "Primary"
+        ]
+      ],
+      "created_at": 1790000000,
+      "projects": [],
+      "remote_rerank": true
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "00000000-0000-0000-0000-000000000003",
+      "session_id": "00000000-0000-0000-0000-000000000001",
+      "created_at": "2026-10-01T12:01:00Z",
+      "structured_context": {
+        "key_decisions": [],
+        "open_questions": [],
+        "key_concepts": [],
+        "technical_specifications": [],
+        "conversation_flow": []
+      },
+      "recent_updates": [
+        {
+          "id": "00000000-0000-0000-0000-00000000001e",
+          "timestamp": "2026-10-01T12:00:01Z",
+          "update_type": "DecisionMade",
+          "content": {
+            "title": "kept",
+            "description": "about kept",
+            "details": [
+              "detail"
+            ],
+            "examples": [],
+            "implications": []
+          },
+          "related_code": null,
+          "parent_update": null,
+          "user_marked_important": false,
+          "creates_entities": [
+            "A",
+            "B"
+          ],
+          "creates_relationships": [
+            {
+              "from_entity": "A",
+              "to_entity": "B",
+              "relation_type": "DependsOn",
+              "context": "uses"
+            }
+          ],
+          "references_entities": [],
+          "typed_entities": [
+            {
+              "name": "A",
+              "entity_type": "Technology"
+            },
+            {
+              "name": "B",
+              "entity_type": "Technology"
+            }
+          ],
+          "author": "claude-code",
+          "derived_from": [],
+          "meta": {
+            "valid_from": null,
+            "supersedes": [],
+            "confidence": null,
+            "retired_at": null
+          }
+        }
+      ],
+      "code_references": {},
+      "change_history": [],
+      "total_updates": 1,
+      "context_quality_score": 1.0,
+      "compression_ratio": 1.0
+    }
+  ],
+  "embeddings": [
+    {
+      "content_id": "00000000-0000-0000-0000-00000000000a",
+      "session_id": "00000000-0000-0000-0000-000000000001",
+      "vector": [
+        0.21821788,
+        -0.43643576,
+        0.8728715
+      ],
+      "text": "about storage",
+      "content_type": "UpdateContent",
+      "timestamp": "2026-10-01T12:00:01+00:00",
+      "metadata": {
+        "author": "claude-code"
+      }
+    }
+  ],
+  "cards": [
+    {
+      "scope": {
+        "workspace": "00000000-0000-0000-0000-000000000002"
+      },
+      "version": 1,
+      "text": "# golden\n",
+      "updated_at": "2026-10-01T12:00:07Z",
+      "author": "claude-code"
+    }
+  ],
+  "documents": [
+    {
+      "workspace_id": "00000000-0000-0000-0000-000000000002",
+      "id": "00000000-0000-0000-0000-000000000004",
+      "kind": "board/task",
+      "version": 1,
+      "data": {
+        "@type": "pcx.board.v1.Task",
+        "bytes": "cGlu"
+      },
+      "title": "pin",
+      "text": "pinned",
+      "updated_at": "2026-10-01T12:00:08Z",
+      "author": "board"
+    },
+    {
+      "workspace_id": "00000000-0000-0000-0000-000000000002",
+      "id": "00000000-0000-0000-0000-000000000004",
+      "kind": "board/task",
+      "version": 2,
+      "data": {
+        "@type": "pcx.board.v1.Task",
+        "bytes": "cGluIGl0"
+      },
+      "title": "pin it",
+      "text": "pinned",
+      "updated_at": "2026-10-01T12:00:09Z",
+      "author": "board"
+    }
+  ]
+}

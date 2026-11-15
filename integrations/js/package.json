@@ -1,0 +1,28 @@
+{
+  "name": "post-cortex-integrations",
+  "private": true,
+  "description": "Native post-cortex plugins for OpenCode, Kilo, Pi, OpenClaw and DeepSeek Harness, on a shared core",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "core",
+    "opencode",
+    "kilo",
+    "pi",
+    "openclaw",
+    "deepseek-harness"
+  ],
+  "engines": {
+    "node": ">=24.16"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "test": "npm test --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "clean": "npm run clean --workspaces"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2"
+  }
+}

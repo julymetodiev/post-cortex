@@ -1,0 +1,537 @@
+syntax = "proto3";
+package pcx.discord.v1;
+
+import "pcx_module.proto";
+
+// What a bot does in its Discord server (docs/modules/discord.md): posts,
+// replies, roles and forum tags, each only where the module's settings name
+// the channel, the role or the tag. Its `pcx.channel.v1.Channel` service
+// (alerts of ops and the webhooks) is beside it.
+service Discord {
+  // Post a message in one of the server's channels the settings let the bot
+  // post to. Text over Discord's 2000 characters goes as several messages.
+  // It mentions no one: @everyone, a role or a member written in the text is
+  // shown as text.
+  rpc Post(PostRequest) returns (Posted);
+  // Reply in a forum post or a thread (by its id, as `discord.post_created`
+  // and `discord.message_created` give it) or in a channel, by name, and to
+  // one message when it is named. The thread's channel must be one the bot
+  // may post to.
+  rpc Reply(ReplyRequest) returns (Posted);
+  // Give a member one of the roles the settings name.
+  rpc GiveRole(GiveRoleRequest) returns (GiveRoleResponse);
+  // Set one of the forum tags the settings name on a forum post, keeping
+  // the tags it has.
+  rpc TagPost(TagPostRequest) returns (TagPostResponse);
+  // Keep a member from writing, reacting and speaking for some minutes (a
+  // Discord timeout), at most the settings' longest; 0 minutes lifts it.
+  // Refused unless the settings let the bot moderate.
+  rpc Timeout(TimeoutRequest) returns (TimeoutResponse);
+  // Lock and archive a forum post or a thread of a channel the bot posts
+  // to: no one but a moderator writes in it again. Refused unless the
+  // settings let the bot moderate.
+  rpc LockThread(LockThreadRequest) returns (LockThreadResponse);
+  // Ban a member from the server, deleting what they wrote in the hours
+  // before. Refused unless the settings let the bot ban.
+  rpc Ban(BanRequest) returns (BanResponse);
+  // Whether the module works with its server, and what its bot lacks
+  // there when it does not.
+  rpc Status(StatusRequest) returns (ServerStatus);
+}
+
+// A message to post.
+message PostRequest {
+  // The channel, by its name in the settings.
+  string channel = 1;
+  // The text; empty with an embed.
+  string text = 2;
+  // A card under the text; unset: none.
+  Embed embed = 3;
+}
+
+// A card of a message, as Discord shows an embed.
+message Embed {
+  // Its title (at most 256 characters).
+  string title = 1;
+  // Its text (at most 4096 characters).
+  string description = 2;
+  // The link its title opens; empty: none.
+  string url = 3;
+  // Its colour, 0xRRGGBB; 0: Discord's.
+  uint32 color = 4;
+  // The pictures under its text, each by its https address, at most 4.
+  // Several need `url`: Discord shows the cards of one link as one card
+  // with the pictures side by side.
+  repeated string images = 5;
+  // Discord's form of one picture, which the module writes from `images`;
+  // what a caller sets here is not sent.
+  EmbedImage image = 6;
+}
+
+// A picture of a card, as Discord takes it.
+message EmbedImage {
+  // Its https address.
+  string url = 1;
+}
+
+// A message posted.
+message Posted {
+  // Its id (the first one's, of several).
+  string message_id = 1;
+}
+
+// A reply.
+message ReplyRequest {
+  // The forum post or thread, by id; empty: `channel` names where.
+  string thread_id = 1;
+  // The channel, by its name in the settings; empty: `thread_id` names where.
+  string channel = 2;
+  // The message replied to, by id; empty: none.
+  string message_id = 3;
+  // The text.
+  string text = 4;
+}
+
+// A role to give.
+message GiveRoleRequest {
+  // The member, by Discord user id.
+  string member_id = 1;
+  // The role, by its name in the settings.
+  string role = 2;
+}
+
+// A role given.
+message GiveRoleResponse {}
+
+// A tag to set.
+message TagPostRequest {
+  // The forum post, by id.
+  string thread_id = 1;
+  // The tag, by its name in the settings.
+  string tag = 2;
+}
+
+// A tag set.
+message TagPostResponse {}
+
+// A timeout to give or lift.
+message TimeoutRequest {
+  // The member, by Discord user id.
+  string member_id = 1;
+  // For how long; 0: the timeout they have is lifted.
+  uint32 minutes = 2;
+}
+
+// A timeout given or lifted.
+message TimeoutResponse {
+  // When it ends (RFC 3339, UTC); empty: lifted.
+  string until = 1;
+}
+
+// A post or thread to lock.
+message LockThreadRequest {
+  // The post or thread, by id.
+  string thread_id = 1;
+}
+
+// A post or thread locked.
+message LockThreadResponse {}
+
+// A ban.
+message BanRequest {
+  // The member, by Discord user id.
+  string member_id = 1;
+  // What they wrote in these hours before is deleted (at most 168); 0:
+  // nothing.
+  uint32 delete_message_hours = 2;
+}
+
+// A member banned.
+message BanResponse {}
+
+// The module's state asked.
+message StatusRequest {}
+
+// Whether the module works with its server.
+message ServerStatus {
+  // Whether it read its server and its bot may do there what the settings
+  // ask.
+  bool connected = 1;
+  // Why not: the bot is not in the server, what it lacks there (with the
+  // link that adds it), or that Discord was not reached; empty when
+  // connected.
+  string problem = 2;
+}
+
+// ------------------------------------------------------------- settings
+
+// The Discord module's settings (docs/modules/discord.md): one bot in one
+// server.
+message DiscordConfig {
+  // The bot's token from the Developer Portal.
+  string bot_token = 1 [(pcx.module.v1.setting) = { title: "Bot token", required: true, secret: true }];
+  // The server (guild), by its Discord id.
+  string guild_id = 2 [(pcx.module.v1.setting) = { title: "Server id", required: true, pattern: "[0-9]{1,20}", example: "1570896359719047299" }];
+  // The workspace its events are published in: workflows of that workspace
+  // follow them.
+  string workspace_id = 3 [(pcx.module.v1.setting) = { title: "Workspace", required: true, workspace: true }];
+  // The server's channels it works with, by name.
+  repeated Channel channels = 4 [(pcx.module.v1.setting) = { title: "Channels" }];
+  // The roles it may give, by their names in the server (a name with a
+  // comma is not taken: each role is its own value).
+  repeated string roles = 5 [(pcx.module.v1.setting) = { title: "Roles it may give", pattern: "[^,]{1,100}", example: "Member" }];
+  // The forum tags it may set, by their names in the forums it posts to (a
+  // name with a comma is not taken: each tag is its own value).
+  repeated string tags = 6 [(pcx.module.v1.setting) = { title: "Forum tags it may set", pattern: "[^,]{1,20}", example: "answered" }];
+  // What the bot may do to members and posts; unset: nothing, and it needs
+  // no right to moderate.
+  Moderation moderation = 7 [(pcx.module.v1.setting) = { title: "Moderation" }];
+}
+
+// What the bot may do to members and posts.
+message Moderation {
+  // The longest timeout it may give, in minutes (1 to 40320, Discord's
+  // 28 days).
+  uint32 longest_timeout_minutes = 1 [(pcx.module.v1.setting) = { title: "Longest timeout (minutes)", required: true }];
+  // Whether it may ban a member.
+  bool ban = 2 [(pcx.module.v1.setting) = { title: "May ban" }];
+}
+
+// A channel of the server.
+message Channel {
+  // Its name here: a destination and what events name (1 to 64 of a-z, 0-9,
+  // '-').
+  string name = 1 [(pcx.module.v1.setting) = { title: "Name", required: true, pattern: "[a-z0-9-]{1,64}", example: "help" }];
+  // Its Discord id.
+  string channel_id = 2 [(pcx.module.v1.setting) = { title: "Channel id", required: true, pattern: "[0-9]{1,20}", example: "1570896788792279173" }];
+  // Whether the bot may post in it.
+  bool post = 3 [(pcx.module.v1.setting) = { title: "Posts here" }];
+  // Whether what people write in it is published as events.
+  bool hear = 4 [(pcx.module.v1.setting) = { title: "Hears" }];
+}
+
+// --------------------------------------------------------------- events
+
+// `discord.post_created`: a person opened a post in a forum the bot hears.
+message PostCreated {
+  // The forum, by its name in the settings.
+  string channel = 1;
+  // The post (a thread), by id: what a reply and a tag name.
+  string thread_id = 2;
+  // Its title.
+  string title = 3;
+  // Its first message's text.
+  string text = 4;
+  // Who wrote it, by Discord user id.
+  string author_id = 5;
+  // Their name as the server shows it.
+  string author_name = 6;
+  // The forum tags it has, by name.
+  repeated string tags = 7;
+}
+
+// `discord.message_created`: a person wrote in a channel the bot hears, or
+// in a post or thread of one (a post's first message is `PostCreated`).
+message MessageCreated {
+  // The channel, by its name in the settings.
+  string channel = 1;
+  // The post or thread it is in, by id; empty: the channel itself.
+  string thread_id = 2;
+  // The message, by id.
+  string message_id = 3;
+  // Its text.
+  string text = 4;
+  // Who wrote it, by Discord user id.
+  string author_id = 5;
+  // Their name as the server shows it.
+  string author_name = 6;
+  // The message it replies to, by id; empty: none.
+  string reply_to = 7;
+}
+
+// `discord.member_joined`: a person joined the server.
+message MemberJoined {
+  // The member, by Discord user id.
+  string member_id = 1;
+  // Their name.
+  string name = 2;
+  // When their Discord account was made (RFC 3339, UTC).
+  string account_created = 3;
+}
+
+// `discord.automod_acted`: the server's AutoMod acted on what a member
+// wrote (one event for each action of the rule).
+message AutomodActed {
+  // The rule, by Discord id.
+  string rule_id = 1;
+  // What it did: block, alert or timeout.
+  string action = 2;
+  // The member, by Discord user id.
+  string member_id = 3;
+  // The channel, by its name in the settings; empty: one they do not name.
+  string channel = 4;
+  // What the member wrote.
+  string content = 5;
+  // What of it the rule matched; empty: not told.
+  string matched = 6;
+}
+
+// ---------------------------- Discord's API (its JSON, mirrored)
+// Fields as Discord names them, decoded and encoded by the canonical proto3
+// JSON mapping (unknown fields skipped; a null is the field left out). Ids
+// are Discord's snowflakes, which its JSON writes as strings.
+
+// GET /gateway/bot.
+message GatewayBot {
+  // The Gateway's WebSocket URL.
+  string url = 1;
+}
+
+// A user.
+message User {
+  // Their id.
+  string id = 1;
+  // Their username.
+  string username = 2;
+  // Their display name; empty: none.
+  string global_name = 3;
+  // Whether it is a bot.
+  bool bot = 4;
+}
+
+// A server, as GET /guilds/{id} answers it (what the module reads of it).
+message Guild {
+  // Its id.
+  string id = 1;
+  // The user who owns it: no bot moderates them.
+  string owner_id = 2;
+}
+
+// A member of a server.
+message Member {
+  // The user (absent in a message's `member`).
+  User user = 1;
+  // Their nickname in the server; empty: none.
+  string nick = 2;
+  // Their roles, by id.
+  repeated string roles = 3;
+}
+
+// A role of a server.
+message Role {
+  // Its id (the server's id: @everyone).
+  string id = 1;
+  // Its name.
+  string name = 2;
+  // Its permissions, a decimal bit set.
+  string permissions = 3;
+  // Its place among the roles: a role manages those below it.
+  int32 position = 4;
+}
+
+// What a role or a member may do in one channel beyond its roles.
+message Overwrite {
+  // The role or member, by id.
+  string id = 1;
+  // 0: a role; 1: a member.
+  int32 type = 2;
+  // The permissions it adds, a decimal bit set.
+  string allow = 3;
+  // The permissions it takes, a decimal bit set.
+  string deny = 4;
+}
+
+// A tag of a forum.
+message ForumTag {
+  // Its id.
+  string id = 1;
+  // Its name.
+  string name = 2;
+}
+
+// A channel or a thread of a server (GET /channels/{id}, GET
+// /guilds/{id}/channels, the Gateway's THREAD_CREATE).
+message GuildChannel {
+  // Its id.
+  string id = 1;
+  // Its kind (0 text, 5 announcement, 10 to 12 a thread, 15 a forum).
+  int32 type = 2;
+  // Its server.
+  string guild_id = 3;
+  // Its name; a forum post's title.
+  string name = 4;
+  // A thread's channel; a channel's category.
+  string parent_id = 5;
+  // What roles and members may do in it beyond their roles.
+  repeated Overwrite permission_overwrites = 6;
+  // A forum's tags.
+  repeated ForumTag available_tags = 7;
+  // A forum post's tags, by id.
+  repeated string applied_tags = 8;
+  // Who opened a thread.
+  string owner_id = 9;
+  // Whether a THREAD_CREATE is of a new thread (not one the bot was added
+  // to).
+  bool newly_created = 10;
+}
+
+// A message (POST /channels/{id}/messages' answer, the Gateway's
+// MESSAGE_CREATE).
+message DiscordMessage {
+  // Its id (a forum post's first message has its thread's id).
+  string id = 1;
+  // Its channel or thread.
+  string channel_id = 2;
+  // Its server; empty: a direct message.
+  string guild_id = 3;
+  // Who wrote it.
+  User author = 4;
+  // Who wrote it, as a member of the server.
+  Member member = 5;
+  // Its text.
+  string content = 6;
+  // The message it replies to.
+  MessageReference message_reference = 7;
+  // Set when a webhook wrote it.
+  string webhook_id = 8;
+}
+
+// The message a message replies to.
+message MessageReference {
+  // The message.
+  string message_id = 1;
+}
+
+// POST /channels/{id}/messages' input.
+message CreateMessage {
+  // The text.
+  string content = 1;
+  // Its cards.
+  repeated Embed embeds = 2;
+  // The message it replies to; unset: none.
+  MessageReference message_reference = 3;
+  // Its `allowed_mentions` is written by the adapter: an empty list of
+  // what its text may mention, which this mapping would leave out.
+}
+
+// PATCH /channels/{id}' input, for a forum post's tags or to lock a
+// thread (what is left out stays as it is).
+message EditThread {
+  // All its tags, by id.
+  repeated string applied_tags = 1;
+  // Whether only a moderator may write in it.
+  bool locked = 2;
+  // Whether it is closed.
+  bool archived = 3;
+}
+
+// PATCH /guilds/{id}/members/{user}' input, for a timeout.
+message EditMember {
+  // When the timeout ends (ISO 8601); its lift is a null, which the
+  // adapter writes.
+  string communication_disabled_until = 1;
+}
+
+// PUT /guilds/{id}/bans/{user}' input.
+message CreateBan {
+  // What the member wrote in these seconds before is deleted (at most
+  // 604800).
+  uint32 delete_message_seconds = 1;
+}
+
+// An answer that refuses a call.
+message ApiError {
+  // Why.
+  string message = 1;
+  // Discord's code of the refusal.
+  int32 code = 2;
+  // Seconds to wait, of a 429.
+  double retry_after = 3;
+}
+
+// The Gateway's hello (op 10).
+message Hello {
+  // Milliseconds between heartbeats.
+  uint32 heartbeat_interval = 1;
+}
+
+// The Gateway's READY.
+message Ready {
+  // The session, to resume it.
+  string session_id = 1;
+  // Where to resume it.
+  string resume_gateway_url = 2;
+  // The bot.
+  User user = 3;
+}
+
+// The Gateway's identify (op 2).
+message Identify {
+  // The bot's token.
+  string token = 1;
+  // The events it asks for, a bit set.
+  uint32 intents = 2;
+  // What connects.
+  ConnectionProperties properties = 3;
+}
+
+// What connects to the Gateway.
+message ConnectionProperties {
+  // The operating system.
+  string os = 1;
+  // The library.
+  string browser = 2;
+  // The library.
+  string device = 3;
+}
+
+// The Gateway's resume (op 6).
+message Resume {
+  // The bot's token.
+  string token = 1;
+  // The session.
+  string session_id = 2;
+  // The last event's sequence number it got (a JSON number: the proto3
+  // JSON mapping writes a 64-bit one as text).
+  uint32 seq = 3;
+}
+
+// The Gateway's GUILD_CREATE, as far as the module reads it.
+message GuildCreate {
+  // The server.
+  string id = 1;
+  // Its threads that are not archived.
+  repeated GuildChannel threads = 2;
+}
+
+// The Gateway's GUILD_MEMBER_ADD.
+message MemberAdd {
+  // The server.
+  string guild_id = 1;
+  // Who joined.
+  User user = 2;
+}
+
+// The Gateway's AUTO_MODERATION_ACTION_EXECUTION.
+message AutomodExecution {
+  // The server.
+  string guild_id = 1;
+  // What the rule did.
+  AutomodAction action = 2;
+  // The rule.
+  string rule_id = 3;
+  // The member.
+  string user_id = 4;
+  // The channel; empty: none.
+  string channel_id = 5;
+  // What the member wrote.
+  string content = 6;
+  // What of it the rule matched.
+  string matched_content = 7;
+}
+
+// What an AutoMod rule does.
+message AutomodAction {
+  // 1: block the message; 2: alert; 3: timeout.
+  int32 type = 1;
+}

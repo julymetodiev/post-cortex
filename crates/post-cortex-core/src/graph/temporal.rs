@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Julius ML
 // MIT License
 
-//! Validity intervals of records (ROADMAP Phase 3 items 3 and 7).
+//! Validity intervals of records.
 //!
 //! Records are never rewritten to say they stopped holding; their validity
 //! is derived from the records themselves, in time order:
@@ -16,8 +16,8 @@
 //!   text (overlap at least [`DUPLICATE_OVERLAP`]) it is a duplicate;
 //! - **forgotten**: `retired_at` ends the record then.
 //!
-//! An ended record keeps its history: it stays searchable and in the
-//! timeline, marked with when and why it ended. No LLM is involved, and the
+//! An ended record keeps its history: it stays searchable, marked with
+//! when and why it ended. No LLM is involved, and the
 //! same records always give the same intervals.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 use crate::core::context_update::{ContextUpdate, RelationType, UpdateType};
 
-use super::entity_graph::{SimpleEntityGraph, entity_key, mentioned_names};
+use crate::graph::entity_graph::{SimpleEntityGraph, entity_key, mentioned_names};
 
 /// Title word overlap (Jaccard) from which a newer record about the same
 /// entities restates an older one.
@@ -52,6 +52,14 @@ pub enum EndReason {
     /// Retired with `forget`.
     Forgotten,
 }
+
+crate::core::wire::wire_names!(EndReason, "end reason", {
+    Superseded => "superseded",
+    Contradicted => "contradicted",
+    Restated => "restated",
+    Duplicate => "duplicate",
+    Forgotten => "forgotten",
+});
 
 /// When a record held.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -189,7 +197,7 @@ pub fn validity<'a>(
             by_pair
                 .entry(key)
                 .or_default()
-                .push((update.id, rel.relation_type.clone()));
+                .push((update.id, rel.relation_type));
         }
 
         let subject = subject(update, graph);

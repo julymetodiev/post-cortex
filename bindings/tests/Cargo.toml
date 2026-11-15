@@ -1,0 +1,37 @@
+[package]
+name = "pcx-bindings-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The bindings end to end: modules in Python and TypeScript run by the real host."
+publish = false
+
+[dependencies]
+# The messages of the examples' and fixtures' protos (build.rs).
+prost.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+# The test's sandbox helper (src/bin/sandbox-helper.rs).
+pcx-sandbox.workspace = true
+
+[dev-dependencies]
+pcx-host.workspace = true
+pcx-module-launcher.workspace = true
+post-cortex-proto.workspace = true
+nix = { workspace = true, features = ["signal"] }
+pcx-module-api.workspace = true
+async-trait.workspace = true
+sha2.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[build-dependencies]
+tonic-prost-build.workspace = true
+
+[lints]
+workspace = true

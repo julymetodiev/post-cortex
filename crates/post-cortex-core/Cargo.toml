@@ -6,67 +6,49 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Core domain library for post-cortex: lock-free conversation memory, semantic search, knowledge graph, and storage backends. Transport-agnostic — no axum/tonic/rmcp."
-keywords = ["conversation", "memory", "semantic-search", "lock-free", "knowledge-graph"]
-categories = ["data-structures", "database-implementations", "concurrency"]
+description = "Core domain library for post-cortex: conversation records, entities and the knowledge graph, sessions, workspaces, summaries and the service trait. No storage, search or transport."
+keywords = ["conversation", "memory", "knowledge-graph", "ai", "mcp"]
+categories = ["data-structures"]
 readme = "README.md"
 documentation = "https://docs.rs/post-cortex-core"
 
 [dependencies]
-# post-cortex-core is the dependency root. Only the proto crate (for
-# FreshnessEntry / SourceReference types referenced from the domain
-# layer) and lightweight stdlib-adjacent crates.
-post-cortex-proto.workspace = true
-
-# Core async runtime + serialisation
-anyhow.workspace = true
+# post-cortex-core is the dependency root: pure domain, no wire schema,
+# no runtime (ARCHITECTURE rule 1). Only lightweight stdlib-adjacent crates.
+# Serialisation and errors
 serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 schemars.workspace = true
-bincode.workspace = true
 uuid.workspace = true
 chrono.workspace = true
-tokio.workspace = true
-tokio-util.workspace = true
-futures.workspace = true
 thiserror.workspace = true
-async-trait.workspace = true
 regex.workspace = true
-# Phase 4 — services::PostCortexService trait carries serde-able request/
-# response types; tracing instrumentation lives at the impl side in
-# post-cortex-memory.
+base64.workspace = true
 
-# Lock-free + concurrency primitives
-dashmap.workspace = true
-crossbeam-channel.workspace = true
-crossbeam-queue.workspace = true
-arc-swap.workspace = true
-parking_lot.workspace = true
-rayon.workspace = true
-num_cpus.workspace = true
-rand.workspace = true
 
 # Domain
-petgraph.workspace = true
+rpds.workspace = true
 rust-stemmers.workspace = true
+# A blob's media type and size by its first bytes (no IO).
+imagesize.workspace = true
 
 # Observability
-log.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-tokio-test.workspace = true
-tempfile.workspace = true
 criterion.workspace = true
-proptest.workspace = true
-serial_test.workspace = true
-tokio-stream.workspace = true
+
+[[bench]]
+name = "write_path"
+harness = false
 
 [features]
 default = []
 # Placeholder for Phase 10 — the otel feature toggles between no-op tracing
 # layers and the full OTLP exporter stack. Wired with deps in Phase 10.
 otel = []
+# `ExportData`: a whole archive in memory, for other crates' tests.
+test-support = []
 
 [lints]
 workspace = true

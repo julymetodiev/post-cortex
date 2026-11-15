@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "post-cortex": {
+      "command": "sh",
+      "args": [
+        "${CURSOR_PLUGIN_ROOT}/scripts/pcx.sh",
+        "mcp",
+        "--author",
+        "cursor"
+      ]
+    }
+  }
+}

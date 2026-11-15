@@ -1,0 +1,182 @@
+// pcx.agent.v1: the agent's turns (ARCHITECTURE section 7, the agent). The
+// daemon serves it next to pcx.v1 for a client of the host; a module
+// process in the `agent` slot serves it on its socket for its host, and a
+// host serves it on the callback socket of a module that uses the agent.
+syntax = "proto3";
+package pcx.agent.v1;
+
+import "google/protobuf/struct.proto";
+import "pcx_module.proto";
+import "pcx_model.proto";
+
+// The agent's turns.
+service Agent {
+  // Run one turn of a session: `started` first, its events as they
+  // happen, then its end. Closing the stream cancels the turn.
+  rpc RunTurn(RunTurnRequest) returns (stream TurnReply);
+  // Cancel a running turn of this server: it ends as `cancelled`, its end
+  // still sent on its stream.
+  rpc CancelTurn(CancelTurnRequest) returns (CancelTurnResponse);
+  // The models its turns may use (a member's or a turn's `model`), as its
+  // host's providers serve them; empty with an error when it has none.
+  rpc Models(pcx.module.v1.ModelsRequest) returns (pcx.module.v1.ModelsResponse);
+}
+
+// CancelTurn input.
+message CancelTurnRequest {
+  // The turn, as its `started` named it.
+  string turn_id = 1;
+}
+
+// CancelTurn output.
+message CancelTurnResponse {
+  // Whether the turn was still running (else it had ended).
+  bool running = 1;
+}
+
+// The turn started.
+message TurnStarted {
+  // Its id on this server, for CancelTurn.
+  string turn_id = 1;
+}
+
+// RunTurn input.
+message RunTurnRequest {
+  // The session (36-char UUID) whose transcript the turn continues; it
+  // must exist.
+  string session_id = 1;
+  // What the person asks.
+  string prompt = 2;
+  // The call's scope, set between a host and a module (the author the
+  // turn writes as, its workspace, its deadline); a client's is not read:
+  // its author is the `x-pcx-author` header's.
+  pcx.module.v1.Scope scope = 3;
+  // What the turn adds to the agent's settings (a team member's): text
+  // added to its system prompt; empty: none.
+  string instructions = 4;
+  // The model; empty: the agent's.
+  string model = 5;
+  // The modules whose tools the turn may use; none: all the agent may.
+  repeated string modules = 6;
+  // The tools it may use; none: all of those modules'.
+  repeated string tools = 7;
+  // Tools it is not given, whatever the others allow (a team member's
+  // comment on its own task: its answer is that comment).
+  repeated string withheld = 8;
+  // Whose turn a client asks: empty, the module in the `agent` slot; a
+  // module's id, that module's own turns (the chief's). Empty between a
+  // host and a module.
+  string agent = 9;
+  // A team's member whose turn a client asks (W25), with `agent` `team`:
+  // its role, skills and tools apply as on the board; empty: none.
+  string member = 10;
+  // Who the agent's turns are written as in the transcript (W25: the
+  // chief, a team's member, set by the module whose turn it is); empty:
+  // the agent. Like a captured message's author, it names, it does not
+  // authenticate.
+  string speaker = 11;
+  // Who asks: the prompt is written as them in the transcript (W25: the
+  // person a module's turn is for, set by that module, as the chief sets
+  // who asked it); empty: the scope's author. A client's is not read: its
+  // asker is the `x-pcx-author` header's.
+  string asker = 12;
+  // The workspace of a call of the turn whose scope has none and whose input
+  // names none (a tool without the field, such as `bash`), set by the module
+  // whose turn it is; empty: none. A client's is not read.
+  string workspace = 13;
+}
+
+// A tool call of the turn.
+message ToolCall {
+  // The call's id.
+  string id = 1;
+  // The tool.
+  string name = 2;
+  // Its input.
+  google.protobuf.Struct input = 3;
+}
+
+// A tool's answer.
+message ToolResult {
+  // The call it answers.
+  string id = 1;
+  // Its text.
+  string content = 2;
+  // Whether it failed.
+  bool is_error = 3;
+}
+
+// A model call that failed, asked again after a wait.
+message Retrying {
+  // The failure's kind (`rate_limited`, `overloaded`, `unavailable`).
+  string kind = 1;
+  // What happened.
+  string message = 2;
+  // The wait, in milliseconds.
+  uint64 after_ms = 3;
+  // The failure whole.
+  pcx.module.v1.ModelFailure failure = 4;
+}
+
+// The tokens of the turn's model calls.
+message TurnUsage {
+  // Input tokens not served from the cache.
+  uint64 input = 1;
+  // Output tokens.
+  uint64 output = 2;
+  // Input tokens served from the cache.
+  uint64 cache_read = 3;
+  // Input tokens written to the cache.
+  uint64 cache_write = 4;
+}
+
+// How the turn ended.
+message TurnEnd {
+  // Why: `end_turn` or `max_tokens` (the model answered), `blocked`,
+  // `step_limit`, `cancelled`, or `failed`.
+  string stop = 1;
+  // For `blocked`, the module's reason; for `failed`, the failure's kind
+  // and message.
+  string detail = 2;
+  // The model calls it made.
+  uint32 steps = 3;
+  // Their tokens.
+  TurnUsage usage = 4;
+  // The text of its last answer; empty when the model gave none.
+  string answer = 5;
+  // For `failed`, the failure whole.
+  pcx.module.v1.ModelFailure failure = 6;
+}
+
+// One event of a turn.
+message TurnReply {
+  // Exactly one is set.
+  oneof event {
+    // More of the answer's text.
+    string text = 1;
+    // More of the model's reasoning.
+    string thinking = 2;
+    // The model calls a tool.
+    ToolCall tool_call = 3;
+    // A tool answered.
+    ToolResult tool_result = 4;
+    // A model call is asked again.
+    Retrying retrying = 5;
+    // The turn ended; last.
+    TurnEnd end = 6;
+    // The turn started; first.
+    TurnStarted started = 7;
+  }
+}
+
+// The agent's settings (ARCHITECTURE section 7, the agent).
+message AgentConfig {
+  // The model's id, as its provider lists it; empty: glm-5.3.
+  string model = 1 [(pcx.module.v1.setting) = { title: "Model", model: true }];
+  // Its system prompt; empty: the agent's own.
+  string system = 2 [(pcx.module.v1.setting) = { title: "System prompt", multiline: true }];
+  // The most tokens of an answer; 0: 8192.
+  uint32 max_tokens = 3 [(pcx.module.v1.setting) = { title: "Most tokens of an answer" }];
+  // The most model calls of a turn; 0: 50.
+  uint32 max_steps = 4 [(pcx.module.v1.setting) = { title: "Most model calls of a turn" }];
+}

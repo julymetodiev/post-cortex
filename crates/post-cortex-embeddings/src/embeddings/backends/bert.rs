@@ -13,8 +13,7 @@
 //! BERT backend: HuggingFace Hub model load, tokenize, forward pass,
 //! masked mean pooling, and L2 normalization.
 
-use anyhow::Result;
-use async_trait::async_trait;
+use crate::error::{Error, Result};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
@@ -28,6 +27,9 @@ use crate::embeddings::config::EmbeddingModelType;
 
 /// Maximum sequence length for BERT models (most variants cap at 512).
 const MAX_SEQ_LENGTH: usize = 512;
+
+/// Texts per forward pass: padding grows with the longest text of a batch.
+const BATCH_SIZE: usize = 32;
 
 /// BERT-based embedding backend backed by `candle_transformers::BertModel`.
 pub struct BertBackend {
@@ -45,39 +47,34 @@ impl BertBackend {
         let device = Device::Cpu;
         let model_id = model_type.model_id();
 
-        let api = Api::new().map_err(|e| anyhow::anyhow!("Failed to create API: {}", e))?;
+        let api = Api::new().map_err(|e| load_error(model_id, "hub client", e))?;
         let repo = api.model(model_id.to_string());
 
         let model_path = repo
             .get("model.safetensors")
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to get model: {}", e))?;
+            .map_err(|e| load_error(model_id, "weights", e))?;
         let config_path = repo
             .get("config.json")
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to get config: {}", e))?;
+            .map_err(|e| load_error(model_id, "config", e))?;
         let tokenizer_path = repo
             .get("tokenizer.json")
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to get tokenizer: {}", e))?;
+            .map_err(|e| load_error(model_id, "tokenizer", e))?;
 
         let tokenizer = Tokenizer::from_file(tokenizer_path)
-            .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
+            .map_err(|e| load_error(model_id, "tokenizer", e))?;
 
-        let bert_config_text = std::fs::read_to_string(config_path)
-            .map_err(|e| anyhow::anyhow!("Failed to read BERT config: {}", e))?;
+        let bert_config_text =
+            std::fs::read_to_string(config_path).map_err(|e| load_error(model_id, "config", e))?;
         let bert_config: BertConfig = serde_json::from_str(&bert_config_text)
-            .map_err(|e| anyhow::anyhow!("Failed to parse BERT config: {}", e))?;
+            .map_err(|e| load_error(model_id, "config", e))?;
 
-        // SAFETY: `from_mmaped_safetensors` is `unsafe fn` because mapping
-        // an external file means the kernel can change the bytes under us
-        // (the safetensors file could be truncated or replaced mid-read).
-        // In our pipeline the file is downloaded by `hf-hub`, lives in
-        // the user-local model cache, and is never modified after load —
-        // standard candle convention.
-        #[allow(unsafe_code)]
-        let vb =
-            unsafe { VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)? };
+        // Read into memory, not mapped: a mapping is `unsafe` (the file could
+        // change under it), and the weights are loaded whole either way.
+        let weights = std::fs::read(&model_path).map_err(|e| load_error(model_id, "weights", e))?;
+        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, &device)?;
         let model = BertModel::load(vb, &bert_config)?;
 
         info!(
@@ -122,28 +119,27 @@ impl BertBackend {
     }
 }
 
-#[async_trait]
 impl EmbeddingBackend for BertBackend {
     fn embedding_dimension(&self) -> usize {
         self.model_type.embedding_dimension()
     }
 
-    fn is_bert_based(&self) -> bool {
-        true
+    fn batch_size(&self) -> usize {
+        BATCH_SIZE
     }
 
-    async fn process_batch(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
+    fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
 
         // Tokenize
         let mut tokenized = Vec::with_capacity(texts.len());
-        for text in &texts {
+        for text in texts {
             let encoding = self
                 .tokenizer
-                .encode(text.clone(), true)
-                .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
+                .encode(text.as_str(), true)
+                .map_err(|e| Error::Tokenization(e.to_string()))?;
             tokenized.push(encoding);
         }
 
@@ -205,5 +201,13 @@ impl EmbeddingBackend for BertBackend {
         }
 
         Ok(embeddings_vec)
+    }
+}
+
+/// [`Error::ModelLoad`] of `model` while getting `what`.
+fn load_error(model: &str, what: &str, e: impl std::fmt::Display) -> Error {
+    Error::ModelLoad {
+        model: model.to_string(),
+        reason: format!("{what}: {e}"),
     }
 }

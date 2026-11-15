@@ -1,0 +1,40 @@
+[package]
+name = "pcx-chief"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The pcx chief: the host's main agent, which reaches every module and operates the system for the people who own it, under a grant, an audit and a daily budget."
+keywords = ["pcx", "agent", "chief", "audit"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-chief"
+
+[[bin]]
+name = "pcx-chief"
+path = "src/main.rs"
+
+[dependencies]
+pcx-module-api.workspace = true
+pcx-documents.workspace = true
+# Its package, pcx.chief.v1, and memory's (W23).
+post-cortex-proto.workspace = true
+prost.workspace = true
+tonic.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+pcx-host.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tokio-util.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,51 @@
+[package]
+name = "pcx-discord"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The pcx Discord channel: messages to a server's channels, what its people write as events for workflows, posts, replies, roles and forum tags."
+keywords = ["pcx", "discord", "channel", "community"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-discord"
+
+[[bin]]
+name = "pcx-discord"
+path = "src/main.rs"
+
+[dependencies]
+pcx-module-api.workspace = true
+# Its package, pcx.discord.v1 (Discord's REST and Gateway JSON mirrored), and
+# the channel service.
+post-cortex-proto.workspace = true
+prost.workspace = true
+# The events it publishes: an Any each.
+pbjson-types.workspace = true
+tonic.workspace = true
+async-trait.workspace = true
+parking_lot.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+# The REST API.
+reqwest.workspace = true
+# The Gateway: a WebSocket.
+tokio-tungstenite.workspace = true
+# Its TLS, with the crypto provider named: the process sets no default one.
+rustls.workspace = true
+webpki-roots.workspace = true
+futures.workspace = true
+# Discord's JSON, read and written by its mirror messages' proto3 JSON
+# mapping.
+serde.workspace = true
+serde_json.workspace = true
+# When an account was made, from its id.
+chrono.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+
+[lints]
+workspace = true

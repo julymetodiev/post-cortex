@@ -1,0 +1,21 @@
+[package]
+name = "pcx-kube"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "HTTP calls of pcx modules with credentials read from files through their sandbox: the Kubernetes API and bearer-token APIs."
+keywords = ["pcx", "kubernetes", "credentials", "sandbox"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-kube"
+
+[dependencies]
+parking_lot.workspace = true
+pcx-module-api.workspace = true
+reqwest = { workspace = true, features = ["rustls-tls-manual-roots"] }
+rustls.workspace = true
+
+[lints]
+workspace = true

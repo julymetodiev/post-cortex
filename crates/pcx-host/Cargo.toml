@@ -1,0 +1,56 @@
+[package]
+name = "pcx-host"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The pcx module host: registry and slots, per-call policy (deadlines, fail-open/closed, panic capture, concurrency), event dispatch and per-module health."
+keywords = ["pcx", "module", "host", "plugin", "harness"]
+categories = ["asynchronous"]
+documentation = "https://docs.rs/pcx-host"
+
+[dependencies]
+pcx-module-api.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+sha2.workspace = true
+parking_lot.workspace = true
+arc-swap.workspace = true
+# The out-of-process runner: pcx.module.v1 over gRPC on a Unix socket.
+post-cortex-proto.workspace = true
+# A module's configuration, an Any of its message (W23).
+pbjson-types.workspace = true
+tonic.workspace = true
+# The modules' RPCs as tools: their requests and answers read and written
+# with the descriptors (rpc_tools.rs).
+prost.workspace = true
+prost-reflect.workspace = true
+tower.workspace = true
+hyper-util.workspace = true
+tokio-stream.workspace = true
+futures.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# The settings message of the test modules (the public example's).
+pcx-greet = { path = "../pcx-greet" }
+tempfile.workspace = true
+toml.workspace = true
+
+[[test]]
+name = "process_module"
+harness = false
+
+[[test]]
+name = "slots"
+harness = false
+
+[lints]
+workspace = true

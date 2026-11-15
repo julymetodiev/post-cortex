@@ -1,0 +1,239 @@
+// pcx.module.v1 for the agent (ARCHITECTURE section 7, the agent): the
+// models of the host's providers, served on the callback socket of a module
+// process in the `agent` or `context_engine` slot (a provider runs in the
+// host process; this is how a module process uses it), and the events the
+// agent's turns send to the modules that answer them.
+syntax = "proto3";
+package pcx.module.v1;
+
+import "google/protobuf/struct.proto";
+import "pcx_blocks.proto";
+import "pcx_module.proto";
+
+// The host's models, for the module whose callback socket it is.
+service Model {
+  // The models the running providers serve.
+  rpc Models(ModelsRequest) returns (ModelsResponse);
+  // Ask a model; its answer as it comes, then its end or its failure.
+  // Closing the stream cancels the call.
+  rpc Generate(GenerateRequest) returns (stream GenerateReply);
+}
+
+// The context engine, for the module in the `agent` slot.
+service ContextEngine {
+  // Whether a module fills the `context_engine` slot.
+  rpc Present(ContextPresentRequest) returns (ContextPresentResponse);
+  // What memory recalls for a prompt.
+  rpc Recall(RecallRequest) returns (ContextTextResponse);
+  // A conversation summed up, kept as a record too.
+  rpc Summarize(SummarizeRequest) returns (ContextTextResponse);
+}
+
+// Present input.
+message ContextPresentRequest {}
+
+// Present result.
+message ContextPresentResponse {
+  // Whether one fills it.
+  bool present = 1;
+  // Why it cannot be asked (the module is not the agent).
+  ModuleError error = 2;
+}
+
+// Recall input.
+message RecallRequest {
+  // Who and what the turn is for.
+  Scope scope = 1;
+  // The session.
+  string session = 2;
+  // The prompt.
+  string prompt = 3;
+}
+
+// Summarize input.
+message SummarizeRequest {
+  // Who and what the turn is for.
+  Scope scope = 1;
+  // The session.
+  string session = 2;
+  // The model that sums it up.
+  string model = 3;
+  // The conversation.
+  repeated ModelMessage messages = 4;
+}
+
+// Recall and Summarize result.
+message ContextTextResponse {
+  // The text; empty with an error.
+  string text = 1;
+  // Why there is none.
+  ModuleError error = 2;
+}
+
+// The agent's events, sent to the modules subscribed to them (the `agent`
+// slot only).
+service Hooks {
+  // Send one event; the subscribers' outcomes merged.
+  rpc Dispatch(DispatchRequest) returns (DispatchResponse);
+}
+
+// Dispatch input.
+message DispatchRequest {
+  // Who and what the turn is for.
+  Scope scope = 1;
+  // The event's kind.
+  EventKind kind = 2;
+  // The event.
+  Event event = 3;
+}
+
+// Dispatch result.
+message DispatchResponse {
+  // The merged outcome; unset with an error.
+  Outcome outcome = 1;
+  // Why it was not sent (the module is not the agent).
+  ModuleError error = 2;
+}
+
+// Models input.
+message ModelsRequest {
+  // Once the listing its provider began at start is in (it lists its API's
+  // models in the background); unset: its models as they are now.
+  bool settled = 1;
+}
+
+// Models result.
+message ModelsResponse {
+  // The models; empty with an error.
+  repeated ModelInfo models = 1;
+  // Why they cannot be listed (the module is not in a slot that uses
+  // models).
+  ModuleError error = 2;
+}
+
+// Who speaks a message.
+enum ModelRole {
+  // Not set; refused.
+  MODEL_ROLE_UNSPECIFIED = 0;
+  // The person, or the results of tools.
+  MODEL_ROLE_USER = 1;
+  // The model.
+  MODEL_ROLE_ASSISTANT = 2;
+}
+
+// A message of a request.
+message ModelMessage {
+  // Who speaks it.
+  ModelRole role = 1;
+  // Its blocks, in order.
+  repeated pcx.blocks.v1.ModelBlock blocks = 2;
+}
+
+// A tool the model may call.
+message ModelTool {
+  // Its name.
+  string name = 1;
+  // What it does.
+  string description = 2;
+  // The JSON Schema of its input.
+  google.protobuf.Struct input_schema = 3;
+}
+
+// Generate input.
+message GenerateRequest {
+  // Who and what the call is for.
+  Scope scope = 1;
+  // The model's id.
+  string model = 2;
+  // The system prompt; empty: none.
+  string system = 3;
+  // The conversation, oldest first.
+  repeated ModelMessage messages = 4;
+  // The tools it may call.
+  repeated ModelTool tools = 5;
+  // The most tokens it may answer.
+  uint32 max_tokens = 6;
+  // The tool it must call; empty: the model decides.
+  string tool_choice = 7;
+}
+
+// The tokens of one answer.
+message ModelUsage {
+  // Input tokens not served from the cache.
+  uint64 input = 1;
+  // Output tokens.
+  uint64 output = 2;
+  // Input tokens served from the cache.
+  uint64 cache_read = 3;
+  // Input tokens written to the cache.
+  uint64 cache_write = 4;
+}
+
+// Why a model stopped.
+enum StopReason {
+  // Not set; refused.
+  STOP_REASON_UNSPECIFIED = 0;
+  // It finished its answer.
+  STOP_REASON_END_TURN = 1;
+  // It reached the most tokens.
+  STOP_REASON_MAX_TOKENS = 2;
+  // It called tools.
+  STOP_REASON_TOOL_USE = 3;
+}
+
+// The answer, whole.
+message ModelDone {
+  // Its blocks.
+  repeated pcx.blocks.v1.ModelBlock blocks = 1;
+  // Its tokens.
+  ModelUsage usage = 2;
+  // Why it stopped.
+  StopReason stop = 3;
+}
+
+// The kind of a failed model call.
+enum ModelFailureKind {
+  // Not set; refused.
+  MODEL_FAILURE_KIND_UNSPECIFIED = 0;
+  // Too many requests.
+  MODEL_FAILURE_KIND_RATE_LIMITED = 1;
+  // The provider is overloaded.
+  MODEL_FAILURE_KIND_OVERLOADED = 2;
+  // The request is longer than the model's context.
+  MODEL_FAILURE_KIND_CONTEXT_TOO_LONG = 3;
+  // The credentials were refused.
+  MODEL_FAILURE_KIND_UNAUTHORIZED = 4;
+  // The account's quota or plan is used up.
+  MODEL_FAILURE_KIND_QUOTA_EXHAUSTED = 5;
+  // The provider could not be reached, or failed.
+  MODEL_FAILURE_KIND_UNAVAILABLE = 6;
+  // The request was refused as it is, or the answer did not read.
+  MODEL_FAILURE_KIND_INVALID = 7;
+}
+
+// A failed model call.
+message ModelFailure {
+  // Its kind.
+  ModelFailureKind kind = 1;
+  // What happened.
+  string message = 2;
+  // Milliseconds to wait before a retry, when the provider says.
+  optional uint64 retry_after_ms = 3;
+}
+
+// One event of an answer.
+message GenerateReply {
+  // Exactly one is set.
+  oneof event {
+    // More of its text.
+    string text_delta = 1;
+    // More of its reasoning.
+    string thinking_delta = 2;
+    // A tool call, whole.
+    pcx.blocks.v1.ToolUseBlock tool_use = 3;
+    // The answer; last.
+    ModelDone done = 4;
+    // The call failed; last.
+    ModelFailure failure = 5;
+  }
+}

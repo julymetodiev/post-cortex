@@ -1,0 +1,20 @@
+[package]
+name = "pcx-provider-openai"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The OpenAI model provider of pcx: OpenAI's models over its chat completions API."
+keywords = ["pcx", "llm", "openai"]
+categories = ["development-tools"]
+documentation = "https://docs.rs/pcx-provider-openai"
+
+[dependencies]
+pcx-module-api.workspace = true
+pcx-openai-compat.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

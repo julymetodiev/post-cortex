@@ -10,11 +10,8 @@
 // The above copyright notice and this permission notice shall be included in all
 // copies or substantial portions of the Software.
 
-//! Concrete [`EmbeddingBackend`](super::backend::EmbeddingBackend) implementations.
+//! Concrete [`EmbeddingBackend`](crate::embeddings::backend::EmbeddingBackend) implementations.
 //!
-//! - [`StaticHashBackend`] — hash-based fallback, always compiled in. Used
-//!   only for `EmbeddingModelType::StaticSimilarityMRL` and as the last
-//!   resort when both `bert` and `model2vec` features are disabled.
 //! - [`BertBackend`] (feature `bert`) — Candle + HuggingFace Hub BERT
 //!   transformer models (MiniLM / multilingual / TinyBERT / BGE).
 //! - [`Model2VecBackend`] (feature `model2vec`, default) — `model2vec-rs`
@@ -24,10 +21,8 @@
 pub mod bert;
 #[cfg(feature = "model2vec")]
 pub mod model2vec;
-pub mod static_hash;
 
 #[cfg(feature = "bert")]
 pub use bert::BertBackend;
 #[cfg(feature = "model2vec")]
 pub use model2vec::Model2VecBackend;
-pub use static_hash::StaticHashBackend;

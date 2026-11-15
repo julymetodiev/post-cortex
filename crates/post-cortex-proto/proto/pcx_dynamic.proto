@@ -1,0 +1,275 @@
+// Copyright (c) 2026 Julius ML
+// Licensed under the MIT License. See LICENSE at the workspace root.
+
+// The `dynamic` module (docs/modules/dynamic.md): modules in Python or TS
+// installed into a running host, each version checked and approved by a person.
+syntax = "proto3";
+package pcx.dynamic.v1;
+
+import "pcx_blob.proto";
+import "pcx_module.proto";
+
+// The module's service.
+service Dynamic {
+  // Install a module, or a new version of it: its files kept, prepared and
+  // checked in a locked run, then asked for approval. Until a person approves
+  // it does not run, and the version approved before goes on. Refused, naming
+  // the file or the package, when the bundle breaks a rule or its check fails.
+  rpc Install(InstallRequest) returns (DynamicRecord);
+  // The dynamic modules, newest change first.
+  rpc List(ListRequest) returns (DynamicList);
+  // One module, with what the check found.
+  rpc Get(GetRequest) returns (DynamicRecord);
+  // A person's change of one file of the module's latest files, or a new file:
+  // a new version, kept, checked and asked about as an install is.
+  rpc Edit(EditRequest) returns (DynamicRecord);
+  // The latest files of a module, for its view.
+  rpc Files(FilesRequest) returns (ModuleFiles);
+  // Remove a module: it stops, and its files go.
+  rpc Remove(RemoveRequest) returns (RemoveResponse);
+  // What a host runs: every approved version, prepared. The composition's.
+  rpc ListApproved(ListApprovedRequest) returns (ApprovedList);
+}
+
+// The settings of the module.
+message DynamicConfig {
+  // The workspace its modules are kept in.
+  string workspace_id = 1 [(pcx.module.v1.setting) = {title: "Workspace", required: true, workspace: true}];
+  // The board a person approves them on.
+  string board = 2 [(pcx.module.v1.setting) = {title: "Board of approvals", required: true, board: true}];
+}
+
+// The language of a module.
+enum Language {
+  // None: refused.
+  LANGUAGE_UNSPECIFIED = 0;
+  // Python, on free-threaded CPython.
+  LANGUAGE_PYTHON = 1;
+  // TypeScript, on Deno.
+  LANGUAGE_TS = 2;
+}
+
+// What a module may use. It never has the network, processes or files of its
+// own: it calls modules that serve them.
+message Grants {
+  // The modules whose tools it calls; never `*` or `dynamic`.
+  repeated string uses = 1;
+  // Whether it writes memory.
+  bool write_memory = 2;
+  // Whether it reads conversations.
+  bool read_conversation = 3;
+  // Whether it calls models.
+  bool models = 4;
+  // Its memory limit in MB; 0: the default, 256.
+  uint32 memory_mb = 5;
+}
+
+// A file of a bundle.
+message File {
+  // Its path, beneath the bundle.
+  string path = 1;
+  // Its text.
+  string text = 2;
+}
+
+// A module to install.
+message InstallRequest {
+  // Its id, as its manifest names it.
+  string id = 1;
+  // Its version.
+  string version = 2;
+  // Its language.
+  Language language = 3;
+  // Its files: `module.py` or `module.ts`, its protos under `proto/`, its lock
+  // file, its tests under `tests/`. No generated message code.
+  repeated File files = 4;
+  // What it asks for.
+  Grants grants = 5;
+  // Its files instead: a directory (an absolute path under a root) of the
+  // caller's `tools-fs`, read as they are there, so no text is written out
+  // again. Hidden files and `node_modules` stay out.
+  string dir = 6;
+}
+
+// What the locked run found.
+message Check {
+  // Its manifest, without its descriptors' bulk: the tools it offers.
+  repeated string tools = 1;
+  // The modules its manifest uses.
+  repeated string uses = 2;
+  // Whether its tests passed; true without tests.
+  bool tests_passed = 3;
+  // The last of what its run and tests wrote.
+  string log = 4;
+  // Whether a package of it turned the GIL on (Python).
+  bool gil = 5;
+}
+
+// What a person approved.
+message Approved {
+  // The hash of the files approved.
+  string sha256 = 1;
+  // The version approved.
+  string version = 2;
+  // The grants approved.
+  Grants grants = 3;
+  // The decision.
+  string decision = 4;
+  // Who approved it.
+  string approved_by = 5;
+  // The language of those files.
+  Language language = 6;
+  // The blob that holds them.
+  pcx.v1.Attachment files = 7;
+}
+
+// What waits for a person.
+message Asked {
+  // The hash of the files asked about.
+  string sha256 = 1;
+  // The task the decision is on.
+  string task = 2;
+  // The decision.
+  string decision = 3;
+  // The person who declined the decision; empty: it waits. Files a person
+  // declined are asked about again when they are written again.
+  string declined_by = 4;
+}
+
+// A module (document `dynamic/module`, one per id, each change a new version).
+// `check`, `approved` and `asked` are written only by the module.
+message DynamicModule {
+  // Its id.
+  string id = 1;
+  // Its version.
+  string version = 2;
+  // Its language.
+  Language language = 3;
+  // The tar of its files.
+  pcx.v1.Attachment files = 4;
+  // What it asks for.
+  Grants grants = 5;
+  // What the locked run found.
+  Check check = 6;
+  // What a person approved; none yet: it does not run.
+  Approved approved = 7;
+  // What waits for a person.
+  Asked asked = 8;
+}
+
+// A module as it is kept.
+message DynamicRecord {
+  // The document's id.
+  string document = 1;
+  // The document's version.
+  uint64 version = 2;
+  // The module.
+  DynamicModule module = 3;
+  // Its files' difference from the approved version, in Markdown (Get only).
+  string difference = 4;
+  // Its latest files with their text, approved or not (Get only).
+  repeated File files = 5;
+}
+
+// Lists the modules.
+message ListRequest {}
+
+// The modules.
+message DynamicList {
+  // The modules.
+  repeated DynamicRecord modules = 1;
+}
+
+// Reads a module.
+message GetRequest {
+  // Its id.
+  string id = 1;
+}
+
+// A person's change of one file.
+message EditRequest {
+  // The module's id.
+  string id = 1;
+  // The document's version it was read at: another change since is a conflict.
+  uint64 revision = 2;
+  // The module's version after this change.
+  string version = 3;
+  // The file's path; a path it does not have adds a file.
+  string path = 4;
+  // The file's new text.
+  string text = 5;
+}
+
+// Reads a module's files for its view.
+message FilesRequest {
+  // Its id.
+  string id = 1;
+}
+
+// A file as a module's view shows it.
+message ModuleFile {
+  // The module's id.
+  string id = 1;
+  // The document's version it was read at.
+  uint64 revision = 2;
+  // The module's version.
+  string version = 3;
+  // Its path, beneath the bundle.
+  string path = 4;
+  // Its text.
+  string text = 5;
+  // Its path and text in Markdown.
+  string shown = 6;
+}
+
+// A module's files.
+message ModuleFiles {
+  // Its files, by path.
+  repeated ModuleFile files = 1;
+}
+
+// Removes a module.
+message RemoveRequest {
+  // Its id.
+  string id = 1;
+}
+
+// A module removed.
+message RemoveResponse {}
+
+// Asks what runs.
+message ListApprovedRequest {}
+
+// An approved version, prepared.
+message ApprovedModule {
+  // Its id.
+  string id = 1;
+  // Its language.
+  Language language = 2;
+  // Its grants.
+  Grants grants = 3;
+  // Its files, read-only.
+  string bundle = 4;
+  // Its packages; empty without a lock file.
+  string environment = 5;
+  // The hash of its files.
+  string sha256 = 6;
+}
+
+// What a host runs.
+message ApprovedList {
+  // The approved versions.
+  repeated ApprovedModule modules = 1;
+}
+
+// A version was approved: a host loads it.
+message VersionApproved {
+  // The module.
+  string id = 1;
+}
+
+// A module was removed: a host stops it.
+message VersionRemoved {
+  // The module.
+  string id = 1;
+}
