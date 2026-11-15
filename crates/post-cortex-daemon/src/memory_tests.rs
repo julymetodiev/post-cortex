@@ -22,7 +22,9 @@ pub async fn rocksdb_memory(
     crate::compose::open_memory(&storage, &models, None, config, PipelineConfig::default()).await
 }
 
-/// [`rocksdb_memory`] keeping its blobs in `blobs`.
+/// [`rocksdb_memory`] keeping its blobs in `blobs`. Its one caller is the
+/// dynamic stack's test, which is built on macOS only.
+#[cfg(target_os = "macos")]
 pub async fn rocksdb_memory_with_blobs(
     dir: &tempfile::TempDir,
     blobs: std::sync::Arc<dyn post_cortex_ports::BlobStore>,
