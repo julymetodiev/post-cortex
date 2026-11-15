@@ -122,12 +122,13 @@ impl EventLog for SurrealDBStorage {
                         .bind(("position", i64::try_from(position)?))
                         .bind(("record", EventRecord::of(&stored)?))
                         .bind(("next", i64::try_from(position + 1)?))
-                        .await?
-                        .check();
-                    match created {
-                        Ok(_) => return Ok(stored),
+                        .await?;
+                    match crate::surrealdb_storage::transaction::committed(created) {
+                        Ok(()) => return Ok(stored),
                         // Another append took it: the next one is free.
-                        Err(e) if e.is_already_exists() => position += 1,
+                        Err(e) if crate::surrealdb_storage::transaction::lost_race(&e) => {
+                            position += 1;
+                        }
                         Err(e) => return Err(e.into()),
                     }
                 }

@@ -43,6 +43,7 @@ mod persist;
 mod records;
 mod schema;
 mod sessions;
+mod transaction;
 mod vectors;
 mod workspaces;
 

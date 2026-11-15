@@ -8,7 +8,7 @@
 //! version)`; the latest version of each document has `latest` set. A
 //! write creates the next version and clears `latest` on the one it read in
 //! one transaction: of two writers that read the same latest version, the
-//! second one's create fails and is reported as a conflict. The order and
+//! second one's create or commit fails and is reported as a conflict. The order and
 //! the keys of the latest versions change in the same transaction
 //! ([`crate::surrealdb_storage::document_index`]).
 
@@ -213,14 +213,13 @@ impl DocumentStore for SurrealDBStorage {
                     .bind(("key", row_key(workspace_id, id, document.version)))
                     .bind(("previous", row_key(workspace_id, id, stored)))
                     .bind(("record", DocumentRecord::from_document(&document, true)?))
-                    .await?
-                    .check();
-                match created {
-                    Ok(_) => Ok(DocumentWrite::Written(document)),
+                    .await?;
+                match crate::surrealdb_storage::transaction::committed(created) {
+                    Ok(()) => Ok(DocumentWrite::Written(document)),
                     // Another writer stored this version first.
-                    Err(e) if e.is_already_exists() => Ok(DocumentWrite::Conflict(
-                        self.latest_document(workspace_id, id).await?,
-                    )),
+                    Err(e) if crate::surrealdb_storage::transaction::lost_race(&e) => Ok(
+                        DocumentWrite::Conflict(self.latest_document(workspace_id, id).await?),
+                    ),
                     Err(e) => Err(e.into()),
                 }
             })

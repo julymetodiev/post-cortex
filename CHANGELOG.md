@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.0] - 2026-11-15
 
+### Fixed
+
+- **Two writers racing for one document on SurrealDB: the loser gets a conflict** (found
+  2026-11-15 by the public CI on Linux). When the loser's transaction failed at its commit,
+  SurrealDB answered its statements with "not executed" and put the cause on the commit's own
+  row; the adapter read the first error, so the write failed as unavailable where the port
+  promises a conflict with the latest version. The adapter now reads the cause; an event
+  appended in the same race takes the next position.
+
 ### Security
 
 - **Dependencies with advisories are updated** (found 2026-11-15 by the first public CI run):
