@@ -20,7 +20,7 @@
 
 //! The `ArchiveCodec` adapter: the `pcx export` file format.
 //!
-//! - [`format`]: the version written ([`EXPORT_FORMAT_VERSION`]) and the
+//! - [`mod@format`]: the version written ([`EXPORT_FORMAT_VERSION`]) and the
 //!   one version gate, [`check_format_version`];
 //! - [`codec`]: JSON and compression (detected from the bytes), written
 //!   and read one part at a time, and [`JsonArchive`], the codec;

@@ -25,7 +25,6 @@ mod config;
 mod content_vectors;
 #[cfg(test)]
 mod delete_tests;
-/// Derived work (embeddings, graph merges) in flight
 pub mod derived_work;
 #[cfg(test)]
 mod derived_work_tests;
@@ -34,7 +33,6 @@ mod document_vectors;
 mod durability_tests;
 mod embeddings;
 
-/// Record change notification ([`MemoryRuntime::subscribe_records`])
 pub mod change_log;
 mod error;
 #[cfg(test)]
@@ -52,7 +50,6 @@ mod message_vectors;
 /// System-level and session-level metrics snapshots
 mod metrics;
 mod neighbours;
-/// Coalescing, per-session ordered session persistence
 mod persister;
 #[cfg(test)]
 mod record_event_tests;
@@ -66,7 +63,6 @@ mod session_cache;
 mod session_cache_tests;
 /// The compare-and-swap loop of session changes
 mod session_cas;
-/// The session cache and per-session derived state
 mod session_manager;
 mod session_ops;
 #[cfg(test)]
@@ -79,7 +75,6 @@ mod update_vectors;
 #[cfg(test)]
 mod vectorize_batch_tests;
 mod vectorized;
-/// Merged workspace graphs (per instance, bounded)
 pub mod workspace_graphs;
 /// The workspace registry (runtime state)
 mod workspace_registry;

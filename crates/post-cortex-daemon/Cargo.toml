@@ -106,7 +106,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 log.workspace = true
-env_logger.workspace = true
 
 # `pcx migrate` passes its archive through a temporary file.
 tempfile.workspace = true

@@ -4,7 +4,7 @@
 //! Transports of pcx (ARCHITECTURE section 3, `post-cortex-transport`).
 //!
 //! - [`mcp`]: the MCP server (rmcp) over the host's tools;
-//! - [`invoke`]: the same tools over gRPC (`pcx.module.v1.Host`);
+//! - [`host_api`]: the same tools over gRPC (`pcx.module.v1.Host`);
 //! - [`views`]: the app's views over gRPC (`pcx.views.v1.Views`);
 //! - [`transfer`]: archive export and import (`pcx.v1` `Export`, `Import`),
 //!   for gRPC and the browser;

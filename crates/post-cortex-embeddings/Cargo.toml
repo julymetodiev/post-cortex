@@ -26,7 +26,6 @@ chrono.workspace = true
 thiserror.workspace = true
 
 # Concurrency primitives — lock-free where possible
-dashmap.workspace = true
 parking_lot.workspace = true
 rayon.workspace = true
 num_cpus.workspace = true

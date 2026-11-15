@@ -29,9 +29,7 @@
 // site in post-cortex-embeddings; this crate is otherwise unsafe-free.
 #![deny(unsafe_code)]
 
-/// The export archive: plain data of an export, its options and outcome.
 pub mod archive;
-/// Collections a session shares between its versions.
 pub mod collections;
 
 /// Cross-cutting primitives shared by every post-cortex crate.

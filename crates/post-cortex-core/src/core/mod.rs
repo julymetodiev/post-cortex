@@ -10,7 +10,6 @@
 //! storage backends live in `post-cortex-storage`. What remains here is
 //! transport-/IO-free domain logic.
 
-/// Blobs: the bytes of images documents name, by their SHA-256.
 pub mod blob;
 
 /// Project and user cards: small versioned markdown documents put in front
@@ -40,12 +39,9 @@ pub mod dismissal;
 /// reports (the freshness port's types).
 pub mod freshness;
 
-/// Raw conversation turns: the append-only message stream that client
-/// hooks capture next to the structured context updates.
 pub mod message;
 
 /// Structured projection types over a session's update history.
 pub mod structured_context;
 
-/// Wire and stored names of domain enums: one codec, strict parsing.
 pub mod wire;

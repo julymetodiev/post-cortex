@@ -343,9 +343,11 @@ def project_ids(payload=None, url=None, token=None, author=AUTHOR):
 
 
 def _report_refusal(exc):
-    """Write a refused resolution's status and the server's message to stderr."""
+    """Write a refused resolution's status and the server's message to stderr.
+    The refusal holds the response open; it is closed here, once read."""
     try:
-        body = exc.read().decode("utf-8", "replace").strip()[:MAX_ERROR_CHARS]
+        with exc:
+            body = exc.read().decode("utf-8", "replace").strip()[:MAX_ERROR_CHARS]
     except Exception:
         body = ""
     line = "post-cortex: /api/projects/resolve: HTTP %s" % exc.code

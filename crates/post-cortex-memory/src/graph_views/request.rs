@@ -23,14 +23,14 @@ pub const MAX_LIMIT: usize = 5000;
 /// parser.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ViewRequest {
-    /// [`GraphScope::entity_view`].
+    /// [`crate::graph_views::Index::entity_view`].
     Entity {
         /// Entity name or alias.
         name: String,
         /// Most records.
         limit: usize,
     },
-    /// [`GraphScope::impact_view`].
+    /// [`crate::graph_views::Index::impact_view`].
     Impact {
         /// Entity name or alias.
         name: String,
@@ -39,28 +39,28 @@ pub enum ViewRequest {
         /// Most risk records.
         limit: usize,
     },
-    /// [`GraphScope::topics_view`].
+    /// [`crate::graph_views::Index::topics_view`].
     Topics {
         /// Most topics.
         limit: usize,
         /// Entities and decisions per topic.
         per_topic: usize,
     },
-    /// [`GraphScope::lineage_view`].
+    /// [`crate::graph_views::Index::lineage_view`].
     Lineage {
         /// Entity name or alias.
         name: String,
         /// Hops.
         depth: usize,
     },
-    /// [`GraphScope::radar_view_with`].
+    /// [`crate::graph_views::Index::radar_view_with`].
     Radar {
         /// Most items per list.
         limit: usize,
         /// Keep dismissed items in the lists.
         include_dismissed: bool,
     },
-    /// [`GraphScope::file_view`].
+    /// [`crate::graph_views::Index::file_view`].
     File {
         /// Source file path.
         path: String,
@@ -237,7 +237,7 @@ pub enum RenderedView {
 
 impl GraphScope {
     /// Render `request` as of `now`, leaving out the radar items
-    /// `dismissals` name (see [`Self::radar_view_with`]); other views
+    /// `dismissals` name (see [`crate::graph_views::Index::radar_view_with`]); other views
     /// ignore them.
     pub fn render_with(
         &self,

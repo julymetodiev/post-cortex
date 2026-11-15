@@ -32,8 +32,6 @@ rust-stemmers.workspace = true
 # A blob's media type and size by its first bytes (no IO).
 imagesize.workspace = true
 
-# Observability
-tracing.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

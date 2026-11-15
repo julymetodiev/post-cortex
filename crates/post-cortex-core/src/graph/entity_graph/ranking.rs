@@ -35,7 +35,7 @@ impl SimpleEntityGraph {
 
     /// Importance of every entity in (0, 1]: centrality in the weighted
     /// relation graph, personalised by mentions and faded by staleness
-    /// (see [`crate::graph::entity_graph::analytics::importance`]).
+    /// (see [`crate::graph::analytics::importance`]).
     pub fn centrality(&self) -> BTreeMap<String, f32> {
         crate::graph::analytics::importance(self)
     }

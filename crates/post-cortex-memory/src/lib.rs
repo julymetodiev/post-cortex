@@ -17,7 +17,6 @@
 pub mod archive;
 pub mod capabilities;
 pub mod content_vectorizer;
-/// Graph-aware context assembly that combines semantic search results with entity-graph traversals.
 pub mod context_assembly;
 pub mod graph_views;
 mod memory_system;

@@ -47,8 +47,7 @@ arc-swap.workspace = true
 parking_lot.workspace = true
 tokio.workspace = true
 
-# Filesystem helpers + compression for export/import
-dirs.workspace = true
+# Compression for export/import
 flate2.workspace = true
 zstd.workspace = true
 

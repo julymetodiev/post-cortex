@@ -3,7 +3,7 @@
 
 //! Port conformance suites (feature `conformance`): one generic case per
 //! port behaviour, run against every adapter from the adapter crate's
-//! tests with [`conformance_suite!`]. A case is a `pub async fn(&Stores)`
+//! tests with [`crate::conformance_suite!`]. A case is a `pub async fn(&Stores)`
 //! in the module of its port and reaches the adapter only through the
 //! ports it names.
 //!

@@ -59,4 +59,12 @@ ignore = [
     # patched range (>=1.0.10) cannot match the 0.26 shim version. Pulled by
     # ureq 2 <- hf-hub <- model2vec-rs.
     "RUSTSEC-2026-0381", # webpki-roots emSign root (0.26 shim of patched 1.0.10)
+
+    # No compatible fix (2026-11-15): three come with surrealdb 3.3 and are
+    # fixed only in surrealdb 4.0; zip 7 comes with candle-core, which reads
+    # its own model files, and is fixed only in zip 9.0.
+    "RUSTSEC-2026-0454", # reblessive unsound Send/Sync in surrealdb-core 3.3
+    "RUSTSEC-2026-0441", # pin-utils unmaintained (wasmtimer of surrealdb 3.3)
+    "RUSTSEC-2026-0387", # crypto-bigint 0.5 timing (jsonwebtoken of surrealdb 3.3)
+    "RUSTSEC-2026-0429", # zip 7 aborts on a symlink entry (candle-core)
 ]

@@ -12,8 +12,6 @@ categories = ["command-line-utilities"]
 documentation = "https://docs.rs/post-cortex-cli"
 
 [dependencies]
-# Domain names the commands speak (session roles); no memory or storage.
-post-cortex-core.workspace = true
 # The author header of the public APIs.
 post-cortex-proto.workspace = true
 # `pcx agent`: the daemon's pcx.agent.v1 over gRPC.

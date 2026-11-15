@@ -10,7 +10,8 @@
   <a href="https://pcx.is">Website</a> ·
   <a href="https://docs.pcx.is">Documentation</a> ·
   <a href="https://docs.pcx.is/start/quickstart/">Quickstart</a> ·
-  <a href="https://app.pcx.is">App</a>
+  <a href="https://app.pcx.is">App</a> ·
+  <a href="https://discord.gg/PGkDGd6a72">Discord</a>
 </p>
 
 > **Post-Cortex is now PCX.** Post-Cortex started as a memory for AI agents. Around it we

@@ -13,7 +13,7 @@ use post_cortex_core::core::structured_context::QuestionStatus;
 use post_cortex_core::session::active_session::ActiveSession;
 use serde::{Deserialize, Serialize};
 
-/// Typed query descriptors dispatched by [`Views::query`].
+/// Typed query descriptors dispatched by [`crate::capabilities::Views::query`].
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ContextQuery {
     /// Retrieve context updates created after a given timestamp.
@@ -133,7 +133,7 @@ pub enum ContextQuery {
     },
 }
 
-/// Typed response payloads returned by [`Views::query`].
+/// Typed response payloads returned by [`crate::capabilities::Views::query`].
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ContextResponse {
     /// Recent context updates since a given timestamp.

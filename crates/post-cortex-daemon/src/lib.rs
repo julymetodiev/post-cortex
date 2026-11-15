@@ -37,7 +37,6 @@
 
 pub mod compose;
 pub mod daemon;
-/// Error types for the daemon crate.
 pub mod error;
 
 #[cfg(test)]
@@ -90,7 +89,7 @@ mod compose_telegram_tests;
 mod compose_tests;
 #[cfg(test)]
 mod compose_webhooks_tests;
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod compose_workflow_tests;
 #[cfg(test)]
 mod memory_tests;

@@ -29,7 +29,7 @@ pub struct PutDocument {
     pub expected_version: u64,
 }
 
-/// The answer of [`Documents::put`]: a conflict is a normal answer.
+/// The answer of [`crate::capabilities::Documents::put`]: a conflict is a normal answer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PutOutcome {
     /// Whether the version was written.

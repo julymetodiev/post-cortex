@@ -27,13 +27,6 @@ prost-reflect.workspace = true
 # A blob's id: the SHA-256 of its bytes (W24).
 sha2.workspace = true
 
-# Observability — OTel exporter is gated behind the `otel` feature so
-# library users that don't want it pay zero cost. The `tracing` crate
-# itself is always present (cheap no-op spans by default).
-opentelemetry = { workspace = true, optional = true }
-opentelemetry_sdk = { workspace = true, optional = true }
-opentelemetry-otlp = { workspace = true, optional = true }
-tracing-opentelemetry = { workspace = true, optional = true }
 
 # Async + serialisation
 serde.workspace = true
@@ -41,7 +34,6 @@ serde_json.workspace = true
 schemars.workspace = true
 # Names the argument at fault when a tool's arguments do not deserialize.
 serde_path_to_error = "0.1"
-bincode.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 tokio.workspace = true
@@ -53,12 +45,9 @@ regex.workspace = true
 
 # Lock-free concurrency
 dashmap.workspace = true
-crossbeam-queue.workspace = true
 arc-swap.workspace = true
 parking_lot.workspace = true
 rayon.workspace = true
-num_cpus.workspace = true
-rand.workspace = true
 
 # Observability
 log.workspace = true
@@ -94,15 +83,9 @@ dhat.workspace = true
 # the composition root's; whether search runs is the configuration's
 # (`enable_embeddings` and an embedding engine).
 default = []
-# Pulls the OpenTelemetry exporter stack — see services::observability.
-# When disabled, every `#[tracing::instrument]` macro compiles to a
-# no-op via tracing's ZST spans, so library users pay nothing.
-otel = [
-    "dep:opentelemetry",
-    "dep:opentelemetry_sdk",
-    "dep:opentelemetry-otlp",
-    "dep:tracing-opentelemetry",
-]
+# A placeholder the daemon's `otel` turns on: the exporter stack is not
+# written yet, and its dependencies come with it.
+otel = []
 
 [package.metadata.docs.rs]
 all-features = true

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.0] - 2026-11-15
 
+### Security
+
+- **Dependencies with advisories are updated** (found 2026-11-15 by the first public CI run):
+  `rmcp` 3.10.0 (the MCP server and client), `ammonia` 4.2.5, `pulldown-cmark` 0.13.6,
+  `libz-sys` 1.1.33, `zstd` 0.13.5. Four advisories stay, each named with its reason in
+  `deny.toml` and `.cargo/audit.toml`: three in what SurrealDB 3.3 depends on (fixed in
+  SurrealDB 4.0) and one in `zip` through `candle-core`.
+
 ### Changed
 
 - **An archived workspace is read-only** (owner 2026-11-15: the docs said so and nothing

@@ -9,7 +9,7 @@
 use pcx_module_api::view::{HTML_MIME, View};
 use pcx_module_api::{ModuleError, ModuleErrorKind, Resource, Rpc, Scope};
 
-/// One view of a running module, as [`Host::view`] reads it.
+/// One view of a running module, as [`crate::Host::view`] reads it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModuleView {
     /// The view.

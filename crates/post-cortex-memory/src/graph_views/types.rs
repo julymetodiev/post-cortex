@@ -22,7 +22,7 @@ pub struct GraphNode {
     pub aliases: Vec<String>,
     /// Optional description.
     pub description: Option<String>,
-    /// Centrality-based importance in (0, 1], see [`analytics::importance`].
+    /// Centrality-based importance in (0, 1], see [`post_cortex_core::graph::analytics::importance`].
     pub importance: f32,
     /// How often it was mentioned.
     pub mention_count: u32,

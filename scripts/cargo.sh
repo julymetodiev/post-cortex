@@ -18,8 +18,14 @@
 #                                     builds it (target/release/pcx; with TARGET,
 #                                     e.g. x86_64-apple-darwin, target/TARGET/release/pcx:
 #                                     another target compiles everything once more)
+#   scripts/cargo.sh rustdoc          the documentation of the workspace, as CI builds it
+#                                     (a broken link inside it is an error)
+#   scripts/cargo.sh deny             cargo deny check, as CI runs it (advisories,
+#                                     licences, bans, sources; deny.toml); compiles nothing
 #   scripts/cargo.sh cloud            clippy of ../post-cortex-cloud
 #   scripts/cargo.sh cloud-test [FILTER]  nextest over ../post-cortex-cloud
+#   scripts/cargo.sh cloud-deny       the advisories of ../post-cortex-cloud's Cargo.lock,
+#                                     by this repository's deny.toml
 #   scripts/cargo.sh cloud-bins       every binary of ../post-cortex-cloud (pcx-cloud),
 #                                     debug, for a local stack: built with its tests, as
 #                                     `bins`, so its features are cloud-test's
@@ -31,7 +37,7 @@ cd "$(dirname "$0")/.."
 root=$PWD
 logs=$root/target/cargo-logs
 mkdir -p "$logs"
-what=${1:?usage: scripts/cargo.sh clippy|build|bins|test|ignored|doc|node|pcx|cloud|cloud-test|cloud-bins [FILTER]}
+what=${1:?usage: scripts/cargo.sh clippy|build|bins|test|ignored|doc|rustdoc|deny|node|pcx|cloud|cloud-test|cloud-deny|cloud-bins [FILTER]}
 shift
 log=$logs/$(date +%Y%m%d-%H%M%S)-$what.log
 F=(--workspace --all-features)
@@ -50,6 +56,9 @@ case $what in
   # system library (ROCKSDB_LIB_DIR) would make a binary that runs only there.
   pcx) ROCKSDB_COMPILE=1 SNAPPY_COMPILE=1 ROCKSDB_INCLUDE_DIR=rocksdb/include \
     cargo build --release -p post-cortex-daemon --bin pcx --features surrealdb-storage,rerank-voyage ${1:+--target "$1"} >"$log" 2>&1; rc=$? ;;
+  rustdoc) RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc "${F[@]}" --no-deps --keep-going >"$log" 2>&1; rc=$? ;;
+  deny) cargo deny check >"$log" 2>&1; rc=$? ;;
+  cloud-deny) (cd ../post-cortex-cloud && cargo deny check --config "$root/deny.toml" advisories) >"$log" 2>&1; rc=$? ;;
   cloud) (cd ../post-cortex-cloud && cargo clippy --workspace --all-targets -- -D warnings) >"$log" 2>&1; rc=$? ;;
   cloud-test) (cd ../post-cortex-cloud && cargo nextest run --workspace --no-fail-fast "$@") >"$log" 2>&1; rc=$? ;;
   cloud-bins) (cd ../post-cortex-cloud && cargo build --workspace --bins --tests) >"$log" 2>&1; rc=$? ;;
@@ -57,8 +66,12 @@ case $what in
 esac
 compiled=$(grep -cE '^ *(Compiling|Checking) ' "$log")
 heavy=$(grep -cE '^ *(Compiling|Checking) (surrealdb|librocksdb)' "$log")
-grep -E '^(error|warning)' -A7 "$log" | cut -c1-140 | head -40
-grep -E '^ *Summary|^test result|FAILED|FAIL ' "$log" | cut -c1-140 | tail -12
+case $what in
+  # cargo deny warns of every duplicate version; what it refuses is an error.
+  *deny) sed $'s/\x1b\\[[0-9;]*m//g' "$log" | grep -E '^error' -A7 | cut -c1-140 | head -60 ;;
+  *) grep -E '^(error|warning)' -A7 "$log" | cut -c1-140 | head -40 ;;
+esac
+grep -E '^ *Summary|^test result|FAILED|FAIL |^advisories ' "$log" | cut -c1-140 | tail -12
 echo "$what rc=$rc; compiled $compiled crates; log $log"
 [ "$heavy" = 0 ] || echo "!!! surrealdb or rocksdb compiled ($heavy): say why to the owner"
 # One set of features is four directories of surrealdb-core: its build script compiled and run,

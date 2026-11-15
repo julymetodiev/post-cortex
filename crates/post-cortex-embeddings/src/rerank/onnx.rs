@@ -75,7 +75,7 @@ fn init(runtime: Option<&str>) -> Result<Environment> {
         .filter(|p| !p.is_empty())
         .unwrap_or("libonnxruntime.so");
     let builder =
-        ort::init_from(&path).map_err(|e| runtime_error(format!("loading {path}: {e}")))?;
+        ort::init_from(path).map_err(|e| runtime_error(format!("loading {path}: {e}")))?;
     builder.build().map_err(runtime_error)
 }
 

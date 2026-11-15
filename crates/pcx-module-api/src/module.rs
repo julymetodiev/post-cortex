@@ -100,7 +100,7 @@ impl ThroughHost {
 #[async_trait]
 pub trait ModuleHost: Send + Sync {
     /// The manifests of the running modules, in load order (checked by the
-    /// host; [`crate::DeclaredKind::running`] reads their document kinds).
+    /// host; [`crate::DeclaredKind::of`] reads their document kinds).
     ///
     /// # Errors
     /// `FailedPrecondition` before this module runs; `Unavailable` when the

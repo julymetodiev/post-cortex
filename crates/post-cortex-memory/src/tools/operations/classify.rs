@@ -116,8 +116,8 @@ pub struct Amount {
 pub enum By {
     /// This many (a delete gives them back: the counter goes down).
     Known(i64),
-    /// The value of this field of the answer ([`answer_count`],
-    /// [`grpc_answer_count`]).
+    /// The value of this field of the answer ([`answer_count`] for a JSON
+    /// answer; the transport reads a gRPC answer's the same way).
     Answer(&'static str),
 }
 

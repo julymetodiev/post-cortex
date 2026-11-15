@@ -14,7 +14,7 @@
 //! their merged graph. Views read all of the scope's records, not only the
 //! hot tier, and derive everything else from them: which records mention
 //! an entity, which records assert an edge, and when each record and edge
-//! held ([`temporal`]).
+//! held ([`post_cortex_core::graph::temporal`]).
 
 use std::sync::Arc;
 
