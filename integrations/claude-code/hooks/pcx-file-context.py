@@ -61,18 +61,20 @@ def main():
     if args:
         if len(args) < 2:
             return
-        workspace_id = args[0]
         url, token, _ = pcx_resolve.resolve_server(args[1], args[2] if len(args) > 2 else None)
+        context = None
     else:
         context = pcx_resolve.global_context(__file__, event)
         if context is None:
             return
-        url, token, ids = context
-        workspace_id = ids["workspace_id"]
     texts = []
     for path in files:
         one = dict(event, hook_event_name="PreToolUse", tool_input={"file_path": path})
-        answer = pcx_resolve.post_event(url, token, {"workspace_id": workspace_id}, one, timeout=3)
+        if context is None:
+            answer = pcx_resolve.post_event(url, token, {"workspace_id": args[0]}, one, timeout=3)
+        else:
+            answer, ids = pcx_resolve.post_project_event(context, event, "workspace_id", one, timeout=3)
+            context = context[:2] + (ids,)
         text = pcx_resolve.added_context(answer)
         if text:
             texts.append(text)

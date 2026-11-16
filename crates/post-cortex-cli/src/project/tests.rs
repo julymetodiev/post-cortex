@@ -119,22 +119,120 @@ fn pinned_ids_from_the_file_then_instructions() {
 }
 
 #[test]
-fn cache_counts_only_for_the_same_backend() {
+fn identities_match_the_shared_vectors() {
+    let Some(vectors) = vectors() else { return };
+    for case in vectors["identities"].as_array().unwrap() {
+        let token = case["token"].as_str();
+        assert_eq!(
+            identity(token).as_deref(),
+            case["identity"].as_str(),
+            "{token:?}"
+        );
+    }
+}
+
+#[test]
+fn cache_entries_match_the_shared_vectors() {
+    let Some(vectors) = vectors() else { return };
+    let cases = vectors["cache"].as_array().unwrap();
+    assert!(cases.len() > 5);
+    let ids = Ids {
+        session_id: S.into(),
+        workspace_id: W.into(),
+    };
+    for case in cases {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(CACHE_FILE),
+            json!({ "k": case["entry"] }).to_string(),
+        )
+        .unwrap();
+        let identity = identity(case["token"].as_str());
+        let url = case["url"].as_str().unwrap();
+        let expected = case["hit"].as_bool().unwrap().then(|| ids.clone());
+        assert_eq!(
+            cached_ids(tmp.path(), "k", url, identity.as_deref()),
+            expected,
+            "{}",
+            case["why"]
+        );
+    }
+}
+
+#[test]
+fn cache_counts_only_for_the_same_backend_and_identity() {
     let tmp = tempfile::tempdir().unwrap();
     let ids = Ids {
         session_id: S.into(),
         workspace_id: W.into(),
     };
-    assert_eq!(cached_ids(tmp.path(), "k", "http://a"), None);
-    cache_ids(tmp.path(), "k", "http://a/", &ids);
-    cache_ids(tmp.path(), "other", "http://b", &ids);
-    assert_eq!(cached_ids(tmp.path(), "k", "http://a"), Some(ids));
-    assert_eq!(cached_ids(tmp.path(), "k", "http://b"), None);
+    let mine = identity(Some("key-of-my-org"));
+    let theirs = identity(Some("key-of-the-new-org"));
+    assert_eq!(
+        cached_ids(tmp.path(), "k", "http://a", mine.as_deref()),
+        None
+    );
+    cache_ids(tmp.path(), "k", "http://a/", mine.as_deref(), &ids);
+    cache_ids(tmp.path(), "other", "http://b", None, &ids);
+    assert_eq!(
+        cached_ids(tmp.path(), "k", "http://a", mine.as_deref()),
+        Some(ids.clone())
+    );
+    assert_eq!(
+        cached_ids(tmp.path(), "k", "http://b", mine.as_deref()),
+        None
+    );
+    // Another organisation's key on the same backend is a miss.
+    assert_eq!(
+        cached_ids(tmp.path(), "k", "http://a", theirs.as_deref()),
+        None
+    );
+    assert_eq!(cached_ids(tmp.path(), "k", "http://a", None), None);
+    assert_eq!(
+        cached_ids(tmp.path(), "other", "http://b", None),
+        Some(ids.clone())
+    );
     let v = read_json(&tmp.path().join(CACHE_FILE));
     assert_eq!(
         v["k"],
-        json!({"workspace_id": W, "session_id": S, "url": "http://a"})
+        json!({"workspace_id": W, "session_id": S, "url": "http://a", "identity": mine})
     );
+    assert_eq!(
+        v["other"],
+        json!({"workspace_id": W, "session_id": S, "url": "http://b"})
+    );
+
+    // Refused ids are dropped, and only the entry holding them.
+    let stale = Ids {
+        session_id: "s".into(),
+        workspace_id: "w".into(),
+    };
+    assert!(!forget_ids(
+        tmp.path(),
+        "k",
+        "http://a",
+        mine.as_deref(),
+        &stale
+    ));
+    assert!(!forget_ids(
+        tmp.path(),
+        "k",
+        "http://a",
+        theirs.as_deref(),
+        &ids
+    ));
+    assert!(forget_ids(
+        tmp.path(),
+        "k",
+        "http://a",
+        mine.as_deref(),
+        &ids
+    ));
+    assert_eq!(
+        cached_ids(tmp.path(), "k", "http://a", mine.as_deref()),
+        None
+    );
+    assert_eq!(cached_ids(tmp.path(), "other", "http://b", None), Some(ids));
 }
 
 /// A refused resolution reports the server's message, not only the status.
@@ -170,6 +268,7 @@ async fn refused_resolution_quotes_the_server() {
             author: "test",
             workspace: None,
             config_dir: dir,
+            identity: None,
             instruction_files: &[],
         }
     }

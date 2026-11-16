@@ -29,8 +29,13 @@
 //! 2. the ids in the instructions file a project mode setup wrote before
 //!    (`AGENTS.md` for the pcx hooks, `CLAUDE.md` for the Claude Code ones);
 //! 3. the cache `projects.json` in the config directory
-//!    (`{"<key>":{"workspace_id","session_id","url"}}`, an entry counts only
-//!    for the same backend URL);
+//!    (`{"<key>":{"workspace_id","session_id","url","identity"}}`), an entry
+//!    counts only for the same backend URL and the same [`identity`] (the
+//!    first 16 hex of the sha256 of the bearer token, never the token; absent
+//!    without one). An entry from before identities is a miss for a backend
+//!    reached with a token: it is resolved again and overwritten. Ids the
+//!    backend refuses (HTTP 403 or 404) are dropped ([`forget_ids`]), so the
+//!    next hook resolves them again;
 //! 4. `POST /api/projects/resolve` `{key, name, client, workspace}` (the
 //!    workspace from `hosts.<author>.workspace` of `config.json`), whose
 //!    answer is cached.
@@ -110,11 +115,27 @@ fn is_scheme(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c))
 }
 
+/// The first 16 hex of the sha256 of `text`.
+fn sha256_16(text: &str) -> String {
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// `local:<first 16 hex of sha256(root)>`.
 pub fn local_key(root: &str) -> String {
-    let digest = Sha256::digest(root.as_bytes());
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    format!("local:{}", &hex[..16])
+    format!("local:{}", sha256_16(root))
+}
+
+/// Who a cache entry was resolved as: the first 16 hex of the sha256 of the
+/// (trimmed) bearer token, never the token itself; `None` without one.
+pub fn identity(token: Option<&str>) -> Option<String> {
+    token
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(sha256_16)
 }
 
 /// The nearest directory at or above `dir` holding `.git` (a directory, or
@@ -228,26 +249,62 @@ pub fn write_pinned(root: &Path, ids: &Ids) -> Result<crate::clients::common::Ch
     )
 }
 
-/// The cached ids of `key` for the backend at `url`.
-pub fn cached_ids(config_dir: &Path, key: &str, url: &str) -> Option<Ids> {
-    let cache = read_json(&config_dir.join(CACHE_FILE));
-    let entry = &cache[key];
-    let same = entry["url"].as_str()?.trim_end_matches('/') == url.trim_end_matches('/');
-    same.then(|| ids_of(entry)).flatten()
+/// The ids of a cache entry when it is for the backend at `url` and
+/// `identity` (see [`identity`]).
+fn entry_ids(entry: &Value, url: &str, identity: Option<&str>) -> Option<Ids> {
+    let same_url = entry["url"].as_str()?.trim_end_matches('/') == url.trim_end_matches('/');
+    let same_identity = entry["identity"].as_str() == identity;
+    (same_url && same_identity).then(|| ids_of(entry)).flatten()
 }
 
-/// Remember the ids of `key` for the backend at `url` (best effort: a
-/// cache that cannot be written only costs a request next time).
-pub fn cache_ids(config_dir: &Path, key: &str, url: &str, ids: &Ids) {
+/// The cached ids of `key` for the backend at `url` as `identity`.
+pub fn cached_ids(config_dir: &Path, key: &str, url: &str, identity: Option<&str>) -> Option<Ids> {
+    entry_ids(&read_json(&config_dir.join(CACHE_FILE))[key], url, identity)
+}
+
+/// Remember the ids of `key` for the backend at `url` as `identity` (best
+/// effort: a cache that cannot be written only costs a request next time).
+pub fn cache_ids(config_dir: &Path, key: &str, url: &str, identity: Option<&str>, ids: &Ids) {
     let path = config_dir.join(CACHE_FILE);
     let mut cache = read_json(&path);
-    cache[key] = json!({
+    let mut entry = json!({
         "workspace_id": ids.workspace_id,
         "session_id": ids.session_id,
         "url": url.trim_end_matches('/'),
     });
+    if let Some(identity) = identity {
+        entry["identity"] = json!(identity);
+    }
+    cache[key] = entry;
+    write_cache(config_dir, &cache);
+}
+
+/// Drop the cached entry of `key` when it holds `ids` for the backend at
+/// `url` as `identity` (ids the backend refused); whether one was dropped.
+pub fn forget_ids(
+    config_dir: &Path,
+    key: &str,
+    url: &str,
+    identity: Option<&str>,
+    ids: &Ids,
+) -> bool {
+    let mut cache = read_json(&config_dir.join(CACHE_FILE));
+    if entry_ids(&cache[key], url, identity).as_ref() != Some(ids) {
+        return false;
+    }
+    if let Some(entries) = cache.as_object_mut() {
+        entries.remove(key);
+    }
+    write_cache(config_dir, &cache);
+    true
+}
+
+/// Write `cache` to `projects.json` in `config_dir` through a temporary
+/// file (best effort: a failure is reported on stderr).
+fn write_cache(config_dir: &Path, cache: &Value) {
+    let path = config_dir.join(CACHE_FILE);
     let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
-    let written = serde_json::to_string_pretty(&cache)
+    let written = serde_json::to_string_pretty(cache)
         .map_err(std::io::Error::from)
         .and_then(|text| {
             std::fs::create_dir_all(config_dir)?;
@@ -274,6 +331,9 @@ pub struct Resolver<'a> {
     pub workspace: Option<&'a str>,
     /// The config directory (the cache's home).
     pub config_dir: &'a Path,
+    /// The [`identity`] of the client's bearer token: cache entries of
+    /// another one are misses.
+    pub identity: Option<&'a str>,
     /// Instructions files whose ids count as fixed (see [`pinned_ids`]).
     pub instruction_files: &'a [&'a str],
 }
@@ -285,12 +345,24 @@ impl Resolver<'_> {
         if let Some(ids) = pinned_ids(&project.root, self.instruction_files) {
             return Ok(ids);
         }
-        if let Some(ids) = cached_ids(self.config_dir, &project.key, self.url) {
+        if let Some(ids) = cached_ids(self.config_dir, &project.key, self.url, self.identity) {
             return Ok(ids);
         }
         let ids = self.resolve(&project).await?;
-        cache_ids(self.config_dir, &project.key, self.url, &ids);
+        cache_ids(self.config_dir, &project.key, self.url, self.identity, &ids);
         Ok(ids)
+    }
+
+    /// Drop `ids` of the project `dir` is in from the cache, when it holds
+    /// them: the backend refused them, so the next hook resolves again.
+    pub fn forget(&self, dir: &Path, ids: &Ids) -> bool {
+        forget_ids(
+            self.config_dir,
+            &project(dir).key,
+            self.url,
+            self.identity,
+            ids,
+        )
     }
 
     /// `POST /api/projects/resolve` for `project`.

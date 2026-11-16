@@ -10,7 +10,9 @@ import {
   type Project,
   cacheIds,
   cachedIds,
+  forgetIds,
   gitOrigin,
+  identity,
   pinnedIds,
   project as findProject,
   projectRelative,
@@ -71,6 +73,8 @@ export class PostCortex {
   private readonly workspace: string | undefined;
   private readonly configDir: string;
   private readonly client: PcxClient | undefined;
+  /** The identity of the backend's token (cache entries of another are misses). */
+  private readonly identity: string | null;
   private readonly origin: (root: string) => Promise<string | null>;
   private readonly retryMs: number;
   private readonly projects = new Map<string, Promise<ResolvedProject | null>>();
@@ -96,6 +100,7 @@ export class PostCortex {
           ...(deps.log ? { log: deps.log } : {}),
         })
       : undefined;
+    this.identity = identity(this.backend?.token);
     this.origin = deps.origin ?? gitOrigin;
     this.retryMs = deps.retryMs ?? 60_000;
   }
@@ -121,19 +126,29 @@ export class PostCortex {
     const client = this.client;
     if (!client) return null;
     const found = await findProject(dir, this.origin);
-    const known = pinnedIds(found.root) ?? cachedIds(this.configDir, found.key, client.url);
+    const known = pinnedIds(found.root) ?? cachedIds(this.configDir, found.key, client.url, this.identity);
     if (known) return { ...found, ...known };
     const ids = await client.resolveProject({ key: found.key, name: found.name, workspace: this.workspace });
     if (!ids) return null;
-    cacheIds(this.configDir, found.key, client.url, ids);
+    cacheIds(this.configDir, found.key, client.url, this.identity, ids);
     return { ...found, ...ids };
+  }
+
+  /** What to do when the backend refuses `project`'s ids: drop them from the cache when it holds them and forget the resolution of `dir`, so the next call resolves again. */
+  private refused(dir: string, project: ResolvedProject): () => void {
+    return () => {
+      const client = this.client;
+      if (client && forgetIds(this.configDir, project.key, client.url, this.identity, project)) {
+        this.projects.delete(dir);
+      }
+    };
   }
 
   /** The cards text for the project at `dir` (ids line first), or null. */
   async cardsText(dir: string): Promise<string | null> {
     const project = await this.project(dir);
     if (!project || !this.client) return null;
-    const cards = await this.client.cards(project.workspace_id);
+    const cards = await this.client.cards(project.workspace_id, this.refused(dir, project));
     return cards === null ? null : cardsText(cards, project.workspace_id, project);
   }
 
@@ -147,12 +162,11 @@ export class PostCortex {
     if ([...query].length < MIN_RECALL_PROMPT_CHARS || isInjected(query)) return null;
     const project = await this.project(dir);
     if (!project || !this.client) return null;
-    const hits = await this.client.search(query, {
-      scope: "workspace",
-      id: project.workspace_id,
-      mode: "fast",
-      limit: RECALL_LIMIT,
-    });
+    const hits = await this.client.search(
+      query,
+      { scope: "workspace", id: project.workspace_id, mode: "fast", limit: RECALL_LIMIT },
+      this.refused(dir, project),
+    );
     return hits === null ? null : recallText(hits.slice(0, RECALL_LIMIT));
   }
 
@@ -165,7 +179,7 @@ export class PostCortex {
     const relative = [...new Set(paths.map((p) => projectRelative(p, project.root, dir)))];
     const texts = await Promise.all(
       relative.map(async (path) => {
-        const view = await client.file(project.workspace_id, path);
+        const view = await client.file(project.workspace_id, path, undefined, this.refused(dir, project));
         return view === null ? null : fileContextText(view, path);
       }),
     );
@@ -177,6 +191,6 @@ export class PostCortex {
     if (!this.captureEnabled || !turns.length) return false;
     const project = await this.project(dir);
     if (!project || !this.client) return false;
-    return this.client.capture(project.session_id, turns);
+    return this.client.capture(project.session_id, turns, this.refused(dir, project));
   }
 }

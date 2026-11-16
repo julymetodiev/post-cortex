@@ -1,7 +1,7 @@
 {
   "name": "post-cortex",
   "displayName": "post-cortex",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Long-term project memory for Claude Code: the post-cortex MCP server (cloud by default, or your own daemon), the post-cortex-memory skill, and hooks that keep the memory in front of every session.",
   "author": {
     "name": "Julius ML",

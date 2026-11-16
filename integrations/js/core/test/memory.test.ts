@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 
 import { PostCortex, pluginOptions } from "../src/memory.js";
+import { cacheIds, cachedIds, identity, localKey } from "../src/project.js";
 import { isInjected, stableId, textOf } from "../src/text.js";
 import { TEST_SESSION, TEST_WORKSPACE, startFakeDaemon, tempEnv } from "../src/testing.js";
 
@@ -28,6 +29,34 @@ test("resolves once per directory, caches in projects.json, then serves cards an
     const again = new PostCortex("opencode", {}, { env: t.env, origin: noGit });
     await again.cardsText(t.projectDir);
     assert.equal(daemon.requests.filter((r) => r.path === "/api/projects/resolve").length, 1);
+  } finally {
+    t.cleanup();
+    await daemon.close();
+  }
+});
+
+test("another organisation's key on the same backend resolves again; refused cached ids are dropped", async () => {
+  const daemon = await startFakeDaemon({ refuseWorkspace: "W-gone" });
+  const t = tempEnv(daemon.url);
+  try {
+    const key = localKey(realpathSync(t.projectDir));
+    const gone = { session_id: "S-gone", workspace_id: "W-gone" };
+    cacheIds(t.configDir, key, daemon.url, identity("key-of-my-org"), gone);
+    const env = { ...t.env, PC_AUTH_TOKEN: "key-of-my-org" };
+
+    // The new organisation's key: the entry of the other is a miss.
+    const theirs = new PostCortex("pi", {}, { env: { ...t.env, PC_AUTH_TOKEN: "key-of-the-new-org" }, origin: noGit });
+    assert.equal((await theirs.project(t.projectDir))?.workspace_id, TEST_WORKSPACE);
+    assert.equal(daemon.requests.filter((r) => r.path === "/api/projects/resolve").length, 1);
+
+    // The cached ids are refused (404): dropped, and the next call resolves again.
+    cacheIds(t.configDir, key, daemon.url, identity("key-of-my-org"), gone);
+    const pc = new PostCortex("pi", {}, { env, origin: noGit });
+    assert.equal(await pc.cardsText(t.projectDir), null);
+    assert.equal(cachedIds(t.configDir, key, daemon.url, identity("key-of-my-org")), null);
+    const cards = await pc.cardsText(t.projectDir);
+    assert.ok(cards?.includes(`Workspace: ${TEST_WORKSPACE}`), cards ?? "null");
+    assert.equal(daemon.requests.filter((r) => r.path === "/api/projects/resolve").length, 2);
   } finally {
     t.cleanup();
     await daemon.close();

@@ -111,6 +111,13 @@ fn claude_plugin_lines(backend: &Profile) -> Vec<String> {
             }
         ));
     }
+    // Claude Code's own memory competes with the plugin's (found 2026-11-16:
+    // "Remember: ..." went to MEMORY.md); turning it off is the person's call.
+    lines.push(
+        "  Claude Code's built-in auto memory competes with post-cortex: turn it off with \
+         /memory, or \"autoMemoryEnabled\": false in ~/.claude/settings.json"
+            .into(),
+    );
     lines
 }
 

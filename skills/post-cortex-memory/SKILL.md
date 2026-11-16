@@ -7,6 +7,10 @@ description: Long-term project memory through the post-cortex MCP server (tools 
 
 post-cortex keeps a durable, searchable memory of a project: every entry is a typed record (a decision, a fixed problem, a code change, ...) linked into an entity graph, and every entry is embedded for semantic search. It only pays off if you **read before you answer** and **write after you learn**. Memory that is never searched is dead weight; memory that is never written is empty.
 
+## 0. post-cortex is the memory
+
+When post-cortex is connected it replaces the host's own memory files. In Claude Code that is the built-in auto memory (`MEMORY.md` and the topic files in `~/.claude/projects/<project>/memory/`, or the `autoMemoryDirectory` of the settings): when the user says "remember", "note that", "from now on", or you learn something worth keeping, write it with `update_conversation_context` (section 3), not into those files, and answer later from post-cortex, not from them. A fact you find only in such a file belongs in post-cortex: record it there. To stop Claude Code from writing its own memory at all, the user can turn auto memory off (`/memory`, or `"autoMemoryEnabled": false` in the settings).
+
 ## 1. Find the session first
 
 Every read and write is scoped to a `session_id` (a UUID). Sessions are usually grouped in a workspace (`workspace_id`) so related repos or sub-projects can be searched together. Resolve them once at the start and reuse them:

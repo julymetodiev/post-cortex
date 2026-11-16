@@ -4453,7 +4453,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-agent"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -4470,7 +4470,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-approval"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "pbjson-types",
  "post-cortex-proto",
@@ -4480,7 +4480,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-bindings-tests"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "nix",
@@ -4502,7 +4502,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-board"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -4525,7 +4525,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-chief"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4547,7 +4547,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-context"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -4562,7 +4562,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-discord"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -4587,7 +4587,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-documents"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4603,7 +4603,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-dynamic"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -4630,7 +4630,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-expr"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64 0.22.1",
  "cel-core",
@@ -4647,7 +4647,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-greet"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "pcx-module-api",
@@ -4661,7 +4661,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-host"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -4691,7 +4691,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-http"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -4718,7 +4718,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-kube"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "parking_lot",
  "pcx-module-api",
@@ -4728,7 +4728,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-mail"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4752,7 +4752,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-models"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -4770,7 +4770,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-module-api"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -4792,7 +4792,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-module-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -4818,7 +4818,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-module-launcher"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "hyper-util",
@@ -4844,7 +4844,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-module-node"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "napi",
  "napi-build",
@@ -4854,7 +4854,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-module-py"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "pcx-module-core",
  "pyo3",
@@ -4862,14 +4862,14 @@ dependencies = [
 
 [[package]]
 name = "pcx-nomad"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "pcx-kube",
 ]
 
 [[package]]
 name = "pcx-observe"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -4894,7 +4894,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-openai-compat"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -4906,7 +4906,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-ops"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4928,7 +4928,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-provider-anthropic"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -4941,7 +4941,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-provider-openai"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "pcx-module-api",
  "pcx-openai-compat",
@@ -4950,7 +4950,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-provider-openrouter"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "pcx-module-api",
  "pcx-openai-compat",
@@ -4960,7 +4960,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-provider-zai"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "pcx-module-api",
  "pcx-openai-compat",
@@ -4971,7 +4971,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-sandbox"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "cap-std",
@@ -4992,7 +4992,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-scheduler"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5014,7 +5014,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-skills"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -5035,7 +5035,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-team"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "futures",
@@ -5057,7 +5057,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-telegram"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -5077,7 +5077,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-tools-fs"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "globset",
@@ -5099,7 +5099,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-tools-git"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "globset",
@@ -5120,7 +5120,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-tools-shell"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -5140,7 +5140,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-tunnel"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "axum",
  "bytes",
@@ -5164,7 +5164,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-webhooks"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -5181,7 +5181,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-workflow"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5472,7 +5472,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5498,7 +5498,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-blobs"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5513,7 +5513,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-cli"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "axum",
  "clap",
@@ -5540,7 +5540,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -5558,7 +5558,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-daemon"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -5644,7 +5644,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-embeddings"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -5673,7 +5673,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-memory"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -5716,7 +5716,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-ports"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5730,7 +5730,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-proto"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "pbjson",
  "pbjson-build",
@@ -5746,7 +5746,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-storage"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -5778,7 +5778,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-transport"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "axum",

@@ -35,7 +35,10 @@ pub async fn resolve_project(
 
 /// Where ResolveProject would put `req.key`, creating nothing.
 pub fn find_project(memory: &Memory, req: pb::FindProjectRequest) -> pb::FindProjectResponse {
-    match memory.projects.find(&req.key, req.workspace.as_deref()) {
+    match memory
+        .projects
+        .find(&req.key, req.workspace.as_deref(), req.name.as_deref())
+    {
         ProjectPlacement::Bound {
             workspace_id,
             session_id,

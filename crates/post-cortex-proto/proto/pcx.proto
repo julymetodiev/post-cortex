@@ -2324,13 +2324,17 @@ message ImportResponse {
 message FindProjectRequest {
   string key = 1;                // as in ResolveProjectRequest
   optional string workspace = 2; // workspace name a new key would join
+  // The project's name (ResolveProjectRequest.name): with no workspace, a
+  // new key joins the one workspace of that name no key is bound to.
+  optional string name = 3;
 }
 
 // Where the key is, or would go.
 message FindProjectResponse {
   // The key is bound: workspace_id is its workspace, session_id its session
   // (empty if unknown). Not bound: workspace_id is the existing workspace
-  // named in the request, empty when a new workspace would be made.
+  // the key would join (the one named, else the unbound one named like the
+  // project), empty when a new workspace would be made.
   bool bound = 1;
   // The workspace (see bound).
   string workspace_id = 2;

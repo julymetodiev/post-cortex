@@ -23,13 +23,21 @@ The turn is blocked when:
   corrects would stay current next to it. It blocks once, asking to end that
   record, or to say in one line that it replaces none.
 
+- it wrote into Claude Code's own auto memory (`memory/` of the project in
+  $CLAUDE_CONFIG_DIR/projects, else ~/.claude/projects, or the
+  `autoMemoryDirectory` of the settings) and no record came after: post-cortex
+  is the project's memory, so what was saved there is saved again with
+  `update_conversation_context` (found 2026-11-16: in a new Claude Code
+  config "Remember: ..." went to MEMORY.md and was later answered from it).
+
 With `--remind` it is the PostToolUse hook of the edit tools instead: once
 REMIND files of the project are edited and not yet recorded, each further
 edit of a new file adds a reminder to the model's context naming them, so the
 record is written while the work is fresh, not at the end from memory.
 
-Everything else - questions, status updates, subagent reports, edits outside
-the project - passes. Any error passes too, so a broken hook never traps the
+A write into the auto memory is reminded of at once. Everything else -
+questions, status updates, subagent reports, other edits outside the
+project - passes. Any error passes too, so a broken hook never traps the
 session.
 
 Usage (from .claude/settings.json):
@@ -253,6 +261,8 @@ def edited(name, args, project):
     symbol that names no file."""
     if name in EDIT_TOOLS:
         path = args.get("file_path") or args.get("notebook_path") or ""
+        if in_auto_memory(path, project):
+            return []  # what it saved is asked for as memory (unrecorded_memory)
         return [os.path.basename(path)] if path and os.path.isabs(path) and in_project(path, project) else []
     if not MCP_EDITS.match(name):
         return []
@@ -266,6 +276,75 @@ def edited(name, args, project):
         elif part.get("symbol"):
             names.append(str(part["symbol"]))
     return names
+
+
+def claude_config_dir():
+    return (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(
+        os.path.expanduser("~"), ".claude"
+    )
+
+
+def custom_memory_dirs(project):
+    """The `autoMemoryDirectory` of the user's and the project's settings."""
+    found = []
+    for path in (
+        os.path.join(claude_config_dir(), "settings.json"),
+        os.path.join(project, ".claude", "settings.json"),
+        os.path.join(project, ".claude", "settings.local.json"),
+    ):
+        try:
+            with open(path, encoding="utf-8") as f:
+                value = json.load(f).get("autoMemoryDirectory")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(value, str) and value.strip():
+            found.append(os.path.expanduser(value.strip()))
+    return found
+
+
+def in_auto_memory(path, project):
+    """Whether `path` is a file of Claude Code's own auto memory: under
+    `<config dir>/projects/<project>/memory/`, or a custom
+    `autoMemoryDirectory`."""
+    if not path or not os.path.isabs(path):
+        return False
+    if any(inside(path, d) for d in custom_memory_dirs(project)):
+        return True
+    projects = os.path.join(claude_config_dir(), "projects")
+    if not inside(path, projects):
+        return False
+    parts = os.path.relpath(os.path.realpath(path), os.path.realpath(projects)).split(os.sep)
+    return len(parts) >= 3 and parts[1] == "memory"
+
+
+def memory_written(name, args, project):
+    """The base names of auto memory files an edit tool call writes."""
+    if name not in EDIT_TOOLS:
+        return []
+    path = args.get("file_path") or args.get("notebook_path") or ""
+    return [os.path.basename(path)] if in_auto_memory(path, project) else []
+
+
+def unrecorded_memory(uses, project):
+    """The auto memory files written after the turn's last record."""
+    pending = []
+    for use in uses:
+        if is_log(use):
+            pending = []
+            continue
+        for file in memory_written(use.get("name", ""), use.get("input") or {}, project):
+            if file not in pending:
+                pending.append(file)
+    return pending
+
+
+MEMORY_NOTE = (
+    "%s went to Claude Code's built-in auto memory, which post-cortex replaces "
+    "in this project: save the same with update_conversation_context, %s "
+    "(>=1 entity, >=1 relation), and answer from post-cortex later. "
+    "(To stop Claude Code writing there, the user can set autoMemoryEnabled "
+    "false in its settings, or toggle auto memory off in /memory.)"
+)
 
 
 def is_log(use):
@@ -382,12 +461,16 @@ def stop(data, args, project):
     uses, task = turn_uses(entries_of(data["transcript_path"]))
     files, other = unrecorded(uses, task, project)
     corrections = unended_corrections(uses)
-    if not files and other is None and not corrections:
+    memory = unrecorded_memory(uses, project)
+    if not files and other is None and not corrections and not memory:
         return None
     reasons = []
-    if files or other is not None:
+    if files or other is not None or memory:
         session_id = session_of(data, args)
         session = "session_id %s" % session_id if session_id else "the project's session_id"
+    if memory:
+        reasons.append("This turn wrote " + MEMORY_NOTE % (named(memory), session) + ".")
+    if files or other is not None:
         did = []
         if files:
             did.append("edited %s, which no record after its edit names" % named(files))
@@ -416,6 +499,12 @@ def remind(data, args, project):
     # so what it adds is told apart from what was pending before it.
     this = data.get("tool_use_id")
     earlier, _ = unrecorded([u for u in uses if not this or u.get("id") != this], task, project)
+    memory = memory_written(data.get("tool_name", ""), data.get("tool_input") or {}, project)
+    if memory:
+        session_id = session_of(data, args)
+        session = "session_id %s" % session_id if session_id else "the project's session_id"
+        text = "[PCX] " + MEMORY_NOTE % (named(memory), session)
+        return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": text}}
     current = edited(data.get("tool_name", ""), data.get("tool_input") or {}, project)
     new = [f for f in dict.fromkeys(current) if f not in earlier]
     files = earlier + new

@@ -51,20 +51,17 @@ def main():
         return
     args = sys.argv[1:]
     payload = pcx_resolve.read_payload(sys.stdin)
+    event = dict(payload, hook_event_name="SessionStart")
     if args:
         if len(args) < 2:
             return
-        workspace_id, ids = args[0], None
         url, token, _ = pcx_resolve.resolve_server(args[1], args[2] if len(args) > 2 else None)
+        answer = pcx_resolve.post_event(url, token, {"workspace_id": args[0]}, event)
     else:
         context = pcx_resolve.global_context(__file__, payload)
         if context is None:
             return
-        url, token, ids = context
-        workspace_id = ids["workspace_id"]
-    event = dict(payload, hook_event_name="SessionStart")
-    answer = pcx_resolve.post_event(url, token, {"workspace_id": workspace_id}, event)
-    if ids:
+        answer, ids = pcx_resolve.post_project_event(context, payload, "workspace_id", event)
         answer = answer_with_ids(answer, ids)
     if pcx_resolve.added_context(answer):
         print(json.dumps(answer))

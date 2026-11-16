@@ -33,6 +33,7 @@ fn claude_code_setup_points_at_the_plugin() {
     assert!(cloud.contains("/plugin marketplace add julymetodiev/post-cortex"));
     assert!(cloud.contains("/plugin install post-cortex@post-cortex"));
     assert!(cloud.contains("keep the url"));
+    assert!(cloud.contains("\"autoMemoryEnabled\": false"), "{cloud}");
     let local = claude_plugin_lines(&profile("self", "http://127.0.0.1:3737")).join("\n");
     assert!(local.contains("url = http://127.0.0.1:3737"), "{local}");
     assert!(local.contains("auth_token"), "{local}");

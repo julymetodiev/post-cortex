@@ -202,17 +202,18 @@ def detach():
 
 
 def target(args, data):
-    """(session_id, url, token) to send to, or None."""
+    """(session_id, url, token, context) to send to, or None; context is
+    global_context's for a hook started without ids, else None."""
     if args:
         if len(args) < 2:
             return None
         url, token, _ = pcx_resolve.resolve_server(args[1], args[2] if len(args) > 2 else None)
-        return args[0], url, token
+        return args[0], url, token, None
     context = pcx_resolve.global_context(__file__, data)
     if context is None:
         return None
     url, token, ids = context
-    return ids["session_id"], url, token
+    return ids["session_id"], url, token, context
 
 
 def main():
@@ -235,7 +236,7 @@ def main():
         resolved = target(args, data)
         if resolved is None:
             return
-        session_id, url, token = resolved
+        session_id, url, token, context = resolved
         event = {
             "hook_event_name": "Stop",
             "session_id": data.get("session_id") or "",
@@ -246,7 +247,10 @@ def main():
             body = pcx_resolve.event_body(scope, event)
             print(json.dumps(body, ensure_ascii=False, indent=2))
             return
-        pcx_resolve.post_event(url, token, scope, event, timeout=30)
+        if context is None:
+            pcx_resolve.post_event(url, token, scope, event, timeout=30)
+        else:
+            pcx_resolve.post_project_event(context, data, "session_id", event, timeout=30)
     finally:
         if not dry_run and hasattr(os, "fork"):
             os._exit(0)

@@ -8,9 +8,11 @@ import { fileURLToPath } from "node:url";
 import {
   cacheIds,
   cachedIds,
+  forgetIds,
   gitConfigDir,
   gitOriginFromConfig,
   gitRoot,
+  identity,
   localKey,
   normalizeRemote,
   originFromConfigText,
@@ -28,7 +30,28 @@ const vectors = JSON.parse(
 ) as {
   remotes: Array<{ url: string; key: string | null; name: string | null }>;
   local: Array<{ root: string; key: string }>;
+  identities: Array<{ token: string | null; identity: string | null }>;
+  cache: Array<{ why: string; entry: unknown; url: string; token: string | null; hit: boolean }>;
 };
+
+test("shared identity vectors", () => {
+  assert.ok(vectors.identities.length > 0);
+  for (const v of vectors.identities) assert.equal(identity(v.token), v.identity, JSON.stringify(v.token));
+});
+
+test("shared cache vectors: an entry counts for its backend and identity only", () => {
+  assert.ok(vectors.cache.length > 5);
+  for (const v of vectors.cache) {
+    const t = tempEnv();
+    try {
+      writeFileSync(join(t.configDir, "projects.json"), JSON.stringify({ k: v.entry }));
+      const expected = v.hit ? { session_id: S, workspace_id: W } : null;
+      assert.deepEqual(cachedIds(t.configDir, "k", v.url, identity(v.token)), expected, v.why);
+    } finally {
+      t.cleanup();
+    }
+  }
+});
 
 test("shared remote vectors", () => {
   assert.ok(vectors.remotes.length > 0);
@@ -148,17 +171,29 @@ test("uuid after a label skips markdown and non-uuids", () => {
   assert.equal(uuidAfter("Session ID: 1234", "Session ID"), null);
 });
 
-test("cache: per key, valid for the same url only, other keys kept", () => {
+test("cache: per key, valid for the same url and identity only, other keys kept", () => {
   const t = tempEnv();
   try {
+    const mine = identity("key-of-my-org");
+    const theirs = identity("key-of-the-new-org");
+    const ids = { session_id: S, workspace_id: W };
     writeFileSync(join(t.configDir, "projects.json"), JSON.stringify({ other: { x: 1 } }));
-    assert.equal(cachedIds(t.configDir, "k", "http://a"), null);
-    cacheIds(t.configDir, "k", "http://a/", { session_id: S, workspace_id: W });
-    assert.deepEqual(cachedIds(t.configDir, "k", "http://a"), { session_id: S, workspace_id: W });
-    assert.equal(cachedIds(t.configDir, "k", "http://b"), null);
+    assert.equal(cachedIds(t.configDir, "k", "http://a", mine), null);
+    cacheIds(t.configDir, "k", "http://a/", mine, ids);
+    assert.deepEqual(cachedIds(t.configDir, "k", "http://a", mine), ids);
+    assert.equal(cachedIds(t.configDir, "k", "http://b", mine), null);
+    assert.equal(cachedIds(t.configDir, "k", "http://a", theirs), null);
+    assert.equal(cachedIds(t.configDir, "k", "http://a", null), null);
     const file = JSON.parse(readFileSync(join(t.configDir, "projects.json"), "utf8"));
     assert.deepEqual(file.other, { x: 1 });
-    assert.deepEqual(file.k, { workspace_id: W, session_id: S, url: "http://a" });
+    assert.deepEqual(file.k, { workspace_id: W, session_id: S, url: "http://a", identity: mine });
+
+    // refused ids are dropped, only from the entry that holds them
+    assert.equal(forgetIds(t.configDir, "k", "http://a", mine, { session_id: "s", workspace_id: "w" }), false);
+    assert.equal(forgetIds(t.configDir, "k", "http://a", theirs, ids), false);
+    assert.equal(forgetIds(t.configDir, "k", "http://a", mine, ids), true);
+    assert.equal(cachedIds(t.configDir, "k", "http://a", mine), null);
+    assert.deepEqual(JSON.parse(readFileSync(join(t.configDir, "projects.json"), "utf8")).other, { x: 1 });
   } finally {
     t.cleanup();
   }

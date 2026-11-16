@@ -1,6 +1,6 @@
 {
   "name": "post-cortex",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Long-term project memory for Gemini CLI: the post-cortex MCP server (cloud by default, or your own daemon), its rules, the post-cortex-memory skill and memory hooks.",
   "contextFileName": "GEMINI.md",
   "mcpServers": {

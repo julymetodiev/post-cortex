@@ -50,11 +50,21 @@ project's post-cortex session and workspace, first hit wins:
    memory;
 2. the ids in `CLAUDE.md` (projects set up before the plugin; `pcx setup --project`
    moves them to `.post-cortex.json`);
-3. the cache `~/.post-cortex/projects.json`;
+3. the cache `~/.post-cortex/projects.json`, for the same backend URL and the same key
+   (an entry holds `identity`, a sha256 prefix of the key, never the key; another
+   organisation's key resolves anew, and ids the backend refuses with 403 or 404 are
+   dropped and resolved again);
 4. `POST /api/projects/resolve` with the project key: the git `origin` remote normalised
    (`git@github.com:a/b.git` is `github.com/a/b`), else a hash of the repository path.
-   The first session in a project creates a workspace and a session named after it;
-   teammates on the same remote get the same ones.
+   The first session in a project joins the one workspace of the project's name that no
+   other project uses yet (as the app's onboarding makes it), else creates a workspace
+   named after it, with a session; teammates on the same remote get the same ones.
+
+Claude Code's own auto memory (`~/.claude/projects/<project>/memory/`) competes with
+post-cortex: turn it off with `/memory` or `"autoMemoryEnabled": false` in
+`~/.claude/settings.json`. A plugin cannot change that setting. While it is on, the rules
+say post-cortex replaces it, a write into it is reminded at once, and the Stop hook asks
+for the same to be recorded with `update_conversation_context`.
 
 The card hook prints the session and workspace ids with the cards, and the compaction
 hook prints them again, so the agent knows where to log.

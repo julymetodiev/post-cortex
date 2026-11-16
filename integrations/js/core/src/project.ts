@@ -15,7 +15,11 @@
 //   1. `.post-cortex.json` {"session_id","workspace_id"} at the root;
 //   2. the ids in an instructions file at the root (AGENTS.md, CLAUDE.md);
 //   3. the cache projects.json in the config directory, keyed by project key,
-//      valid for the same backend URL;
+//      valid for the same backend URL and the same identity (the first 16 hex
+//      of the sha256 of the bearer token, never the token; absent without
+//      one). An entry from before identities is a miss for a backend reached
+//      with a token, so it is resolved again; ids the backend refuses (HTTP
+//      403 or 404) are dropped (forgetIds);
 //   4. POST /api/projects/resolve, whose answer is cached.
 
 import { execFile } from "node:child_process";
@@ -83,9 +87,17 @@ export function normalizeRemote(raw: string | null | undefined): string | null {
   return `${host}/${path}`;
 }
 
+const sha256_16 = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex").slice(0, 16);
+
 /** `local:<first 16 hex of sha256(root)>`. */
 export function localKey(root: string): string {
-  return `local:${createHash("sha256").update(root, "utf8").digest("hex").slice(0, 16)}`;
+  return `local:${sha256_16(root)}`;
+}
+
+/** Who a cache entry was resolved as: the first 16 hex of the sha256 of the (trimmed) bearer token, never the token itself; null without one. */
+export function identity(token: string | null | undefined): string | null {
+  const trimmed = token?.trim();
+  return trimmed ? sha256_16(trimmed) : null;
 }
 
 /** The nearest directory at or above `dir` holding `.git` (a directory, or the file of a worktree or submodule). */
@@ -239,21 +251,23 @@ export function pinnedIds(root: string, files: readonly string[] = INSTRUCTION_F
 
 const noSlash = (url: string): string => url.replace(/\/+$/, "");
 
-/** The cached ids of `key` for the backend at `url`. */
-export function cachedIds(configDir: string, key: string, url: string): Ids | null {
-  const entry = readJsonObject(join(configDir, CACHE_FILE))[key];
+/** The ids of a cache entry when it is for the backend at `url` as `who` (see {@link identity}). */
+function entryIds(entry: unknown, url: string, who: string | null): Ids | null {
   if (typeof entry !== "object" || entry === null) return null;
-  const cachedUrl = (entry as Record<string, unknown>).url;
-  if (typeof cachedUrl !== "string" || noSlash(cachedUrl) !== noSlash(url)) return null;
+  const record = entry as Record<string, unknown>;
+  if (typeof record.url !== "string" || noSlash(record.url) !== noSlash(url)) return null;
+  if ((clean(record.identity) ?? null) !== who) return null;
   return idsOf(entry);
 }
 
-/** Remember the ids of `key` for the backend at `url` (best effort). */
-export function cacheIds(configDir: string, key: string, url: string, ids: Ids): void {
+/** The cached ids of `key` for the backend at `url` as `who` (see {@link identity}). */
+export function cachedIds(configDir: string, key: string, url: string, who: string | null): Ids | null {
+  return entryIds(readJsonObject(join(configDir, CACHE_FILE))[key], url, who);
+}
+
+function writeCache(configDir: string, cache: Record<string, unknown>): void {
   try {
     const path = join(configDir, CACHE_FILE);
-    const cache = readJsonObject(path);
-    cache[key] = { workspace_id: ids.workspace_id, session_id: ids.session_id, url: noSlash(url) };
     mkdirSync(configDir, { recursive: true });
     const tmp = `${path}.${process.pid}.tmp`;
     writeFileSync(tmp, `${JSON.stringify(cache, null, 2)}\n`);
@@ -261,6 +275,28 @@ export function cacheIds(configDir: string, key: string, url: string, ids: Ids):
   } catch {
     // a cache that cannot be written only costs a request next time
   }
+}
+
+/** Remember the ids of `key` for the backend at `url` as `who` (best effort). */
+export function cacheIds(configDir: string, key: string, url: string, who: string | null, ids: Ids): void {
+  const cache = readJsonObject(join(configDir, CACHE_FILE));
+  cache[key] = {
+    workspace_id: ids.workspace_id,
+    session_id: ids.session_id,
+    url: noSlash(url),
+    ...(who ? { identity: who } : {}),
+  };
+  writeCache(configDir, cache);
+}
+
+/** Drop the cached entry of `key` when it holds `ids` for the backend at `url` as `who` (ids the backend refused); true when one was dropped. */
+export function forgetIds(configDir: string, key: string, url: string, who: string | null, ids: Ids): boolean {
+  const cache = readJsonObject(join(configDir, CACHE_FILE));
+  const held = entryIds(cache[key], url, who);
+  if (!held || held.session_id !== ids.session_id || held.workspace_id !== ids.workspace_id) return false;
+  delete cache[key];
+  writeCache(configDir, cache);
+  return true;
 }
 
 /**

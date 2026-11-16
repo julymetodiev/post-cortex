@@ -68,6 +68,7 @@ async fn resolve_project_over_grpc() {
             pb::FindProjectRequest {
                 key: key.to_string(),
                 workspace: workspace.map(String::from),
+                name: None,
             },
         )
     };

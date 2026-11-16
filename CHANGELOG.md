@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-16
+
+### Fixed
+
+- **The project cache is kept per key.** `~/.post-cortex/projects.json` entries now carry
+  `identity` (the first 16 hex of the sha256 of the bearer token, never the token): another
+  organisation's key on the same backend resolves anew instead of writing into the first one's
+  session. Ids the backend refuses (403 or 404) are dropped from the cache and resolved again.
+  Same in the Claude Code hooks, `pcx` and the JS core.
+- **A first agent joins the workspace the app's onboarding made.** A new project key with no
+  `workspace` joins the one workspace of the project's name that no key is bound to yet,
+  instead of making a second one; with none, or two or more, a new one is made, and a
+  workspace another key is bound to is never taken. gRPC `FindProject` takes the `name`.
+- **Claude Code's auto memory no longer wins over post-cortex.** The rules and the skill say
+  post-cortex replaces it, the Stop hook asks for a write into the auto-memory directory to be
+  recorded with `update_conversation_context`, and `pcx setup` says how to turn it off.
+
 ## [0.6.0] - 2026-11-15
 
 ### Fixed

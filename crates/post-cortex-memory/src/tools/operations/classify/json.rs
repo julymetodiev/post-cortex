@@ -66,15 +66,21 @@ fn with_scope_selector(json: &Value) -> Value {
     json
 }
 
-/// The project key `json` resolves (`key` and `workspace`).
+/// The project key `json` resolves (`key`, `workspace` and `name`).
 fn project(json: &Value) -> Option<ProjectKey> {
     let key = at(json, "key")?.as_str()?.to_string();
-    let workspace = at(json, "workspace")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|w| !w.is_empty())
-        .map(String::from);
-    Some(ProjectKey { key, workspace })
+    let text = |field: &str| {
+        at(json, field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(String::from)
+    };
+    Some(ProjectKey {
+        key,
+        workspace: text("workspace"),
+        name: text("name"),
+    })
 }
 
 fn amounts(tallies: &[Tally], json: &Value, sign: i64) -> Result<Vec<Amount>, ClassifyError> {

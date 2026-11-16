@@ -86,10 +86,11 @@ impl Memory {
             return Ok(());
         }
         if let Some(project) = &call.project {
-            let placed = match self
-                .projects
-                .find(&project.key, project.workspace.as_deref())
-            {
+            let placed = match self.projects.find(
+                &project.key,
+                project.workspace.as_deref(),
+                project.name.as_deref(),
+            ) {
                 ProjectPlacement::Bound { workspace_id, .. }
                 | ProjectPlacement::Joins { workspace_id } => Some(workspace_id),
                 ProjectPlacement::NewWorkspace => None,

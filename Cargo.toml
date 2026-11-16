@@ -62,7 +62,7 @@ members = [
 default-members = ["crates/post-cortex"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 authors = ["Julius ML"]
 license = "MIT"
@@ -208,60 +208,60 @@ serial_test = { version = "3.3", features = ["async"] }
 # Intra-workspace path deps. Versions match [workspace.package].version so a
 # `cargo publish` from any member resolves siblings on crates.io rather than
 # the local path.
-post-cortex-proto = { version = "0.6.0", path = "crates/post-cortex-proto" }
-post-cortex-core = { version = "0.6.0", path = "crates/post-cortex-core" }
-post-cortex-ports = { version = "0.6.0", path = "crates/post-cortex-ports" }
+post-cortex-proto = { version = "0.6.1", path = "crates/post-cortex-proto" }
+post-cortex-core = { version = "0.6.1", path = "crates/post-cortex-core" }
+post-cortex-ports = { version = "0.6.1", path = "crates/post-cortex-ports" }
 # default-features = false at the workspace level so storage (which only
 # needs the data types) can take it cleanly; consumers that want the BERT
 # stack add `features = ["bert"]` explicitly.
-post-cortex-embeddings = { version = "0.6.0", path = "crates/post-cortex-embeddings", default-features = false }
-post-cortex-storage = { version = "0.6.0", path = "crates/post-cortex-storage" }
-post-cortex-blobs = { version = "0.6.0", path = "crates/post-cortex-blobs" }
-post-cortex-memory = { version = "0.6.0", path = "crates/post-cortex-memory" }
-post-cortex-transport = { version = "0.6.0", path = "crates/post-cortex-transport" }
-pcx-module-api = { version = "0.6.0", path = "crates/pcx-module-api" }
-pcx-module-core = { version = "0.6.0", path = "crates/pcx-module-core" }
+post-cortex-embeddings = { version = "0.6.1", path = "crates/post-cortex-embeddings", default-features = false }
+post-cortex-storage = { version = "0.6.1", path = "crates/post-cortex-storage" }
+post-cortex-blobs = { version = "0.6.1", path = "crates/post-cortex-blobs" }
+post-cortex-memory = { version = "0.6.1", path = "crates/post-cortex-memory" }
+post-cortex-transport = { version = "0.6.1", path = "crates/post-cortex-transport" }
+pcx-module-api = { version = "0.6.1", path = "crates/pcx-module-api" }
+pcx-module-core = { version = "0.6.1", path = "crates/pcx-module-core" }
 # The bindings of other languages to the module core (docs/modules/dynamic.md).
 pyo3 = "0.30"
 napi = { version = "3", default-features = false, features = ["napi9", "async", "tokio_rt"] }
 napi-derive = "3"
 napi-build = "2"
-pcx-tunnel = { version = "0.6.0", path = "crates/pcx-tunnel" }
-pcx-host = { version = "0.6.0", path = "crates/pcx-host" }
-pcx-sandbox = { version = "0.6.0", path = "crates/pcx-sandbox" }
-pcx-module-launcher = { version = "0.6.0", path = "crates/pcx-module-launcher" }
-pcx-approval = { version = "0.6.0", path = "crates/pcx-approval" }
-pcx-dynamic = { version = "0.6.0", path = "crates/pcx-dynamic" }
-pcx-tools-fs = { version = "0.6.0", path = "crates/pcx-tools-fs" }
-pcx-tools-shell = { version = "0.6.0", path = "crates/pcx-tools-shell" }
-pcx-tools-git = { version = "0.6.0", path = "crates/pcx-tools-git" }
-pcx-documents = { version = "0.6.0", path = "crates/pcx-documents" }
-pcx-board = { version = "0.6.0", path = "crates/pcx-board" }
-pcx-chief = { version = "0.6.0", path = "crates/pcx-chief" }
-pcx-kube = { version = "0.6.0", path = "crates/pcx-kube" }
-pcx-nomad = { version = "0.6.0", path = "crates/pcx-nomad" }
-pcx-observe = { version = "0.6.0", path = "crates/pcx-observe" }
-pcx-ops = { version = "0.6.0", path = "crates/pcx-ops" }
-pcx-scheduler = { version = "0.6.0", path = "crates/pcx-scheduler" }
-pcx-mail = { version = "0.6.0", path = "crates/pcx-mail" }
-pcx-http = { version = "0.6.0", path = "crates/pcx-http" }
-pcx-expr = { version = "0.6.0", path = "crates/pcx-expr" }
-pcx-workflow = { version = "0.6.0", path = "crates/pcx-workflow" }
-pcx-skills = { version = "0.6.0", path = "crates/pcx-skills" }
-pcx-telegram = { version = "0.6.0", path = "crates/pcx-telegram" }
-pcx-discord = { version = "0.6.0", path = "crates/pcx-discord" }
-pcx-webhooks = { version = "0.6.0", path = "crates/pcx-webhooks" }
-pcx-openai-compat = { version = "0.6.0", path = "crates/pcx-openai-compat" }
-pcx-provider-zai = { version = "0.6.0", path = "crates/pcx-provider-zai" }
-pcx-provider-openai = { version = "0.6.0", path = "crates/pcx-provider-openai" }
-pcx-provider-openrouter = { version = "0.6.0", path = "crates/pcx-provider-openrouter" }
-pcx-provider-anthropic = { version = "0.6.0", path = "crates/pcx-provider-anthropic" }
-pcx-models = { version = "0.6.0", path = "crates/pcx-models" }
-pcx-agent = { version = "0.6.0", path = "crates/pcx-agent" }
-pcx-context = { version = "0.6.0", path = "crates/pcx-context" }
-pcx-team = { version = "0.6.0", path = "crates/pcx-team" }
-post-cortex-cli = { version = "0.6.0", path = "crates/post-cortex-cli" }
-post-cortex-daemon = { version = "0.6.0", path = "crates/post-cortex-daemon" }
+pcx-tunnel = { version = "0.6.1", path = "crates/pcx-tunnel" }
+pcx-host = { version = "0.6.1", path = "crates/pcx-host" }
+pcx-sandbox = { version = "0.6.1", path = "crates/pcx-sandbox" }
+pcx-module-launcher = { version = "0.6.1", path = "crates/pcx-module-launcher" }
+pcx-approval = { version = "0.6.1", path = "crates/pcx-approval" }
+pcx-dynamic = { version = "0.6.1", path = "crates/pcx-dynamic" }
+pcx-tools-fs = { version = "0.6.1", path = "crates/pcx-tools-fs" }
+pcx-tools-shell = { version = "0.6.1", path = "crates/pcx-tools-shell" }
+pcx-tools-git = { version = "0.6.1", path = "crates/pcx-tools-git" }
+pcx-documents = { version = "0.6.1", path = "crates/pcx-documents" }
+pcx-board = { version = "0.6.1", path = "crates/pcx-board" }
+pcx-chief = { version = "0.6.1", path = "crates/pcx-chief" }
+pcx-kube = { version = "0.6.1", path = "crates/pcx-kube" }
+pcx-nomad = { version = "0.6.1", path = "crates/pcx-nomad" }
+pcx-observe = { version = "0.6.1", path = "crates/pcx-observe" }
+pcx-ops = { version = "0.6.1", path = "crates/pcx-ops" }
+pcx-scheduler = { version = "0.6.1", path = "crates/pcx-scheduler" }
+pcx-mail = { version = "0.6.1", path = "crates/pcx-mail" }
+pcx-http = { version = "0.6.1", path = "crates/pcx-http" }
+pcx-expr = { version = "0.6.1", path = "crates/pcx-expr" }
+pcx-workflow = { version = "0.6.1", path = "crates/pcx-workflow" }
+pcx-skills = { version = "0.6.1", path = "crates/pcx-skills" }
+pcx-telegram = { version = "0.6.1", path = "crates/pcx-telegram" }
+pcx-discord = { version = "0.6.1", path = "crates/pcx-discord" }
+pcx-webhooks = { version = "0.6.1", path = "crates/pcx-webhooks" }
+pcx-openai-compat = { version = "0.6.1", path = "crates/pcx-openai-compat" }
+pcx-provider-zai = { version = "0.6.1", path = "crates/pcx-provider-zai" }
+pcx-provider-openai = { version = "0.6.1", path = "crates/pcx-provider-openai" }
+pcx-provider-openrouter = { version = "0.6.1", path = "crates/pcx-provider-openrouter" }
+pcx-provider-anthropic = { version = "0.6.1", path = "crates/pcx-provider-anthropic" }
+pcx-models = { version = "0.6.1", path = "crates/pcx-models" }
+pcx-agent = { version = "0.6.1", path = "crates/pcx-agent" }
+pcx-context = { version = "0.6.1", path = "crates/pcx-context" }
+pcx-team = { version = "0.6.1", path = "crates/pcx-team" }
+post-cortex-cli = { version = "0.6.1", path = "crates/post-cortex-cli" }
+post-cortex-daemon = { version = "0.6.1", path = "crates/post-cortex-daemon" }
 
 [profile.dev]
 # No debug info. On macOS a build's debug info stays in its object files

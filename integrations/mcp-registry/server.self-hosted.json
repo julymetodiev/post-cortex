@@ -3,7 +3,7 @@
   "name": "io.github.julymetodiev/post-cortex",
   "title": "post-cortex",
   "description": "Long-term project memory for coding agents: typed records, entity graph, hybrid search.",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "websiteUrl": "https://post-cortex.com",
   "repository": {
     "url": "https://github.com/julymetodiev/post-cortex",
@@ -46,7 +46,7 @@
       "registryType": "cargo",
       "registryBaseUrl": "https://crates.io",
       "identifier": "post-cortex-daemon",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "transport": {
         "type": "stdio"
       },

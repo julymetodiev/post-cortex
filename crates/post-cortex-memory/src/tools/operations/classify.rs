@@ -93,13 +93,17 @@ impl Classified {
 /// The operations of a card, the user card when they name no workspace.
 const USER_CARD: [&str; 2] = ["card.get", "card.update"];
 
-/// A project key and the name of the workspace a new key joins.
+/// A project key, the name of the workspace a new key joins and the
+/// project's own name (a new key naming no workspace joins the one
+/// unbound workspace of that name).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectKey {
     /// The key.
     pub key: String,
     /// The workspace's name (trimmed, never blank).
     pub workspace: Option<String>,
+    /// The project's name (trimmed, never blank).
+    pub name: Option<String>,
 }
 
 /// How much a counter moves.

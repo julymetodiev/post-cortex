@@ -27,6 +27,8 @@ export interface FakeDaemonOptions {
   search?: (body: Record<string, unknown>) => unknown;
   /** Answer every request with this status instead. */
   status?: number;
+  /** Answer 404 to every request naming this workspace (query or body), as a backend without it does. */
+  refuseWorkspace?: string;
   /** Delay every answer (timeouts). */
   delayMs?: number;
 }
@@ -104,6 +106,8 @@ export async function startFakeDaemon(options: FakeDaemonOptions = {}): Promise<
         res.end(JSON.stringify(value));
       };
       if (options.status) return send(options.status, { error: "forced" });
+      const named = url.searchParams.get("workspace_id") ?? (body as { id?: unknown } | undefined)?.id;
+      if (options.refuseWorkspace && named === options.refuseWorkspace) return send(404, { error: "no such workspace" });
       switch (`${req.method} ${url.pathname}`) {
         case "POST /api/projects/resolve":
           return send(200, { workspace_id: TEST_WORKSPACE, session_id: TEST_SESSION, created: true });

@@ -91,7 +91,8 @@ fn mcp_calls_reach_their_operation_and_scope() {
         c.project,
         Some(ProjectKey {
             key: "github.com/a/b".into(),
-            workspace: Some("acme".into())
+            workspace: Some("acme".into()),
+            name: None,
         })
     );
 }

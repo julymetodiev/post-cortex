@@ -23,7 +23,9 @@ except ImportError:  # an older copy of the hooks without the resolver
 
 RULES = (
     "Rules: 1) Search PCX before answering code/arch questions "
-    "2) Log discoveries to PCX after"
+    "2) Log discoveries to PCX after "
+    "3) PCX replaces Claude Code's auto memory: \"remember\" means "
+    "update_conversation_context, never a memory/*.md file"
 )
 
 

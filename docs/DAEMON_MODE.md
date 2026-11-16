@@ -768,12 +768,16 @@ The caller computes the key: the `origin` remote URL without scheme, user and
 `local:<first 16 hex of the sha256 of the absolute git root or working
 directory>`. The same key always gets the same workspace and session, so
 teammates on the same remote share them; a session deleted meanwhile is
-replaced by a new one. A new key gets a workspace and a session named `name`,
-or, with `workspace`, a session in the workspace of that name (created if
-missing). Same as MCP `session` `resolve_project` and gRPC `ResolveProject`.
-gRPC `FindProject` (`key`, optional `workspace`) answers where a key would
-go without creating anything: its bound workspace and session, else the
-existing workspace of that name, else nothing.
+replaced by a new one. A new key gets a session named `name` in the
+workspace named `workspace` (created if missing); without `workspace`, in the
+one workspace named `name` that no project key is bound to yet (one made
+before any agent connected, as the web app's onboarding makes it), else in a
+new workspace named `name`. Two or more such workspaces are no guess: a new
+one is made; a workspace another key is bound to is never joined this way.
+Same as MCP `session` `resolve_project` and gRPC `ResolveProject`. gRPC
+`FindProject` (`key`, optional `workspace` and `name`) answers where a key
+would go without creating anything: its bound workspace and session, else
+the workspace it would join, else nothing.
 
 ```bash
 curl -X POST http://127.0.0.1:3737/api/projects/resolve \
@@ -974,7 +978,13 @@ the project the client runs in (the payload's `cwd`, else the process cwd):
 2. the ids in the project's `AGENTS.md` (`CLAUDE.md` for the Claude Code
    hooks), from a project setup made before;
 3. the cache `~/.post-cortex/projects.json` (per project key, valid for the
-   same backend URL);
+   same backend URL and the same key: an entry carries `identity`, the first
+   16 hex of the sha256 of the bearer token, never the token, so another
+   organisation's key on the same URL resolves anew; an entry written before
+   identities counts only for a backend reached without a token, and is
+   otherwise resolved again and overwritten; ids the backend refuses with
+   HTTP 403 or 404 are dropped from the cache, and the next hook resolves
+   again);
 4. `POST /api/projects/resolve` with the project key (see
    [Project resolution](#project-resolution)), `client` the client's author
    name and `workspace` from `hosts.<author>.workspace` in `config.json`.

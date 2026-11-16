@@ -1,5 +1,5 @@
 {
-  "description": "Project key test vectors (hybrid contract section 2). Asserted by pcx (crates/post-cortex-daemon/src/bin/pcx/project.rs), the Python hooks (templates/pcx_resolve.py) and every native plugin. remotes: git origin URL -> key and name; key null means the URL is not a remote with a host, so the project falls back to its local key. local: absolute root path -> local key (sha256 of the UTF-8 path, first 16 hex).",
+  "description": "Project key test vectors (hybrid contract section 2). Asserted by pcx (crates/post-cortex-cli/src/project.rs), the Python hooks (crates/post-cortex-cli/templates/pcx_resolve.py) and every native plugin. remotes: git origin URL -> key and name; key null means the URL is not a remote with a host, so the project falls back to its local key. local: absolute root path -> local key (sha256 of the UTF-8 path, first 16 hex). identities: bearer token -> the identity a projects.json entry is stored with (sha256 of the trimmed token, first 16 hex; null without a token). cache: a projects.json entry, the backend url and token asked with, and whether its ids are used (hit) or the project is resolved again.",
   "remotes": [
     { "url": "https://github.com/julymetodiev/post-cortex.git", "key": "github.com/julymetodiev/post-cortex", "name": "post-cortex" },
     { "url": "https://github.com/julymetodiev/post-cortex", "key": "github.com/julymetodiev/post-cortex", "name": "post-cortex" },
@@ -27,5 +27,23 @@
     { "root": "/home/a/proj", "key": "local:4bd27bda97cc490a" },
     { "root": "/Users/alex/dev/my project", "key": "local:780819f3ef6414dd" },
     { "root": "/srv/x", "key": "local:c0fdb79966bef2dd" }
+  ],
+  "identities": [
+    {"token": "pcx_example_key_org_a", "identity": "fee7ae80b488da14"},
+    {"token": "  pcx_example_key_org_a\n", "identity": "fee7ae80b488da14"},
+    {"token": "pcx_example_key_org_b", "identity": "231c5c0456858149"},
+    {"token": "", "identity": null},
+    {"token": "  ", "identity": null},
+    {"token": null, "identity": null}
+  ],
+  "cache": [
+    {"why": "same backend, same key", "entry": {"workspace_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "session_id": "11111111-2222-3333-4444-555555555555", "url": "https://api.pcx.is", "identity": "fee7ae80b488da14"}, "url": "https://api.pcx.is", "token": "pcx_example_key_org_a", "hit": true},
+    {"why": "trailing slashes do not count", "entry": {"workspace_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "session_id": "11111111-2222-3333-4444-555555555555", "url": "https://api.pcx.is/", "identity": "fee7ae80b488da14"}, "url": "https://api.pcx.is", "token": "pcx_example_key_org_a", "hit": true},
+    {"why": "another backend", "entry": {"workspace_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "session_id": "11111111-2222-3333-4444-555555555555", "url": "https://api.pcx.is", "identity": "fee7ae80b488da14"}, "url": "http://127.0.0.1:3737", "token": "pcx_example_key_org_a", "hit": false},
+    {"why": "the same backend with another organisation's key", "entry": {"workspace_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "session_id": "11111111-2222-3333-4444-555555555555", "url": "https://api.pcx.is", "identity": "fee7ae80b488da14"}, "url": "https://api.pcx.is", "token": "pcx_example_key_org_b", "hit": false},
+    {"why": "an entry from before identities, reached with a key: resolved again", "entry": {"workspace_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "session_id": "11111111-2222-3333-4444-555555555555", "url": "https://api.pcx.is"}, "url": "https://api.pcx.is", "token": "pcx_example_key_org_a", "hit": false},
+    {"why": "an entry from before identities, a daemon without a key", "entry": {"workspace_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "session_id": "11111111-2222-3333-4444-555555555555", "url": "http://127.0.0.1:3737"}, "url": "http://127.0.0.1:3737", "token": null, "hit": true},
+    {"why": "an entry of a key, asked without one", "entry": {"workspace_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "session_id": "11111111-2222-3333-4444-555555555555", "url": "http://127.0.0.1:3737", "identity": "fee7ae80b488da14"}, "url": "http://127.0.0.1:3737", "token": null, "hit": false},
+    {"why": "no session id", "entry": {"workspace_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "url": "https://api.pcx.is", "identity": "fee7ae80b488da14"}, "url": "https://api.pcx.is", "token": "pcx_example_key_org_a", "hit": false}
   ]
 }

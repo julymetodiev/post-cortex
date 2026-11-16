@@ -89,6 +89,12 @@ export interface ResolveRequest {
   workspace?: string | undefined;
 }
 
+/** Called when the backend refuses the ids a request names. */
+export type Refused = () => void;
+
+/** The answers that refuse a request's ids: forbidden (another organisation's, or outside the key's workspaces) and not found. */
+const REFUSED = [403, 404];
+
 export class PcxClient {
   readonly url: string;
   readonly author: string;
@@ -113,8 +119,17 @@ export class PcxClient {
     return headers;
   }
 
-  /** The JSON answer of `path`, or null on any failure; with `reportRefusal`, a 4xx answer is logged with its body. */
-  async request(method: "GET" | "POST", path: string, body?: unknown, reportRefusal = false): Promise<unknown> {
+  /**
+   * The JSON answer of `path`, or null on any failure; with `reportRefusal`, a 4xx answer is logged with its body.
+   * `refused` is called when the backend refuses the ids the request names (HTTP 403 or 404).
+   */
+  async request(
+    method: "GET" | "POST",
+    path: string,
+    body?: unknown,
+    reportRefusal = false,
+    refused?: Refused,
+  ): Promise<unknown> {
     try {
       const init: RequestInit = {
         method,
@@ -124,6 +139,7 @@ export class PcxClient {
       if (body !== undefined) init.body = JSON.stringify(body);
       const response = await this.fetchFn(`${this.url}${path}`, init);
       if (!response.ok) {
+        if (refused && REFUSED.includes(response.status)) refused();
         if (reportRefusal && response.status >= 400 && response.status < 500) {
           const text = (await response.text().catch(() => "")).trim().slice(0, MAX_ERROR_CHARS);
           this.log(`${method} ${path}: HTTP ${response.status}${text ? `: ${text}` : ""}`);
@@ -138,27 +154,30 @@ export class PcxClient {
   }
 
   /** `{user, workspace}` cards, or null. */
-  cards(workspaceId: string): Promise<unknown> {
-    return this.request("GET", `/api/cards?workspace_id=${encodeURIComponent(workspaceId)}`);
+  cards(workspaceId: string, refused?: Refused): Promise<unknown> {
+    return this.request("GET", `/api/cards?workspace_id=${encodeURIComponent(workspaceId)}`, undefined, false, refused);
   }
 
   /** The file view of `path` (project-relative), or null. */
-  file(workspaceId: string, path: string, limit = 3): Promise<unknown> {
+  file(workspaceId: string, path: string, limit = 3, refused?: Refused): Promise<unknown> {
     return this.request(
       "GET",
       `/api/file?workspace_id=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}&limit=${limit}`,
+      undefined,
+      false,
+      refused,
     );
   }
 
   /** Hits for `query` (malformed ones dropped), or null on any failure. */
-  async search(query: string, options: SearchOptions): Promise<SearchHit[] | null> {
-    const answer = await this.request("POST", "/api/search", { query, ...options });
+  async search(query: string, options: SearchOptions, refused?: Refused): Promise<SearchHit[] | null> {
+    const answer = await this.request("POST", "/api/search", { query, ...options }, false, refused);
     const results = typeof answer === "object" && answer !== null ? (answer as Record<string, unknown>).results : undefined;
     return Array.isArray(results) ? results.filter(isHit) : null;
   }
 
   /** Store turns in the session's message stream; true when stored (or nothing to store). */
-  async capture(sessionId: string, turns: readonly Turn[]): Promise<boolean> {
+  async capture(sessionId: string, turns: readonly Turn[], refused?: Refused): Promise<boolean> {
     const messages = turns
       .filter((t) => t.text.trim())
       .map((t) => ({
@@ -172,7 +191,7 @@ export class PcxClient {
         ...(t.timestamp ? { timestamp: t.timestamp } : {}),
       }));
     if (!messages.length) return true;
-    return (await this.request("POST", "/api/messages", { session_id: sessionId, messages })) !== null;
+    return (await this.request("POST", "/api/messages", { session_id: sessionId, messages }, false, refused)) !== null;
   }
 
   /** The workspace and session of a project key (created on first use), or null. */

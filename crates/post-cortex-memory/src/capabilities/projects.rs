@@ -89,9 +89,11 @@ impl Projects {
     ///
     /// A bound key returns its workspace and session (`created: false`); if
     /// that session was deleted, a new one named `name` takes its place. A
-    /// new key gets a new session named `name` in the workspace named
-    /// `workspace` (created if missing), else in a new workspace named
-    /// `name` (`created: true`).
+    /// new key gets a new session named `name` (`created: true`) in the
+    /// workspace named `workspace` (created if missing); without
+    /// `workspace`, in the one workspace named `name` that no project key is
+    /// bound to (one made before the project was first resolved, say by the
+    /// web app's onboarding), else in a new workspace named `name`.
     ///
     /// # Errors
     /// `InvalidArgument`: the key must be 1 to 512 printable characters
@@ -139,17 +141,34 @@ impl Projects {
             });
         }
 
-        let workspace_id = match workspace {
+        let (workspace_id, session_id) = match workspace {
             Some(ws_name) => {
-                let _name = locks.lock(format!("name:{ws_name}")).await;
-                match self.workspaces.find_by_name(ws_name) {
-                    Some(ws) => ws.id,
-                    None => self.create_workspace(ws_name, key).await?,
-                }
+                let workspace_id = {
+                    let _name = locks.lock(format!("name:{ws_name}")).await;
+                    match self.workspaces.find_by_name(ws_name) {
+                        Some(ws) => ws.id,
+                        None => self.create_workspace(ws_name, key).await?,
+                    }
+                };
+                (
+                    workspace_id,
+                    self.add_session(workspace_id, key, name).await?,
+                )
             }
-            None => self.create_workspace(name, key).await?,
+            None => {
+                // Held until the key is bound, so another new key of the same
+                // name finds the workspace taken.
+                let _name = locks.lock(format!("name:{name}")).await;
+                let workspace_id = match self.unbound_named(name) {
+                    Some(id) => id,
+                    None => self.create_workspace(name, key).await?,
+                };
+                (
+                    workspace_id,
+                    self.add_session(workspace_id, key, name).await?,
+                )
+            }
         };
-        let session_id = self.add_session(workspace_id, key, name).await?;
         info!(
             "Project {} bound to workspace {} with session {}",
             key, workspace_id, session_id
@@ -163,26 +182,43 @@ impl Projects {
 
     /// Where [`Self::resolve`] would put project `key`, found without
     /// creating or changing anything: the workspace the key is bound to,
-    /// else the existing workspace named `workspace` (trimmed, blank counts
-    /// as absent), else none (a new workspace would be made). Gateways use
-    /// it to authorise a resolution before it runs.
+    /// else the existing workspace named `workspace`, else (no `workspace`)
+    /// the one workspace named `name` that no key is bound to, else none (a
+    /// new workspace would be made). Names are trimmed; blank counts as
+    /// absent. Gateways use it to authorise a resolution before it runs.
     #[must_use]
-    pub fn find(&self, key: &str, workspace: Option<&str>) -> ProjectPlacement {
+    pub fn find(&self, key: &str, workspace: Option<&str>, name: Option<&str>) -> ProjectPlacement {
         if let Some(ws) = self.rt.workspace_manager.get_workspace_by_project(key) {
             return ProjectPlacement::Bound {
                 workspace_id: ws.id,
                 session_id: ws.project(key).map(|p| p.session_id),
             };
         }
-        match workspace
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .and_then(|name| self.workspaces.find_by_name(name))
-        {
-            Some(ws) => ProjectPlacement::Joins {
-                workspace_id: ws.id,
-            },
+        fn given(value: Option<&str>) -> Option<&str> {
+            value.map(str::trim).filter(|v| !v.is_empty())
+        }
+        let joins = match given(workspace) {
+            Some(workspace) => self.workspaces.find_by_name(workspace).map(|ws| ws.id),
+            None => given(name).and_then(|name| self.unbound_named(name)),
+        };
+        match joins {
+            Some(workspace_id) => ProjectPlacement::Joins { workspace_id },
             None => ProjectPlacement::NewWorkspace,
+        }
+    }
+
+    /// The workspace a new key named `name` joins when it names no
+    /// workspace: the only one, not archived, called `name` with no project
+    /// key bound to it. Two or more such workspaces are no guess: none.
+    fn unbound_named(&self, name: &str) -> Option<Uuid> {
+        let mut unbound = self
+            .workspaces
+            .list(false)
+            .into_iter()
+            .filter(|ws| ws.name == name && ws.projects().is_empty());
+        match (unbound.next(), unbound.next()) {
+            (Some(ws), None) => Some(ws.id),
+            _ => None,
         }
     }
 

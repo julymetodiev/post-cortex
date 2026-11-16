@@ -24,7 +24,11 @@ Project (project_ids), first hit wins:
        (written by `pcx setup --project`);
     2. the ids in CLAUDE.md at the git root (projects set up before);
     3. the cache ~/.post-cortex/projects.json, keyed by project key, valid
-       for the same backend url;
+       for the same backend url and the same identity: the first 16 hex of
+       the sha256 of the bearer token (never the token), absent without
+       one. An entry written before identities (no "identity") is a miss
+       for a backend reached with a token, so it is resolved again and
+       overwritten; ids the backend refuses (HTTP 403 or 404) are dropped;
     4. POST /api/projects/resolve {key, name, client, workspace}, then cached.
 
 Project key: the git `origin` URL normalised (no scheme, user, port or
@@ -185,8 +189,19 @@ def normalize_remote(url):
     return host + "/" + path
 
 
+def _sha256_16(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
 def local_key(root):
-    return "local:" + hashlib.sha256(root.encode("utf-8")).hexdigest()[:16]
+    return "local:" + _sha256_16(root)
+
+
+def identity(token):
+    """Who a cached entry was resolved as: the first 16 hex of the sha256 of
+    the bearer token (never the token itself), None without one."""
+    token = _clean(token)
+    return _sha256_16(token) if token else None
 
 
 def git_root(directory):
@@ -248,23 +263,44 @@ def _cache_path():
     return os.path.join(config_dir(), "projects.json")
 
 
-def cached_ids(key, url):
-    entry = _read_json(_cache_path()).get(key)
-    if not isinstance(entry, dict) or (entry.get("url") or "").rstrip("/") != url:
+def _entry_ids(entry, url, token):
+    """The ids of a cache entry when it is for the backend at `url` and the
+    identity of `token`, else None."""
+    if not isinstance(entry, dict) or (entry.get("url") or "").rstrip("/") != url.rstrip("/"):
+        return None
+    if _clean(entry.get("identity")) != identity(token):
         return None
     if _clean(entry.get("session_id")) and _clean(entry.get("workspace_id")):
         return {"session_id": entry["session_id"], "workspace_id": entry["workspace_id"]}
     return None
 
 
-def cache_ids(key, url, ids):
+def cached_ids(key, url, token):
+    return _entry_ids(_read_json(_cache_path()).get(key), url, token)
+
+
+def cache_ids(key, url, token, ids):
     cache = _read_json(_cache_path())
-    cache[key] = {
+    entry = {
         "workspace_id": ids["workspace_id"],
         "session_id": ids["session_id"],
-        "url": url,
+        "url": url.rstrip("/"),
     }
+    if identity(token):
+        entry["identity"] = identity(token)
+    cache[key] = entry
     _write_json(_cache_path(), cache)
+
+
+def forget_ids(key, url, token, ids):
+    """Drop the cached entry of `key` when it holds `ids` for this backend
+    and identity (ids the backend refused); True when one was dropped."""
+    cache = _read_json(_cache_path())
+    if _entry_ids(cache.get(key), url, token) != ids:
+        return False
+    del cache[key]
+    _write_json(_cache_path(), cache)
+    return True
 
 
 def resolve_remote(url, token, key, name, author=AUTHOR, workspace=None, timeout=5):
@@ -307,6 +343,32 @@ def post_event(url, token, scope, event, timeout=5, author=AUTHOR):
         return json.load(response)
 
 
+REFUSED = (403, 404)
+
+
+def post_project_event(context, payload, field, event, timeout=5, author=AUTHOR):
+    """post_event for a hook started without ids: `context` is
+    global_context's (url, token, ids), the scope `{field: ids[field]}`.
+    When the backend refuses the ids (HTTP 403 or 404: a workspace or
+    session it does not have, or this key may not use), the cached entry is
+    dropped and the project resolved again; the event goes once more with
+    ids that differ. Returns (answer, ids it was sent with); raises on a
+    failed request, as post_event does."""
+    url, token, ids = context
+    try:
+        return post_event(url, token, {field: ids[field]}, event, timeout, author), ids
+    except urllib.error.HTTPError as exc:
+        if exc.code not in REFUSED:
+            raise
+        key = project(project_dir(payload))[0]
+        if not forget_ids(key, url, token, ids):
+            raise
+        fresh = project_ids(payload, url, token, author)
+        if not fresh or fresh == ids:
+            raise
+    return post_event(url, token, {field: fresh[field]}, event, timeout, author), fresh
+
+
 def added_context(answer):
     """The context an answer adds for the model, or ""."""
     return ((answer or {}).get("hookSpecificOutput") or {}).get("additionalContext") or ""
@@ -329,11 +391,11 @@ def project_ids(payload=None, url=None, token=None, author=AUTHOR):
         pinned = pinned_ids(root)
         if pinned or not url:
             return pinned
-        cached = cached_ids(key, url)
+        cached = cached_ids(key, url, token)
         if cached:
             return cached
         ids = resolve_remote(url, token, key, name, author, host_settings(author)["workspace"])
-        cache_ids(key, url, ids)
+        cache_ids(key, url, token, ids)
         return ids
     except urllib.error.HTTPError as exc:  # fail open, but say why
         _report_refusal(exc)

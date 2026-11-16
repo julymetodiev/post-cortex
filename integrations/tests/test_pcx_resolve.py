@@ -53,6 +53,7 @@ class FakeDaemon:
     def __init__(self):
         self.requests = []
         self.refuse = None  # (status, text) to answer POSTs with
+        self.refuse_workspace = None  # (workspace_id, status, text) for events naming it
         daemon = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -71,8 +72,12 @@ class FakeDaemon:
                 length = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(length) or b"{}")
                 daemon.requests.append(("POST", self.path, body, dict(self.headers)))
-                if daemon.refuse:
-                    status, text = daemon.refuse
+                refused = daemon.refuse
+                named = daemon.refuse_workspace
+                if named and (body.get("scope") or {}).get("workspace_id") == named[0]:
+                    refused = named[1:]
+                if refused:
+                    status, text = refused
                     data = text.encode()
                     self.send_response(status)
                     self.send_header("Content-Type", "text/plain")
@@ -136,6 +141,24 @@ class Vectors(unittest.TestCase):
         for case in json.loads(VECTORS.read_text())["local"]:
             self.assertEqual(pcx_resolve.local_key(case["root"]), case["key"])
 
+    def test_identities(self):
+        for case in json.loads(VECTORS.read_text())["identities"]:
+            self.assertEqual(pcx_resolve.identity(case["token"]), case["identity"], case["token"])
+
+
+class CacheVectors(unittest.TestCase):
+    def test_cache_entries_count_for_their_backend_and_identity(self):
+        cases = json.loads(VECTORS.read_text())["cache"]
+        self.assertGreater(len(cases), 5)
+        for case in cases:
+            with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+                os.environ, {"PC_CONFIG_DIR": tmp}
+            ):
+                Path(tmp, "projects.json").write_text(json.dumps({"k": case["entry"]}))
+                ids = pcx_resolve.cached_ids("k", case["url"], case["token"])
+                expected = {"session_id": S, "workspace_id": W} if case["hit"] else None
+                self.assertEqual(ids, expected, case["why"])
+
 
 @unittest.skipIf(shutil.which("git") is None, "git is not installed")
 class Projects(Isolated):
@@ -198,14 +221,47 @@ class Projects(Isolated):
         self.assertEqual(headers.get("Authorization"), "Bearer tok")
         cache = json.loads((self.config / "projects.json").read_text())
         self.assertEqual(
-            cache["github.com/a/proj"], {"workspace_id": W, "session_id": S, "url": daemon.url}
+            cache["github.com/a/proj"],
+            {
+                "workspace_id": W,
+                "session_id": S,
+                "url": daemon.url,
+                "identity": pcx_resolve.identity("tok"),
+            },
         )
+        self.assertNotIn("tok", json.dumps(cache).replace(pcx_resolve.identity("tok"), ""))
 
         # Cached: no second request.
         self.assertEqual(pcx_resolve.project_ids(payload, daemon.url, "tok"), ids)
         self.assertEqual(len(daemon.requests), 1)
         # Another backend: the cache entry does not count.
         self.assertIsNone(pcx_resolve.project_ids(payload, "http://127.0.0.1:9", None))
+
+    def test_another_key_on_the_same_backend_resolves_again(self):
+        """Another organisation's key on the same url (found 2026-11-16: a
+        new organisation's session took the ids cached for the person's own
+        one) is resolved anew; an entry from before identities too."""
+        daemon = FakeDaemon()
+        self.addCleanup(daemon.close)
+        plain = self.tmp / "veil"
+        plain.mkdir()
+        key = pcx_resolve.project(str(plain))[0]
+        mine = {"session_id": "s-mine", "workspace_id": "w-mine"}
+        pcx_resolve.cache_ids(key, daemon.url, "key-of-my-org", mine)
+        payload = {"cwd": str(plain)}
+        self.assertEqual(pcx_resolve.project_ids(payload, daemon.url, "key-of-my-org"), mine)
+        self.assertEqual(daemon.requests, [])
+
+        theirs = pcx_resolve.project_ids(payload, daemon.url, "key-of-the-new-org")
+        self.assertEqual(theirs, {"session_id": S, "workspace_id": W})
+        self.assertEqual(len(daemon.requests), 1)
+        entry = json.loads((self.config / "projects.json").read_text())[key]
+        self.assertEqual(entry["identity"], pcx_resolve.identity("key-of-the-new-org"))
+
+        # An entry written before identities: a miss with a key.
+        self.write("projects.json", {key: dict(mine, url=daemon.url)})
+        self.assertEqual(pcx_resolve.project_ids(payload, daemon.url, "tok"), theirs)
+        self.assertEqual(len(daemon.requests), 2)
 
     def test_refusal_fails_open_with_the_server_message(self):
         daemon = FakeDaemon()
@@ -337,6 +393,34 @@ class Hooks(Isolated):
             "pcx-card.py", {"cwd": str(self.repo)}, extra_env={"PC_URL": self.daemon.url}
         )
         self.assertEqual(out, "")
+
+    def test_refused_ids_are_dropped_and_resolved_again(self):
+        """Cached ids the backend refuses (a workspace it does not have) are
+        taken out of the cache; the hook resolves again and goes on with the
+        ids it gets."""
+        key = pcx_resolve.project(str(self.repo))[0]
+        gone = {"session_id": "s-gone", "workspace_id": "w-gone"}
+        pcx_resolve.cache_ids(key, self.daemon.url, None, gone)
+        self.daemon.refuse_workspace = ("w-gone", 404, "workspace w-gone not found")
+        out = self.run_hook(
+            "pcx-card.py", {"cwd": str(self.repo)}, extra_env={"PC_URL": self.daemon.url}
+        )
+        context = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+        self.assertTrue(context.startswith("[PCX] Session: %s | Workspace: %s" % (S, W)))
+        paths = [p for _, p, _, _ in self.daemon.requests]
+        self.assertEqual(paths, ["/api/events", "/api/projects/resolve", "/api/events"])
+        cache = json.loads((self.config / "projects.json").read_text())
+        self.assertEqual(cache[key]["workspace_id"], W)
+
+        # Pinned ids are the repository's: refused, they stay, and the hook
+        # fails open without asking again.
+        self.daemon.requests.clear()
+        (self.repo / ".post-cortex.json").write_text(json.dumps(gone))
+        out = self.run_hook(
+            "pcx-card.py", {"cwd": str(self.repo)}, extra_env={"PC_URL": self.daemon.url}
+        )
+        self.assertEqual(out, "")
+        self.assertEqual([p for _, p, _, _ in self.daemon.requests], ["/api/events"])
 
     def test_card_hook_with_project_arguments(self):
         out = self.run_hook("pcx-card.py", {}, "W9", self.daemon.url)

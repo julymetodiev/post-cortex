@@ -289,9 +289,12 @@ async fn global_hook_env_resolves_lazily() {
         "http://127.0.0.1:9",
         reqwest::Client::new(),
         "codex",
-        project.path().to_path_buf(),
-        config.path().to_path_buf(),
-        None,
+        ProjectSource {
+            dir: project.path().to_path_buf(),
+            config_dir: config.path().to_path_buf(),
+            workspace: None,
+            identity: None,
+        },
         false,
     );
     assert_eq!(
@@ -324,9 +327,12 @@ async fn global_hook_env_resolves_lazily() {
         "http://127.0.0.1:9",
         reqwest::Client::new(),
         "codex",
-        lost.path().to_path_buf(),
-        config.path().to_path_buf(),
-        None,
+        ProjectSource {
+            dir: lost.path().to_path_buf(),
+            config_dir: config.path().to_path_buf(),
+            workspace: None,
+            identity: None,
+        },
         true,
     );
     assert!(env.ids().await.is_none());
@@ -344,6 +350,60 @@ async fn global_hook_env_resolves_lazily() {
         .await
         .is_err()
     );
+}
+
+/// Cached ids the backend refuses (HTTP 404 for the workspace) are dropped,
+/// so the next hook resolves the project again; ids pinned in the
+/// repository are never touched.
+#[tokio::test]
+async fn refused_cached_ids_are_dropped() {
+    let app = axum::Router::new().route(
+        "/api/events",
+        axum::routing::post(|| async { (axum::http::StatusCode::NOT_FOUND, "no such workspace") }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await });
+
+    let project = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let key = crate::project::project(project.path()).key;
+    let identity = crate::project::identity(Some("tok"));
+    let stale = crate::project::Ids {
+        session_id: "S-gone".into(),
+        workspace_id: "W-gone".into(),
+    };
+    crate::project::cache_ids(config.path(), &key, &url, identity.as_deref(), &stale);
+    let env = |identity: Option<String>| {
+        HookEnv::for_project(
+            &url,
+            reqwest::Client::new(),
+            "codex",
+            ProjectSource {
+                dir: project.path().to_path_buf(),
+                config_dir: config.path().to_path_buf(),
+                workspace: None,
+                identity,
+            },
+            false,
+        )
+    };
+    let hook = env(identity.clone());
+    assert_eq!(hook.ids().await, Some(&stale));
+    assert_eq!(hook.cards_text().await, None);
+    assert_eq!(
+        crate::project::cached_ids(config.path(), &key, &url, identity.as_deref()),
+        None
+    );
+
+    std::fs::write(
+        project.path().join(crate::project::PINNED_FILE),
+        r#"{"session_id":"S-gone","workspace_id":"W-gone"}"#,
+    )
+    .unwrap();
+    let hook = env(identity);
+    assert_eq!(hook.cards_text().await, None);
+    assert!(project.path().join(crate::project::PINNED_FILE).exists());
 }
 
 #[test]

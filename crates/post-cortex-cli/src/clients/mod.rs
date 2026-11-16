@@ -30,7 +30,7 @@ mod vscode;
 mod windsurf;
 mod zed;
 
-pub use common::{HookEnv, McpEntry, SetupContext};
+pub use common::{HookEnv, McpEntry, ProjectSource, SetupContext};
 
 /// A coding agent `pcx setup --client` can configure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, ValueEnum)]

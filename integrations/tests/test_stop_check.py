@@ -2,6 +2,7 @@
 """pcx-stop-check.py on transcripts written by hand."""
 
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -31,12 +32,15 @@ class StopCheck(unittest.TestCase):
             payload = json.loads(json.dumps(payload).replace("{root}", root))
             data = dict({"transcript_path": str(transcript), "cwd": root}, **payload)
             # With a session id the hook does not look for a project's own copy.
+            # "{root}/cfg" is Claude Code's config directory.
+            env = dict(os.environ, CLAUDE_CONFIG_DIR=root + "/cfg")
             out = subprocess.run(
                 [sys.executable, "-I", str(HOOK), *flags, "S"],
                 input=json.dumps(data),
                 capture_output=True,
                 text=True,
                 timeout=20,
+                env=env,
             )
             self.assertEqual(out.returncode, 0, out.stderr)
             self.assertEqual(out.stderr, "")
@@ -170,6 +174,52 @@ class StopCheck(unittest.TestCase):
     def test_an_edit_outside_the_project_passes(self):
         self.passes([user("fix"), tool("Write", file_path="/elsewhere/a.rs")])
 
+    def test_a_write_into_claude_codes_auto_memory_blocks(self):
+        """Found 2026-11-16: "Remember: ..." went to Claude Code's own
+        memory/MEMORY.md, outside the project, and nothing objected."""
+        memory = "{root}/cfg/projects/-Users-a-veil/memory/"
+        self.blocks(
+            [user("Remember: we publish every Sunday"), tool("Write", file_path=memory + "publishing.md"),
+             tool("Edit", file_path=memory + "MEMORY.md")],
+            "This turn wrote publishing.md, MEMORY.md went to Claude Code's built-in auto memory",
+        )
+        self.blocks([user("x"), tool("Write", file_path=memory + "a.md")], "update_conversation_context, session_id S")
+        # Recorded in post-cortex after it: passes.
+        self.passes([user("x"), tool("Write", file_path=memory + "a.md"), tool(LOG, content={"title": "Sunday"})])
+        # Elsewhere in the config directory (here inside the project): no
+        # auto memory.
+        _, out = self.run_hook([user("x"), tool("Write", file_path="{root}/cfg/projects/-Users-a-veil/t.jsonl")])
+        self.assertNotIn("auto memory", json.loads(out)["reason"])
+
+    def test_a_custom_auto_memory_directory_counts(self):
+        def entries(root):
+            return [user("x"), tool("Write", file_path=root + "/notes/m.md")]
+
+        _, out = self.run_hook_with_settings({"autoMemoryDirectory": "{root}/notes"}, entries)
+        self.assertIn("m.md went to Claude Code's built-in auto memory", json.loads(out)["reason"])
+        _, out = self.run_hook_with_settings({}, entries)
+        self.assertEqual(out, "")
+
+    def run_hook_with_settings(self, settings, entries_of):
+        """run_hook with Claude Code's user settings.json written first."""
+        with tempfile.TemporaryDirectory() as root:
+            root = str(pathlib.Path(root).resolve())
+            cfg = pathlib.Path(root) / "cfg"
+            cfg.mkdir()
+            (cfg / "settings.json").write_text(json.dumps(settings).replace("{root}", root))
+            transcript = pathlib.Path(root) / "t.jsonl"
+            transcript.write_text("\n".join(json.dumps(e) for e in entries_of(root)))
+            out = subprocess.run(
+                [sys.executable, "-I", str(HOOK), "S"],
+                input=json.dumps({"transcript_path": str(transcript), "cwd": root + "/proj"}),
+                capture_output=True,
+                text=True,
+                timeout=20,
+                env=dict(os.environ, CLAUDE_CONFIG_DIR=str(cfg)),
+            )
+            self.assertEqual(out.returncode, 0, out.stderr)
+            return root, out.stdout
+
     def test_a_task_ending_blocks(self):
         self.blocks([user("<task-notification>\n<task-id>x</task-id>\n<status>completed</status>")], "background task")
 
@@ -241,6 +291,11 @@ class Remind(unittest.TestCase):
         _, out = self.run_hook(entries, "--remind", tool_name="Write", tool_use_id="x",
                                tool_input={"file_path": "{root}/g.rs"})
         self.assertEqual(out, "")
+
+    def test_a_write_into_the_auto_memory_is_reminded_at_once(self):
+        said = self.remind(0, "cfg/projects/-Users-a-veil/memory/MEMORY.md")
+        self.assertIn("[PCX] MEMORY.md went to Claude Code's built-in auto memory", said)
+        self.assertIn("update_conversation_context, session_id S", said)
 
 
 if __name__ == "__main__":

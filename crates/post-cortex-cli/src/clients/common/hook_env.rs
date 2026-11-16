@@ -30,11 +30,19 @@ pub struct HookEnv {
 /// Where a hook's session and workspace come from.
 enum IdSource {
     Fixed(Ids),
-    Project {
-        dir: PathBuf,
-        config_dir: PathBuf,
-        workspace: Option<String>,
-    },
+    Project(ProjectSource),
+}
+
+/// The project a global hook resolves its ids from.
+pub struct ProjectSource {
+    /// The directory the client runs in.
+    pub dir: PathBuf,
+    /// The config directory (the cache's home).
+    pub config_dir: PathBuf,
+    /// `hosts.<author>.workspace`: the workspace name a new key goes into.
+    pub workspace: Option<String>,
+    /// The [`crate::project::identity`] of the hook's bearer token.
+    pub identity: Option<String>,
 }
 
 /// One conversation turn to capture.
@@ -70,27 +78,17 @@ impl HookEnv {
         )
     }
 
-    /// A global hook: the ids of the project `dir` is in, resolved on first
-    /// use (cache in `config_dir`, a new key resolved into `workspace`).
+    /// A global hook: the ids of the project `source.dir` is in, resolved
+    /// on first use (cache in `source.config_dir`, a new key resolved into
+    /// `source.workspace`).
     pub fn for_project(
         daemon_url: &str,
         client: reqwest::Client,
         author: &str,
-        dir: PathBuf,
-        config_dir: PathBuf,
-        workspace: Option<String>,
+        source: ProjectSource,
         capture: bool,
     ) -> Self {
-        let mut env = Self::with_source(
-            daemon_url,
-            client,
-            author,
-            IdSource::Project {
-                dir,
-                config_dir,
-                workspace,
-            },
-        );
+        let mut env = Self::with_source(daemon_url, client, author, IdSource::Project(source));
         env.capture = capture;
         env
     }
@@ -114,36 +112,54 @@ impl HookEnv {
     /// Whether the ids are resolved rather than given (the agent then has
     /// no instructions file naming them, so the session-start text does).
     fn resolving(&self) -> bool {
-        matches!(self.source, IdSource::Project { .. })
+        matches!(self.source, IdSource::Project(_))
+    }
+
+    /// The resolution of a global hook's ids.
+    fn resolver<'a>(&'a self, source: &'a ProjectSource) -> Resolver<'a> {
+        Resolver {
+            client: &self.client,
+            url: &self.daemon_url,
+            author: &self.author,
+            workspace: source.workspace.as_deref(),
+            config_dir: &source.config_dir,
+            identity: source.identity.as_deref(),
+            instruction_files: &["AGENTS.md"],
+        }
+    }
+
+    /// The backend refused a request naming the resolved ids (HTTP 403 or
+    /// 404): they are dropped from the cache when it holds them, so the next
+    /// hook resolves the project again.
+    fn forget_refused(&self) {
+        let IdSource::Project(source) = &self.source else {
+            return;
+        };
+        if let Some(Some(ids)) = self.resolved.get()
+            && self.resolver(source).forget(&source.dir, ids)
+        {
+            eprintln!(
+                "pcx hook: the backend refused the cached ids of {}; the next hook resolves them again",
+                source.dir.display()
+            );
+        }
     }
 
     /// The project's session and workspace; `None` when they cannot be
     /// resolved (the hook then has nothing to say).
     pub async fn ids(&self) -> Option<&Ids> {
-        let (dir, config_dir, workspace) = match &self.source {
+        let source = match &self.source {
             IdSource::Fixed(ids) => return Some(ids),
-            IdSource::Project {
-                dir,
-                config_dir,
-                workspace,
-            } => (dir, config_dir, workspace),
+            IdSource::Project(source) => source,
         };
         self.resolved
             .get_or_init(|| async {
-                let resolver = Resolver {
-                    client: &self.client,
-                    url: &self.daemon_url,
-                    author: &self.author,
-                    workspace: workspace.as_deref(),
-                    config_dir,
-                    instruction_files: &["AGENTS.md"],
-                };
-                match resolver.ids(dir).await {
+                match self.resolver(source).ids(&source.dir).await {
                     Ok(ids) => Some(ids),
                     Err(e) => {
                         eprintln!(
                             "pcx hook: cannot resolve the project of {}: {e}",
-                            dir.display()
+                            source.dir.display()
                         );
                         None
                     }
@@ -166,7 +182,14 @@ impl HookEnv {
             .send()
             .await
             .map_err(|e| e.to_string())?;
-        if !response.status().is_success() {
+        let status = response.status();
+        if !status.is_success() {
+            if matches!(
+                status,
+                reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::NOT_FOUND
+            ) {
+                self.forget_refused();
+            }
             return Err(http_error("/api/events", response).await);
         }
         let answer: Value = response.json().await.map_err(|e| e.to_string())?;

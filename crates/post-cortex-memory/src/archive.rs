@@ -43,10 +43,11 @@ impl Memory {
                 .is_ok_and(|w| w.is_archived())
         };
         let placed = call.project.as_ref().and_then(|project| {
-            match self
-                .projects
-                .find(&project.key, project.workspace.as_deref())
-            {
+            match self.projects.find(
+                &project.key,
+                project.workspace.as_deref(),
+                project.name.as_deref(),
+            ) {
                 ProjectPlacement::Bound { workspace_id, .. }
                 | ProjectPlacement::Joins { workspace_id } => Some(workspace_id),
                 ProjectPlacement::NewWorkspace => None,

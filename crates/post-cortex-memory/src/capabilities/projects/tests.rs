@@ -161,11 +161,11 @@ async fn find_project_is_read_only() {
     for backend in backends().await {
         let memory = backend.memory().await;
         assert_eq!(
-            memory.projects.find(KEY, None),
+            memory.projects.find(KEY, None, None),
             ProjectPlacement::NewWorkspace
         );
         assert_eq!(
-            memory.projects.find(KEY, Some("acme")),
+            memory.projects.find(KEY, Some("acme"), None),
             ProjectPlacement::NewWorkspace
         );
         assert_eq!(memory.workspaces.count(), 0);
@@ -174,7 +174,7 @@ async fn find_project_is_read_only() {
             .await
             .unwrap();
         assert_eq!(
-            memory.projects.find(KEY, Some(" acme ")),
+            memory.projects.find(KEY, Some(" acme "), None),
             ProjectPlacement::Joins {
                 workspace_id: acme.workspace_id
             },
@@ -182,12 +182,14 @@ async fn find_project_is_read_only() {
             backend.name
         );
         assert_eq!(
-            memory.projects.find(KEY, Some(" ")),
+            memory.projects.find(KEY, Some(" "), None),
             ProjectPlacement::NewWorkspace
         );
         // A bound key ignores the workspace name, as resolve_project does.
         assert_eq!(
-            memory.projects.find("github.com/acme/api", Some("other")),
+            memory
+                .projects
+                .find("github.com/acme/api", Some("other"), None),
             ProjectPlacement::Bound {
                 workspace_id: acme.workspace_id,
                 session_id: Some(acme.session_id),
@@ -195,9 +197,125 @@ async fn find_project_is_read_only() {
         );
         assert_eq!(memory.workspaces.count(), 1);
         assert_eq!(
-            memory.projects.find(KEY, None),
+            memory.projects.find(KEY, None, None),
             ProjectPlacement::NewWorkspace
         );
+        // acme is bound to a key: no new key named like it joins it.
+        assert_eq!(
+            memory.projects.find(KEY, None, Some("acme")),
+            ProjectPlacement::NewWorkspace
+        );
+    }
+}
+
+/// An empty workspace named `name`, no project key bound to it (what the
+/// web app's onboarding makes before any agent connects).
+async fn unbound_workspace(memory: &Memory, name: &str) -> Uuid {
+    memory
+        .workspaces
+        .create(CreateWorkspace {
+            name: name.to_string(),
+            description: String::new(),
+        })
+        .await
+        .unwrap()
+        .id
+}
+
+/// A new key that names no workspace joins the one workspace named like the
+/// project that no key is bound to, instead of making a second one; once
+/// bound, that workspace is no longer free for another key of the name.
+#[tokio::test]
+async fn new_key_joins_the_one_unbound_workspace_of_its_name() {
+    for backend in backends().await {
+        let memory = backend.memory().await;
+        let kite = unbound_workspace(&memory, "kite").await;
+        let key = "git.example.net/team/kite";
+        assert_eq!(
+            memory.projects.find(key, None, Some(" kite ")),
+            ProjectPlacement::Joins { workspace_id: kite },
+            "{}",
+            backend.name
+        );
+        let first = resolve(&memory, key, "kite", None).await.unwrap();
+        assert!(first.created);
+        assert_eq!(first.workspace_id, kite, "{}", backend.name);
+        assert_eq!(memory.workspaces.count(), 1);
+        let ws = memory.workspaces.get(kite).unwrap();
+        assert_eq!(ws.projects().len(), 1);
+        assert_eq!(
+            ws.get_session_role(&first.session_id),
+            Some(SessionRole::Primary)
+        );
+
+        // Another key of the same name finds the workspace taken.
+        let other = resolve(&memory, "github.com/fork/kite", "kite", None)
+            .await
+            .unwrap();
+        assert_ne!(other.workspace_id, kite, "{}", backend.name);
+        assert_eq!(memory.workspaces.count(), 2);
+        drop(memory);
+
+        let restarted = backend.memory().await;
+        let after = resolve(&restarted, key, "kite", None).await.unwrap();
+        assert_eq!(
+            (after.workspace_id, after.session_id, after.created),
+            (kite, first.session_id, false),
+            "{}",
+            backend.name
+        );
+    }
+}
+
+/// Two unbound workspaces of the project's name are no guess: the key gets a
+/// workspace of its own, as before.
+#[tokio::test]
+async fn two_unbound_workspaces_of_the_name_are_no_guess() {
+    for backend in backends().await {
+        let memory = backend.memory().await;
+        let a = unbound_workspace(&memory, "kite").await;
+        let b = unbound_workspace(&memory, "kite").await;
+        let key = "git.example.net/team/kite";
+        assert_eq!(
+            memory.projects.find(key, None, Some("kite")),
+            ProjectPlacement::NewWorkspace
+        );
+        let r = resolve(&memory, key, "kite", None).await.unwrap();
+        assert!(r.created);
+        assert!(![a, b].contains(&r.workspace_id), "{}", backend.name);
+        assert_eq!(memory.workspaces.count(), 3);
+    }
+}
+
+/// A workspace another key is bound to is never taken over by a new key of
+/// the same name; an unbound one of the name next to it still is.
+#[tokio::test]
+async fn a_bound_workspace_is_never_taken_over() {
+    for backend in backends().await {
+        let memory = backend.memory().await;
+        let bound = resolve(&memory, "github.com/a/kite", "kite", None)
+            .await
+            .unwrap();
+        let other = resolve(&memory, "github.com/b/kite", "kite", None)
+            .await
+            .unwrap();
+        assert_ne!(other.workspace_id, bound.workspace_id, "{}", backend.name);
+        assert_eq!(
+            memory
+                .workspaces
+                .get(bound.workspace_id)
+                .unwrap()
+                .projects()
+                .len(),
+            1
+        );
+
+        let free = unbound_workspace(&memory, "kite").await;
+        let third = resolve(&memory, "github.com/c/kite", "kite", None)
+            .await
+            .unwrap();
+        assert_eq!(third.workspace_id, free, "{}", backend.name);
+        assert_eq!(memory.workspaces.count(), 3);
     }
 }
 

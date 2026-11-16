@@ -92,9 +92,12 @@ pub async fn run(
                 &url,
                 http,
                 client.author(),
-                dir,
-                store.dir().to_path_buf(),
-                host.workspace,
+                clients::ProjectSource {
+                    dir,
+                    config_dir: store.dir().to_path_buf(),
+                    workspace: host.workspace,
+                    identity: project::identity(token.as_deref()),
+                },
                 host.capture,
             )
         }
