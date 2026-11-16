@@ -6826,22 +6826,33 @@ class FindProjectRequest(_message.Message):
 
     KEY_FIELD_NUMBER: _builtins.int
     WORKSPACE_FIELD_NUMBER: _builtins.int
+    NAME_FIELD_NUMBER: _builtins.int
     key: _builtins.str
     """as in ResolveProjectRequest"""
     workspace: _builtins.str
     """workspace name a new key would join"""
+    name: _builtins.str
+    """The project's name (ResolveProjectRequest.name): with no workspace, a
+    new key joins the one workspace of that name no key is bound to.
+    """
     def __init__(
         self,
         *,
         key: _builtins.str = ...,
         workspace: _builtins.str | None = ...,
+        name: _builtins.str | None = ...,
     ) -> None: ...
-    _HasFieldArgType: _TypeAlias = _typing.Literal["_workspace", b"_workspace", "workspace", b"workspace"]  # noqa: Y015
+    _HasFieldArgType: _TypeAlias = _typing.Literal["_name", b"_name", "_workspace", b"_workspace", "name", b"name", "workspace", b"workspace"]  # noqa: Y015
     def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
-    _ClearFieldArgType: _TypeAlias = _typing.Literal["_workspace", b"_workspace", "key", b"key", "workspace", b"workspace"]  # noqa: Y015
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["_name", b"_name", "_workspace", b"_workspace", "key", b"key", "name", b"name", "workspace", b"workspace"]  # noqa: Y015
     def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    _WhichOneofReturnType__name: _TypeAlias = _typing.Literal["name"]  # noqa: Y015
+    _WhichOneofArgType__name: _TypeAlias = _typing.Literal["_name", b"_name"]  # noqa: Y015
     _WhichOneofReturnType__workspace: _TypeAlias = _typing.Literal["workspace"]  # noqa: Y015
     _WhichOneofArgType__workspace: _TypeAlias = _typing.Literal["_workspace", b"_workspace"]  # noqa: Y015
+    @_typing.overload
+    def WhichOneof(self, oneof_group: _WhichOneofArgType__name) -> _WhichOneofReturnType__name | None: ...
+    @_typing.overload
     def WhichOneof(self, oneof_group: _WhichOneofArgType__workspace) -> _WhichOneofReturnType__workspace | None: ...
 
 Global___FindProjectRequest: _TypeAlias = FindProjectRequest  # noqa: Y015
@@ -6858,7 +6869,8 @@ class FindProjectResponse(_message.Message):
     bound: _builtins.bool
     """The key is bound: workspace_id is its workspace, session_id its session
     (empty if unknown). Not bound: workspace_id is the existing workspace
-    named in the request, empty when a new workspace would be made.
+    the key would join (the one named, else the unbound one named like the
+    project), empty when a new workspace would be made.
     """
     workspace_id: _builtins.str
     """The workspace (see bound)."""

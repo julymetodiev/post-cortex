@@ -2934,7 +2934,14 @@ export interface FindProjectRequest {
   /** as in ResolveProjectRequest */
   key: string;
   /** workspace name a new key would join */
-  workspace?: string | undefined;
+  workspace?:
+    | string
+    | undefined;
+  /**
+   * The project's name (ResolveProjectRequest.name): with no workspace, a
+   * new key joins the one workspace of that name no key is bound to.
+   */
+  name?: string | undefined;
 }
 
 /** Where the key is, or would go. */
@@ -2942,7 +2949,8 @@ export interface FindProjectResponse {
   /**
    * The key is bound: workspace_id is its workspace, session_id its session
    * (empty if unknown). Not bound: workspace_id is the existing workspace
-   * named in the request, empty when a new workspace would be made.
+   * the key would join (the one named, else the unbound one named like the
+   * project), empty when a new workspace would be made.
    */
   bound: boolean;
   /** The workspace (see bound). */
@@ -24291,7 +24299,7 @@ export const ImportResponse: MessageFns<ImportResponse> = {
 };
 
 function createBaseFindProjectRequest(): FindProjectRequest {
-  return { key: "", workspace: undefined };
+  return { key: "", workspace: undefined, name: undefined };
 }
 
 export const FindProjectRequest: MessageFns<FindProjectRequest> = {
@@ -24301,6 +24309,9 @@ export const FindProjectRequest: MessageFns<FindProjectRequest> = {
     }
     if (message.workspace !== undefined) {
       writer.uint32(18).string(message.workspace);
+    }
+    if (message.name !== undefined) {
+      writer.uint32(26).string(message.name);
     }
     return writer;
   },
@@ -24334,6 +24345,14 @@ export const FindProjectRequest: MessageFns<FindProjectRequest> = {
             message.workspace = reader.string();
             continue;
           }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -24350,6 +24369,7 @@ export const FindProjectRequest: MessageFns<FindProjectRequest> = {
     return {
       key: isSet(object.key) ? globalThis.String(object.key) : "",
       workspace: isSet(object.workspace) ? globalThis.String(object.workspace) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
     };
   },
 
@@ -24361,6 +24381,9 @@ export const FindProjectRequest: MessageFns<FindProjectRequest> = {
     if (message.workspace !== undefined) {
       obj.workspace = message.workspace;
     }
+    if (message.name !== undefined) {
+      obj.name = message.name;
+    }
     return obj;
   },
 
@@ -24371,6 +24394,7 @@ export const FindProjectRequest: MessageFns<FindProjectRequest> = {
     const message = createBaseFindProjectRequest();
     message.key = object.key ?? "";
     message.workspace = object.workspace ?? undefined;
+    message.name = object.name ?? undefined;
     return message;
   },
 };
