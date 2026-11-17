@@ -148,7 +148,8 @@ impl Deny {
     /// The paths under `dir` with a denied name, each with whether it is
     /// a directory (whose contents are then not searched), for an OS
     /// sandbox to hide; a link is not followed (its target is covered
-    /// where it lies), and the [`UNSEARCHED`] directories are skipped. A
+    /// where it lies), and the `.git`, `target` and `node_modules`
+    /// directories are skipped. A
     /// `dir` that does not exist has none.
     ///
     /// # Errors

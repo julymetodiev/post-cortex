@@ -52,7 +52,6 @@ surrealdb-storage = ["post-cortex-daemon/surrealdb-storage"]
 bert = ["post-cortex-daemon/bert"]
 rerank = ["post-cortex-daemon/rerank"]
 rerank-voyage = ["post-cortex-daemon/rerank-voyage"]
-surrealdb-tikv = ["surrealdb-storage", "post-cortex-storage/surrealdb-tikv"]
 otel = []
 
 [package.metadata.docs.rs]

@@ -60,7 +60,7 @@ pub async fn choose_ids(
                     "Session '{}' already exists ({}). Use it?",
                     existing.name, existing.id
                 ))
-                .items(&["Use existing session", "Create new session"])
+                .items(["Use existing session", "Create new session"])
                 .default(0)
                 .interact()
                 .map_err(|e| format!("Selection error: {}", e))?;
@@ -95,7 +95,7 @@ pub async fn choose_ids(
                     "Workspace '{}' already exists ({}). Use it?",
                     existing.name, existing.id
                 ))
-                .items(&["Use existing workspace", "Create new workspace"])
+                .items(["Use existing workspace", "Create new workspace"])
                 .default(0)
                 .interact()
                 .map_err(|e| format!("Selection error: {}", e))?;

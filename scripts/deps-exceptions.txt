@@ -1,0 +1,6 @@
+# Dependencies kept below their latest release (CLAUDE.md, LAW: every
+# dependency at its latest version, point 3): one line each,
+#   <ecosystem> <name> <version kept> <why>
+# on the owner's word, for a reason that is a fact. scripts/check_deps.py
+# fails on a line that no longer holds anything back.
+cargo bincode 2.0.1 bincode 3.0.0 (2025-12-16) is only a compile_error!: the project ended and 2.0.1 is its last release that builds; replacing bincode is a migration of the stored RocksDB data (owner 2026-11-17)

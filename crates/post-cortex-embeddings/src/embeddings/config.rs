@@ -100,8 +100,9 @@ impl EmbeddingModelType {
             Self::TinyBERT => 312,
             // potion-multilingual-128M outputs 256-dim vectors.
             Self::PotionMultilingual => 256,
-            // potion-code-16M outputs 512-dim vectors.
-            Self::PotionCode => 512,
+            // potion-code-16M outputs 256-dim vectors (measured on the Hub's
+            // snapshot 86848193; 512 was never true, so it never loaded).
+            Self::PotionCode => 256,
         }
     }
 

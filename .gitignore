@@ -54,6 +54,11 @@ scripts
 !/scripts/test-bindings.sh
 # The one way to run cargo here (CLAUDE.md).
 !/scripts/cargo.sh
+# Every dependency at its latest (CLAUDE.md), and the Linux gate of cargo.sh linux.
+!/scripts/check-deps.sh
+!/scripts/check_deps.py
+!/scripts/deps-exceptions.txt
+!/scripts/linux-gate.Dockerfile
 GEMINI.md
 TODO.md
 PROJECT.md

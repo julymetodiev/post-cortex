@@ -190,7 +190,10 @@ impl DryBlobs {
 #[async_trait]
 impl Blobs for DryBlobs {
     async fn put(&self, bytes: Vec<u8>) -> Result<String, ModuleError> {
-        let sha256 = format!("{:x}", Sha256::digest(&bytes));
+        let sha256: String = Sha256::digest(&bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         self.mine.lock().insert(sha256.clone(), bytes);
         Ok(sha256)
     }

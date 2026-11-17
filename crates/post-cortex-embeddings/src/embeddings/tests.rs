@@ -25,7 +25,7 @@ fn test_embedding_model_types() {
         EmbeddingModelType::PotionMultilingual.embedding_dimension(),
         256
     );
-    assert_eq!(EmbeddingModelType::PotionCode.embedding_dimension(), 512);
+    assert_eq!(EmbeddingModelType::PotionCode.embedding_dimension(), 256);
 
     assert!(EmbeddingModelType::PotionMultilingual.is_model2vec());
     assert!(EmbeddingModelType::PotionCode.is_model2vec());

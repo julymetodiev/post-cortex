@@ -54,7 +54,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `embeddings` | yes | Semantic search and vectorization (Model2Vec `potion-multilingual-128M` by default) |
 | `bert` | no | BERT embedding backend (Candle) via `post-cortex-memory/bert` and `post-cortex-daemon/bert` |
 | `surrealdb-storage` | no | SurrealDB backend |
-| `surrealdb-tikv` | no | SurrealDB + TiKV distributed KV |
 | `otel` | no | Placeholder; currently enables nothing (use `post-cortex-daemon/otel`) |
 
 ## Architecture

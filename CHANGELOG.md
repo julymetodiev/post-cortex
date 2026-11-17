@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-18
+
 ### Fixed
 
 - **A file's memory finds its own history.** The file view and the
@@ -21,9 +23,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`required_by` is read in its own direction.** `A required_by B` made A a dependent of
   B as well as B a dependent of A; impact analysis, the file view and assembled context
   now list only B.
+- **`EmbeddingModelType::PotionCode` loads.** It was declared with 512 dimensions, but
+  `minishlab/potion-code-16M` gives 256, so the load-time check always refused it; it is
+  256 now.
+- **An embedded SurrealDB (`mem://`) no longer overflows a thread's stack.** `pcx` runs its
+  async workers with the 10 MiB stack SurrealDB asks for; the default 2 MiB aborted the
+  process on a deep query.
+- **A read of "every row" is a query without `LIMIT`.** SurrealDB 4 takes only a `LIMIT`
+  that fits 32 bits; a history, page or event read that asked for all rows now has none.
+
+### Removed
+
+- **The `surrealdb-tikv` feature** (of `post-cortex`, `post-cortex-daemon` and
+  `post-cortex-storage`). SurrealDB 4 no longer ships the TiKV client in its SDK; TiKV is
+  reached through a SurrealDB server (`ws://`), as before.
 
 ### Changed
 
+- **Every dependency at its latest release**, checked by `scripts/check-deps.sh` in CI:
+  among others SurrealDB 4.0.1 (it talks to SurrealDB 3.x servers too), reqwest 0.13
+  (rustls by default), hf-hub 1.0, model2vec-rs 0.4 (the vectors of
+  `potion-multilingual-128M`, the default, are identical), rand 0.10, sha2 0.11,
+  tower-http 0.7, toml 1.2, the GitHub Actions of the workflows and the JS packages of the
+  plugins (the DeepSeek harness plugin now asks for dsh 0.2.2 and Cordis 4.1).
+  `bincode` stays at 2.0.1: 3.0.0 is only a `compile_error!`.
 - **One text for the cards and a file's memory in every client.** The JS plugins
   (opencode, kilo, pi, openclaw, the DeepSeek harness) and the opencode template ask the
   memory module for them (`POST /api/events`, a `SessionStart` and a `PreToolUse` event),
@@ -39,6 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the ignore lists. `tokenizers` follows to 0.23. `chrono`, `chrono-tz` and `humantime`,
   declared unmaintained with no successor release, are ignored with their reason in
   `deny.toml` and `.cargo/audit.toml`.
+- **The advisory ignore lists hold only what still applies** (9 of 26): the ones of the
+  TiKV client's old `tonic` / `rustls` and of SurrealDB 3 are gone. CI's `cargo audit` runs
+  as `scripts/cargo.sh audit` does (`--deny warnings`).
 
 ## [0.6.1] - 2026-11-16
 

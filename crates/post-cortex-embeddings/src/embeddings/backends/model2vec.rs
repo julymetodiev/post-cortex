@@ -18,13 +18,13 @@
 //! orders of magnitude faster than the BERT path — typically ms/text on a
 //! laptop CPU with no GPU.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
-use hf_hub::Cache;
-use hf_hub::api::sync::ApiBuilder;
+use hf_hub::repository::{HFRepository, RepoTypeModel};
+use hf_hub::{HFClient, HFError, split_id};
 use model2vec_rs::model::StaticModel;
-use parking_lot::Mutex;
+use tokio::sync::Mutex;
 use tracing::{debug, info};
 
 use crate::embeddings::backend::EmbeddingBackend;
@@ -42,78 +42,97 @@ const BATCH_SIZE: usize = 1024;
 /// The files of a Model2Vec model, the weights last.
 const MODEL_FILES: [&str; 3] = ["config.json", "tokenizer.json", "model.safetensors"];
 
-/// The snapshot directory of `model_id` in `cache` when it holds every file
-/// a Model2Vec model needs.
-fn cached_snapshot(cache: &Cache, model_id: &str) -> Option<PathBuf> {
-    let repo = cache.model(model_id.to_string());
-    let dir = repo.get("model.safetensors")?.parent()?.to_path_buf();
-    MODEL_FILES
-        .iter()
-        .all(|file| dir.join(file).exists())
-        .then_some(dir)
-}
-
-/// Fetch the files of `model_id` from the Hugging Face Hub into `cache`
-/// (again, even when cached, with `refresh`) and return its snapshot
-/// directory. The lookup and the fetch share `cache`, so a model fetched
-/// once is found at the next start (`HF_HOME` included).
-fn fetch_snapshot(cache: Cache, model_id: &str, refresh: bool) -> Result<PathBuf> {
-    let load_error = |reason: String| Error::ModelLoad {
+/// A failure to load `model_id`, for `reason`.
+fn load_error(model_id: &str, reason: String) -> Error {
+    Error::ModelLoad {
         model: model_id.to_string(),
         reason,
+    }
+}
+
+/// The Hub's handle of the model `model_id` (`owner/name`) on `client`.
+fn repository(client: &HFClient, model_id: &str) -> HFRepository<RepoTypeModel> {
+    let (owner, name) = split_id(model_id);
+    client.model(owner, name)
+}
+
+/// The snapshot directory of `model_id` in `client`'s cache when it holds
+/// every file a Model2Vec model needs; nothing is fetched.
+async fn cached_snapshot(client: &HFClient, model_id: &str) -> Result<Option<PathBuf>> {
+    let weights = repository(client, model_id)
+        .download_file()
+        .filename("model.safetensors")
+        .local_files_only(true)
+        .send()
+        .await;
+    let weights = match weights {
+        Ok(path) => path,
+        Err(HFError::LocalEntryNotFound { .. }) => return Ok(None),
+        Err(e) => return Err(load_error(model_id, format!("the cache: {e:#}"))),
     };
-    let repo = ApiBuilder::from_cache(cache)
-        .with_progress(false)
-        .build()
-        .map_err(|e| load_error(format!("{e:#}")))?
-        .model(model_id.to_string());
+    Ok(weights
+        .parent()
+        .map(Path::to_path_buf)
+        .filter(|dir| MODEL_FILES.iter().all(|file| dir.join(file).exists())))
+}
+
+/// Fetch the files of `model_id` from the Hugging Face Hub into `client`'s
+/// cache (again, even when cached, with `refresh`) and return its snapshot
+/// directory. The lookup and the fetch share the cache, so a model fetched
+/// once is found at the next start (`HF_HOME` included).
+async fn fetch_snapshot(client: &HFClient, model_id: &str, refresh: bool) -> Result<PathBuf> {
+    let repo = repository(client, model_id);
     let mut snapshot = None;
     for file in MODEL_FILES {
-        let path = if refresh {
-            repo.download(file)
-        } else {
-            repo.get(file)
-        }
-        .map_err(|e| load_error(format!("{file}: {e:#}")))?;
-        snapshot = path.parent().map(std::path::Path::to_path_buf);
+        let path = repo
+            .download_file()
+            .filename(file)
+            .force_download(refresh)
+            .send()
+            .await
+            .map_err(|e| load_error(model_id, format!("{file}: {e:#}")))?;
+        snapshot = path.parent().map(Path::to_path_buf);
     }
-    snapshot.ok_or_else(|| load_error("no snapshot directory".to_string()))
+    snapshot.ok_or_else(|| load_error(model_id, "no snapshot directory".to_string()))
 }
 
 /// One fetch at a time in this process. The Hub's client gives up on a file
-/// another fetch holds after five seconds ("Lock acquisition failed"), so
-/// of two engines started together on a machine without the model the
-/// second failed.
-static FETCHING: Mutex<()> = Mutex::new(());
+/// another fetch holds after a timeout (`HFError::CacheLockTimeout`), so of
+/// two engines started together on a machine without the model the second
+/// failed.
+static FETCHING: Mutex<()> = Mutex::const_new(());
+
+/// Load the model in the snapshot directory `dir`, off the reactor (it
+/// reads and maps the weights).
+async fn load_dir(model_id: &str, dir: PathBuf) -> Result<StaticModel> {
+    let model =
+        tokio::task::spawn_blocking(move || StaticModel::from_pretrained(dir, None, None, None))
+            .await?;
+    model.map_err(|e| load_error(model_id, format!("{e:#}")))
+}
 
 /// Load the Model2Vec model `model_id` from the Hugging Face cache
-/// (`HF_HOME`, else `~/.cache/huggingface`), fetching it into that cache
-/// first when it is not there; a cached snapshot that does not load is
-/// fetched again. A load that waited for another's fetch finds the model
-/// in the cache.
-fn load_static_model(model_id: &str) -> Result<StaticModel> {
-    let cache = Cache::from_env();
-    let load = |dir: PathBuf| {
-        StaticModel::from_pretrained(dir, None, None, None).map_err(|e| Error::ModelLoad {
-            model: model_id.to_string(),
-            reason: format!("{e:#}"),
-        })
-    };
-    if let Some(dir) = cached_snapshot(&cache, model_id) {
+/// (`HF_HUB_CACHE`, else `$HF_HOME/hub`, else `~/.cache/huggingface/hub`),
+/// fetching it into that cache first when it is not there; a cached
+/// snapshot that does not load is fetched again. A load that waited for
+/// another's fetch finds the model in the cache.
+async fn load_static_model(model_id: &str) -> Result<StaticModel> {
+    let client = HFClient::new().map_err(|e| load_error(model_id, format!("hub client: {e:#}")))?;
+    if let Some(dir) = cached_snapshot(&client, model_id).await? {
         debug!("Model2Vec {model_id}: loading the cached snapshot {dir:?}");
-        match load(dir) {
+        match load_dir(model_id, dir).await {
             Ok(model) => return Ok(model),
             Err(e) => debug!(
                 "Model2Vec {model_id}: the cached snapshot does not load ({e}), fetching it again"
             ),
         }
-        let _fetching = FETCHING.lock();
-        return load(fetch_snapshot(cache, model_id, true)?);
+        let _fetching = FETCHING.lock().await;
+        return load_dir(model_id, fetch_snapshot(&client, model_id, true).await?).await;
     }
-    let _fetching = FETCHING.lock();
-    match cached_snapshot(&cache, model_id) {
-        Some(dir) => load(dir),
-        None => load(fetch_snapshot(cache, model_id, false)?),
+    let _fetching = FETCHING.lock().await;
+    match cached_snapshot(&client, model_id).await? {
+        Some(dir) => load_dir(model_id, dir).await,
+        None => load_dir(model_id, fetch_snapshot(&client, model_id, false).await?).await,
     }
 }
 
@@ -138,16 +157,11 @@ impl Model2VecBackend {
         let model_id = model_type.model_id().to_string();
         info!("Loading Model2Vec backend for model: {}", model_id);
 
-        // Fetching and loading do blocking I/O (HF Hub fetch + safetensors
-        // mmap) — keep them off the reactor. A model already in the Hugging
-        // Face cache loads from its snapshot directory: going through the Hub
-        // revalidates every file online on each start, which is slow and
-        // fails when the Hub is slow or unreachable.
-        let model = tokio::task::spawn_blocking({
-            let model_id = model_id.clone();
-            move || load_static_model(&model_id)
-        })
-        .await??;
+        // A model already in the Hugging Face cache loads from its snapshot
+        // directory: going through the Hub revalidates every file online on
+        // each start, which is slow and fails when the Hub is slow or
+        // unreachable.
+        let model = load_static_model(&model_id).await?;
 
         // Probe the actual dimension by encoding a sentinel — this is the
         // ground-truth source. If it disagrees with the enum constant the

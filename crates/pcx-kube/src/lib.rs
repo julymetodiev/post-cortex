@@ -221,11 +221,11 @@ impl Clients {
 fn build(ca_file: &str, name: &str, pem: &[u8]) -> Result<reqwest::Client, ModuleError> {
     let mut client = reqwest::Client::builder().timeout(TIMEOUT);
     if !name.is_empty() {
-        client = client.use_preconfigured_tls(named_tls(pem, ca_file, name)?);
+        client = client.tls_backend_preconfigured(named_tls(pem, ca_file, name)?);
     } else if !ca_file.is_empty() {
         let ca = reqwest::Certificate::from_pem(pem)
             .map_err(|e| unavailable(format!("{ca_file} is no PEM certificate: {e}")))?;
-        client = client.add_root_certificate(ca);
+        client = client.tls_certs_only([ca]);
     }
     client.build().map_err(unavailable)
 }

@@ -15,3 +15,8 @@ strip = true
 # The Python binding is an extension module: CPython's symbols come from
 # the interpreter that loads it, never linked (bindings/python).
 PYO3_BUILD_EXTENSION_MODULE = "1"
+# The tests run an embedded SurrealDB (`mem://`) on the test's own thread and
+# on tokio's workers, which take the stack std gives a new thread: SurrealDB
+# asks for 10 MiB (surrealdb `engine::local`), the default is 2 MiB, and an
+# unoptimised build overflows it (SurrealDB 4.0).
+RUST_MIN_STACK = "10485760"

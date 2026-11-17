@@ -14,7 +14,7 @@ documentation = "https://docs.rs/pcx-kube"
 [dependencies]
 parking_lot.workspace = true
 pcx-module-api.workspace = true
-reqwest = { workspace = true, features = ["rustls-tls-manual-roots"] }
+reqwest.workspace = true
 rustls.workspace = true
 
 [lints]

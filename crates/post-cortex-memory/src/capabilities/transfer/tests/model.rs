@@ -50,10 +50,10 @@ async fn an_archive_of_another_model_is_refused_and_writes_nothing() {
         .await
         .unwrap();
     let mut archive = export(
-        &of_dim(&source, 512),
+        &of_dim(&source, 256),
         &ExportScope::All,
         &ExportOptions {
-            embedding_model: Some(model("PotionCode", 512)),
+            embedding_model: Some(model("PotionCode", 256)),
             ..Default::default()
         },
     )
@@ -62,20 +62,20 @@ async fn an_archive_of_another_model_is_refused_and_writes_nothing() {
     assert_eq!(archive.format_version, "1.10.0");
     assert_eq!(
         archive.metadata.embedding_model,
-        Some(model("PotionCode", 512))
+        Some(model("PotionCode", 256))
     );
-    archive.embeddings.push(embedding(session.id(), 512));
+    archive.embeddings.push(embedding(session.id(), 256));
 
     let target = stores(&target_dir).await;
     let other = ImportOptions {
         embedding_model: Some(model("PotionMultilingual", 256)),
         ..Default::default()
     };
-    let preview = preview_of(&of_dim(&target, 512), &archive, &other)
+    let preview = preview_of(&of_dim(&target, 256), &archive, &other)
         .await
         .unwrap();
     assert_eq!(preview.warnings.len(), 1, "{:?}", preview.warnings);
-    let err = import(&of_dim(&target, 512), archive.clone(), &other)
+    let err = import(&of_dim(&target, 256), archive.clone(), &other)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("PotionCode"), "{err}");
@@ -84,17 +84,17 @@ async fn an_archive_of_another_model_is_refused_and_writes_nothing() {
 
     // The same model imports.
     let same = ImportOptions {
-        embedding_model: Some(model("PotionCode", 512)),
+        embedding_model: Some(model("PotionCode", 256)),
         ..Default::default()
     };
     assert!(
-        preview_of(&of_dim(&target, 512), &archive, &same)
+        preview_of(&of_dim(&target, 256), &archive, &same)
             .await
             .unwrap()
             .warnings
             .is_empty()
     );
-    import(&of_dim(&target, 512), archive, &same).await.unwrap();
+    import(&of_dim(&target, 256), archive, &same).await.unwrap();
     assert_eq!(target.list_sessions().await.unwrap().len(), 1);
 }
 

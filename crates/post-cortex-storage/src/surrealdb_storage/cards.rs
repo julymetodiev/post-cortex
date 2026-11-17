@@ -75,14 +75,16 @@ struct KeyedCard {
 
 impl SurrealDBStorage {
     async fn latest_cards(&self, scope: CardScope, limit: usize) -> Result<Vec<Card>> {
+        let limit = crate::surrealdb_storage::limit::Limit::of(limit);
         let mut response = self
             .db()
-            .query(
+            .query(format!(
                 "SELECT * OMIT id FROM card WHERE scope = $scope \
-                 ORDER BY version DESC LIMIT $limit",
-            )
+                 ORDER BY version DESC {}",
+                limit.clause()
+            ))
             .bind(("scope", scope.key()))
-            .bind(("limit", i64::try_from(limit).unwrap_or(i64::MAX)))
+            .bind(("limit", limit.rows()))
             .await?
             .check()?;
         let rows: Vec<CardRecord> = response.take(0)?;

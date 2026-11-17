@@ -83,7 +83,6 @@ or, without a config file, `PC_HOST=0.0.0.0 PC_AUTH_TOKEN=change-me PC_ALLOWED_H
 | `embeddings` | yes | Semantic search and vectorization (Model2Vec `potion-multilingual-128M` by default) |
 | `bert` | no | BERT embedding backend via `post-cortex-memory/bert` (Candle) |
 | `surrealdb-storage` | no | SurrealDB backend (forwards to `post-cortex-memory`) |
-| `surrealdb-tikv` | no | SurrealDB + TiKV distributed KV |
 | `otel` | no | OpenTelemetry crates via `post-cortex-memory/otel`. The OTLP exporter is not wired yet: `observability::init` only reports whether `OTEL_EXPORTER_OTLP_ENDPOINT` is set |
 
 ## Example: observability init

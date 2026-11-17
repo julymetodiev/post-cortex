@@ -3,7 +3,7 @@
   "schema": "https://raw.githubusercontent.com/JuliusDeGroot/post-cortex/main/schemas/export/v1.10.0.json",
   "metadata": {
     "exported_at": "2026-10-01T12:01:40Z",
-    "post_cortex_version": "0.6.1",
+    "post_cortex_version": "0.7.0",
     "export_type": {
       "selective_workspace": {
         "workspace_id": "00000000-0000-0000-0000-000000000002"

@@ -72,7 +72,6 @@ tokio-test.workspace = true
 # resolve without rewriting.
 default = []
 surrealdb-storage = ["dep:surrealdb", "dep:surrealdb-types"]
-surrealdb-tikv = ["surrealdb-storage", "surrealdb/kv-tikv"]
 otel = []
 
 [package.metadata.docs.rs]

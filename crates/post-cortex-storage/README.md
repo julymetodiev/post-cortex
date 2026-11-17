@@ -21,7 +21,6 @@ post-cortex-storage = { version = "0.4", features = ["surrealdb-storage"] }  # +
 | Feature | Default | What it enables |
 |---------|---------|-----------------|
 | `surrealdb-storage` | no | SurrealDB backend (SurrealDB SDK 3.3, `kv-mem` + `protocol-ws`) |
-| `surrealdb-tikv` | no | SurrealDB with TiKV distributed KV (implies `surrealdb-storage`) |
 | `otel` | no | Placeholder; currently enables nothing |
 
 The RocksDB backend is always compiled — it's the post-cortex default and what the daemon ships with.

@@ -17,7 +17,7 @@ if [[ "$what" == all || "$what" == python ]]; then
   rm -rf "$out" && mkdir -p "$out"
   # mypy-protobuf writes the type stubs (messages and the gRPC stub typed), which
   # `mypy --strict` checks the client against.
-  py=(uv run --quiet --no-project --python 3.12 --with "grpcio-tools==1.84.0" --with "mypy-protobuf==5.1.0" python -m grpc_tools.protoc -I "$proto_dir")
+  py=(uv run --quiet --no-project --python 3.12 --with "grpcio-tools==1.85.1" --with "mypy-protobuf==5.1.0" python -m grpc_tools.protoc -I "$proto_dir")
   (cd "$here/python" && "${py[@]}" --python_out="$out" --mypy_out="$out" "${protos[@]}" && \
     "${py[@]}" --grpc_python_out="$out" --mypy_grpc_out="$out" pcx.proto)
   # grpc_tools and mypy-protobuf write `import pcx_pb2`; the package needs relative imports.
@@ -33,7 +33,7 @@ if [[ "$what" == all || "$what" == typescript ]]; then
   # The protoc bundled with the pinned grpcio-tools, as for Python, so the output
   # (whose header names the protoc version) is the same on every machine.
   (cd "$ts" && npm ci --silent && rm -rf src/gen && mkdir -p src/gen && \
-    uv run --quiet --no-project --python 3.12 --with "grpcio-tools==1.84.0" python -m grpc_tools.protoc \
+    uv run --quiet --no-project --python 3.12 --with "grpcio-tools==1.85.1" python -m grpc_tools.protoc \
       --plugin=protoc-gen-ts_proto=./node_modules/.bin/protoc-gen-ts_proto \
       --ts_proto_out=src/gen \
       --ts_proto_opt=outputServices=grpc-js,esModuleInterop=true,env=node,useOptionals=messages,forceLong=number,oneof=unions,importSuffix=.js \

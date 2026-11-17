@@ -9,7 +9,7 @@ use super::*;
 /// A Hugging Face cache in a fresh temporary directory, with `model_id` at
 /// revision `rev` holding `files` (the Hub's layout: `refs/main` names the
 /// revision, its snapshot directory holds the files).
-fn hub_cache(name: &str, model_id: &str, rev: &str, files: &[&str]) -> (PathBuf, Cache) {
+fn hub_cache(name: &str, model_id: &str, rev: &str, files: &[&str]) -> (PathBuf, HFClient) {
     let root = std::env::temp_dir().join(format!("pcx-model2vec-{name}-{}", std::process::id()));
     if root.exists() {
         fs::remove_dir_all(&root).unwrap();
@@ -22,7 +22,8 @@ fn hub_cache(name: &str, model_id: &str, rev: &str, files: &[&str]) -> (PathBuf,
     for file in files {
         fs::write(snapshot.join(file), b"x").unwrap();
     }
-    (root.clone(), Cache::new(root))
+    let client = HFClient::builder().cache_dir(root.clone()).build().unwrap();
+    (root, client)
 }
 
 fn snapshot_dir(root: &Path, model_id: &str, rev: &str) -> PathBuf {
@@ -31,20 +32,20 @@ fn snapshot_dir(root: &Path, model_id: &str, rev: &str) -> PathBuf {
         .join(rev)
 }
 
-#[test]
-fn a_complete_snapshot_is_found_in_the_given_cache() {
+#[tokio::test]
+async fn a_complete_snapshot_is_found_in_the_given_cache() {
     let model = "minishlab/potion-test";
     let (root, cache) = hub_cache("complete", model, "abc123", &MODEL_FILES);
 
     assert_eq!(
-        cached_snapshot(&cache, model),
+        cached_snapshot(&cache, model).await.unwrap(),
         Some(snapshot_dir(&root, model, "abc123"))
     );
     fs::remove_dir_all(root).unwrap();
 }
 
-#[test]
-fn a_snapshot_missing_a_file_is_not_used() {
+#[tokio::test]
+async fn a_snapshot_missing_a_file_is_not_used() {
     let model = "minishlab/potion-test";
     let (root, cache) = hub_cache(
         "partial",
@@ -53,14 +54,19 @@ fn a_snapshot_missing_a_file_is_not_used() {
         &["config.json", "model.safetensors"],
     );
 
-    assert_eq!(cached_snapshot(&cache, model), None);
+    assert_eq!(cached_snapshot(&cache, model).await.unwrap(), None);
     fs::remove_dir_all(root).unwrap();
 }
 
-#[test]
-fn a_model_not_in_the_cache_is_not_found() {
+#[tokio::test]
+async fn a_model_not_in_the_cache_is_not_found() {
     let (root, cache) = hub_cache("other", "minishlab/potion-other", "abc123", &MODEL_FILES);
 
-    assert_eq!(cached_snapshot(&cache, "minishlab/potion-test"), None);
+    assert_eq!(
+        cached_snapshot(&cache, "minishlab/potion-test")
+            .await
+            .unwrap(),
+        None
+    );
     fs::remove_dir_all(root).unwrap();
 }

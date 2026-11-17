@@ -17,7 +17,7 @@ use crate::error::{Error, Result};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
-use hf_hub::api::tokio::Api;
+use hf_hub::{HFClient, split_id};
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tracing::{debug, info};
@@ -47,19 +47,27 @@ impl BertBackend {
         let device = Device::Cpu;
         let model_id = model_type.model_id();
 
-        let api = Api::new().map_err(|e| load_error(model_id, "hub client", e))?;
-        let repo = api.model(model_id.to_string());
+        let (owner, name) = split_id(model_id);
+        let repo = HFClient::new()
+            .map_err(|e| load_error(model_id, "hub client", e))?
+            .model(owner, name);
 
         let model_path = repo
-            .get("model.safetensors")
+            .download_file()
+            .filename("model.safetensors")
+            .send()
             .await
             .map_err(|e| load_error(model_id, "weights", e))?;
         let config_path = repo
-            .get("config.json")
+            .download_file()
+            .filename("config.json")
+            .send()
             .await
             .map_err(|e| load_error(model_id, "config", e))?;
         let tokenizer_path = repo
-            .get("tokenizer.json")
+            .download_file()
+            .filename("tokenizer.json")
+            .send()
             .await
             .map_err(|e| load_error(model_id, "tokenizer", e))?;
 

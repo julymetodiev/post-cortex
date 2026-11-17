@@ -22,6 +22,13 @@
 #                                     (a broken link inside it is an error)
 #   scripts/cargo.sh deny             cargo deny check, as CI runs it (advisories,
 #                                     licences, bans, sources; deny.toml); compiles nothing
+#   scripts/cargo.sh audit            cargo audit --deny warnings, as CI runs it
+#                                     (.cargo/audit.toml); compiles nothing
+#   scripts/cargo.sh linux            clippy and rustdoc as CI runs them, on Linux, in a
+#                                     container (scripts/linux-gate.Dockerfile): code under
+#                                     cfg(target_os = "linux"/"freebsd") is not compiled on
+#                                     macOS. Its target directory is the docker volume
+#                                     pcx-linux-target, so this target/ is not touched
 #   scripts/cargo.sh cloud            clippy of ../post-cortex-cloud
 #   scripts/cargo.sh cloud-test [FILTER]  nextest over ../post-cortex-cloud
 #   scripts/cargo.sh cloud-deny       the advisories of ../post-cortex-cloud's Cargo.lock,
@@ -37,14 +44,15 @@ cd "$(dirname "$0")/.."
 root=$PWD
 logs=$root/target/cargo-logs
 mkdir -p "$logs"
-what=${1:?usage: scripts/cargo.sh clippy|build|bins|test|ignored|doc|rustdoc|deny|node|pcx|cloud|cloud-test|cloud-deny|cloud-bins [FILTER]}
+what=${1:?usage: scripts/cargo.sh clippy|build|bins|test|ignored|doc|rustdoc|deny|audit|linux|node|pcx|cloud|cloud-test|cloud-deny|cloud-bins [FILTER]}
 shift
 log=$logs/$(date +%Y%m%d-%H%M%S)-$what.log
 F=(--workspace --all-features)
 MAX_VARIANTS=6
 MAX_INCREMENTAL=350
 case $what in
-  clippy) cargo clippy "${F[@]}" --all-targets -- -D warnings >"$log" 2>&1; rc=$? ;;
+  # --keep-going: every crate's errors in one run, not one dependency level at a time.
+  clippy) cargo clippy "${F[@]}" --all-targets --keep-going -- -D warnings >"$log" 2>&1; rc=$? ;;
   test) cargo nextest run "${F[@]}" --no-fail-fast "$@" >"$log" 2>&1; rc=$? ;;
   ignored) cargo nextest run "${F[@]}" --run-ignored only --no-capture "$@" >"$log" 2>&1; rc=$? ;;
   build) cargo nextest run "${F[@]}" --no-run >"$log" 2>&1; rc=$? ;;
@@ -58,8 +66,14 @@ case $what in
     cargo build --release -p post-cortex-daemon --bin pcx --features surrealdb-storage,rerank-voyage ${1:+--target "$1"} >"$log" 2>&1; rc=$? ;;
   rustdoc) RUSTDOCFLAGS="-D warnings" cargo doc "${F[@]}" --no-deps --keep-going >"$log" 2>&1; rc=$? ;;
   deny) cargo deny check >"$log" 2>&1; rc=$? ;;
+  audit) cargo audit --deny warnings >"$log" 2>&1; rc=$? ;;
+  linux) docker build -q -t pcx-linux-gate -f scripts/linux-gate.Dockerfile scripts >"$log" 2>&1 &&
+    docker run --rm -v "$root":/src:ro -v pcx-linux-target:/target -v pcx-linux-cargo:/usr/local/cargo/registry \
+      -e CARGO_TARGET_DIR=/target -w /src pcx-linux-gate sh -c \
+      'cargo clippy --locked --workspace --all-features --all-targets --keep-going -- -D warnings &&
+       RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps --keep-going' >>"$log" 2>&1; rc=$? ;;
   cloud-deny) (cd ../post-cortex-cloud && cargo deny check --config "$root/deny.toml" advisories) >"$log" 2>&1; rc=$? ;;
-  cloud) (cd ../post-cortex-cloud && cargo clippy --workspace --all-targets -- -D warnings) >"$log" 2>&1; rc=$? ;;
+  cloud) (cd ../post-cortex-cloud && cargo clippy --workspace --all-targets --keep-going -- -D warnings) >"$log" 2>&1; rc=$? ;;
   cloud-test) (cd ../post-cortex-cloud && cargo nextest run --workspace --no-fail-fast "$@") >"$log" 2>&1; rc=$? ;;
   cloud-bins) (cd ../post-cortex-cloud && cargo build --workspace --bins --tests) >"$log" 2>&1; rc=$? ;;
   *) echo "scripts/cargo.sh: no command $what" >&2; exit 64 ;;
@@ -68,7 +82,7 @@ compiled=$(grep -cE '^ *(Compiling|Checking) ' "$log")
 heavy=$(grep -cE '^ *(Compiling|Checking) (surrealdb|librocksdb)' "$log")
 case $what in
   # cargo deny warns of every duplicate version; what it refuses is an error.
-  *deny) sed $'s/\x1b\\[[0-9;]*m//g' "$log" | grep -E '^error' -A7 | cut -c1-140 | head -60 ;;
+  *deny|audit) sed $'s/\x1b\\[[0-9;]*m//g' "$log" | grep -E '^error' -A7 | cut -c1-140 | head -60 ;;
   *) grep -E '^(error|warning)' -A7 "$log" | cut -c1-140 | head -40 ;;
 esac
 grep -E '^ *Summary|^test result|FAILED|FAIL |^advisories ' "$log" | cut -c1-140 | tail -12

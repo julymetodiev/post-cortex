@@ -37,6 +37,7 @@ mod events;
 mod freshness;
 mod graph;
 mod ids;
+mod limit;
 mod messages;
 mod migrate;
 mod persist;

@@ -32,6 +32,7 @@ use post_cortex_ports::storage::{DocumentStore, DocumentWrite, LatestPage, Lates
 use crate::document_order::{Window, window};
 use crate::surrealdb_storage::SurrealDBStorage;
 use crate::surrealdb_storage::document_index::{REINDEX, Reindex, UNINDEX, pair};
+use crate::surrealdb_storage::limit::Limit;
 
 /// Row of the `document` table.
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
@@ -98,11 +99,7 @@ fn row_key(workspace_id: Uuid, id: Uuid, version: u64) -> String {
 }
 
 impl SurrealDBStorage {
-    async fn document_rows(
-        &self,
-        query: &'static str,
-        binds: DocumentBinds,
-    ) -> Result<Vec<Document>> {
+    async fn document_rows(&self, query: &str, binds: DocumentBinds) -> Result<Vec<Document>> {
         let mut response = self
             .db()
             .query(query)
@@ -110,7 +107,7 @@ impl SurrealDBStorage {
             .bind(("doc_id", binds.id.map(|id| id.to_string())))
             .bind(("kind", binds.kind.map(|kind| kind.to_string())))
             .bind(("version", binds.version.map(i64::try_from).transpose()?))
-            .bind(("limit", i64::try_from(binds.limit).unwrap_or(i64::MAX)))
+            .bind(("limit", binds.limit.rows()))
             .await?
             .check()?;
         let rows: Vec<DocumentRecord> = response.take(0)?;
@@ -139,7 +136,7 @@ struct DocumentBinds {
     id: Option<Uuid>,
     kind: Option<DocumentKind>,
     version: Option<u64>,
-    limit: usize,
+    limit: Limit,
 }
 
 impl DocumentBinds {
@@ -149,7 +146,7 @@ impl DocumentBinds {
             id,
             kind: None,
             version: None,
-            limit: usize::MAX,
+            limit: Limit::of(usize::MAX),
         }
     }
 }
@@ -235,16 +232,16 @@ impl DocumentStore for SurrealDBStorage {
         self.breaker
             .guard(async {
                 let binds = DocumentBinds {
-                    limit,
+                    limit: Limit::of(limit),
                     ..DocumentBinds::of(workspace_id, Some(id))
                 };
-                self.document_rows(
+                let query = format!(
                     "SELECT * OMIT id FROM document \
                      WHERE workspace_id = $workspace_id AND doc_id = $doc_id \
-                     ORDER BY version DESC LIMIT $limit",
-                    binds,
-                )
-                .await
+                     ORDER BY version DESC {}",
+                    binds.limit.clause()
+                );
+                self.document_rows(&query, binds).await
             })
             .await
     }

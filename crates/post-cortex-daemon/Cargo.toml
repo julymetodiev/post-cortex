@@ -140,7 +140,6 @@ bert = ["post-cortex-embeddings/bert"]
 rerank = ["post-cortex-embeddings/rerank"]
 # Voyage AI reranking (`voyage_api_key` in daemon.toml or VOYAGE_API_KEY).
 rerank-voyage = ["post-cortex-embeddings/rerank-voyage"]
-surrealdb-tikv = ["surrealdb-storage", "post-cortex-storage/surrealdb-tikv"]
 # Wires the OpenTelemetry OTLP exporter into observability::init().
 # Forwards to post-cortex-memory so trait-method spans are also
 # exported. When off, observability::init() still installs the fmt

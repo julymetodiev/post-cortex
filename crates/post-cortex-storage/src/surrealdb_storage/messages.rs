@@ -337,17 +337,19 @@ impl MessageStore for SurrealDBStorage {
                     MessageOrder::Asc => "ASC",
                     MessageOrder::Desc => "DESC",
                 };
+                let limit = crate::surrealdb_storage::limit::Limit::of(limit);
                 let mut response = self
                     .db()
                     .query(format!(
                         "SELECT * OMIT id FROM message \
                  WHERE session_id = $sid AND seq {bound} $seq \
-                 ORDER BY seq {direction} LIMIT $limit"
+                 ORDER BY seq {direction} {}",
+                        limit.clause()
                     ))
                     .bind(("sid", session_id.to_string()))
                     // Past the largest stored int: `From` matches nothing, `Before` all.
                     .bind(("seq", i64::try_from(seq).unwrap_or(i64::MAX)))
-                    .bind(("limit", i64::try_from(limit).unwrap_or(i64::MAX)))
+                    .bind(("limit", limit.rows()))
                     .await?
                     .check()?;
                 let rows: Vec<MessageRecord> = response.take(0)?;

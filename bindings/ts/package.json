@@ -8,9 +8,9 @@
   "types": "index.d.ts",
   "files": ["index.js", "index.d.ts", "*.node"],
   "dependencies": {
-    "@bufbuild/protobuf": "^2.16.0"
+    "@bufbuild/protobuf": "^2.17.0"
   },
   "devDependencies": {
-    "@bufbuild/protoc-gen-es": "^2.16.0"
+    "@bufbuild/protoc-gen-es": "^2.17.0"
   }
 }

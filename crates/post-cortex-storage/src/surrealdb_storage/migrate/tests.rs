@@ -202,14 +202,30 @@ async fn a_newer_data_version_is_refused() {
     assert!(format!("{err:#}").contains("newer"), "{err:#}");
 }
 
+/// A store whose data an earlier data version left: a database a SurrealDB
+/// 3 server wrote, which every SurrealDB reads at compatibility level 3 (a
+/// table takes a new field over rows without it). A new embedded database
+/// is at level 4, where data of these versions never lived.
+async fn written_by_surrealdb_3() -> SurrealDBStorage {
+    let storage = SurrealDBStorage::new("mem://", None, None, None, None)
+        .await
+        .unwrap();
+    storage
+        .db()
+        .query("DEFINE DATABASE OVERWRITE $session.db COMPATIBILITY 3;")
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    storage
+}
+
 /// Step 4: workspaces stored before slugs get theirs, the oldest first (a
 /// later one of the same name carries its id), and then the slug is unique.
 #[tokio::test]
 async fn workspaces_get_their_slugs() {
     use post_cortex_ports::storage::WorkspaceStore;
-    let storage = SurrealDBStorage::new("mem://", None, None, None, None)
-        .await
-        .unwrap();
+    let storage = written_by_surrealdb_3().await;
     let (older, newer) = (Uuid::from_u128(7), Uuid::from_u128(8));
     // As data version 3 left them: no slug and no index.
     storage
@@ -253,9 +269,7 @@ async fn workspaces_get_their_slugs() {
 #[tokio::test]
 async fn workspaces_of_version_3_reach_version_5() {
     use post_cortex_ports::storage::WorkspaceStore;
-    let storage = SurrealDBStorage::new("mem://", None, None, None, None)
-        .await
-        .unwrap();
+    let storage = written_by_surrealdb_3().await;
     let id = Uuid::from_u128(11);
     // As data version 3 left it: no slug, no remote_rerank.
     storage
@@ -286,9 +300,7 @@ async fn workspaces_of_version_3_reach_version_5() {
 #[tokio::test]
 async fn workspaces_forbid_the_remote_reranker() {
     use post_cortex_ports::storage::WorkspaceStore;
-    let storage = SurrealDBStorage::new("mem://", None, None, None, None)
-        .await
-        .unwrap();
+    let storage = written_by_surrealdb_3().await;
     let id = Uuid::from_u128(9);
     // As data version 4 left it: no remote_rerank.
     storage

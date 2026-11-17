@@ -149,15 +149,17 @@ impl EventLog for SurrealDBStorage {
     ) -> PortResult<Vec<BusEvent>> {
         self.breaker
             .guard(async {
+                let limit = crate::surrealdb_storage::limit::Limit::of(limit);
                 let mut response = self
                     .db()
-                    .query(
+                    .query(format!(
                         "SELECT * OMIT id FROM bus_event WHERE name = $name AND position > $after \
-                 ORDER BY position LIMIT $limit;",
-                    )
+                 ORDER BY position {};",
+                        limit.clause()
+                    ))
                     .bind(("name", name.to_string()))
                     .bind(("after", i64::try_from(after)?))
-                    .bind(("limit", i64::try_from(limit)?))
+                    .bind(("limit", limit.rows()))
                     .await?
                     .check()?;
                 let rows: Vec<EventRecord> = response.take(0)?;

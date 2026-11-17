@@ -19,7 +19,7 @@ use std::time::Duration;
 use crate::blocking::{self, Abandoned};
 use crate::error::{Error, Result};
 use async_trait::async_trait;
-use hf_hub::api::tokio::Api;
+use hf_hub::{HFClient, HFError, split_id};
 use ort::environment::Environment;
 use ort::session::Session;
 use ort::session::builder::{AutoDevicePolicy, GraphOptimizationLevel};
@@ -115,13 +115,24 @@ impl OnnxCrossEncoder {
     pub async fn load(model_id: &str, max_length: usize, runtime: Option<&str>) -> Result<Self> {
         let file = quantized_file();
         info!("Loading ONNX cross-encoder {model_id} ({file}, max_length {max_length})");
-        let load = |e: hf_hub::api::tokio::ApiError| Error::ModelLoad {
+        let load = |e: HFError| Error::ModelLoad {
             model: model_id.to_string(),
             reason: e.to_string(),
         };
-        let repo = Api::new().map_err(load)?.model(model_id.to_string());
-        let weights = repo.get(file).await.map_err(load)?;
-        let tokenizer = repo.get("tokenizer.json").await.map_err(load)?;
+        let (owner, name) = split_id(model_id);
+        let repo = HFClient::new().map_err(load)?.model(owner, name);
+        let weights = repo
+            .download_file()
+            .filename(file)
+            .send()
+            .await
+            .map_err(load)?;
+        let tokenizer = repo
+            .download_file()
+            .filename("tokenizer.json")
+            .send()
+            .await
+            .map_err(load)?;
         Self::from_files(&weights, &tokenizer, max_length, runtime)
     }
 

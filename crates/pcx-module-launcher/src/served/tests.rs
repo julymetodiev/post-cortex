@@ -93,7 +93,10 @@ fn program() -> (tempfile::TempDir, PathBuf, String) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("mail");
     std::fs::write(&path, b"a module").unwrap();
-    let sha = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(b"a module"));
+    let sha: String = <sha2::Sha256 as sha2::Digest>::digest(b"a module")
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     (dir, path, sha)
 }
 

@@ -95,6 +95,12 @@ fn init_cli_logging(default_level: &str) -> WorkerGuard {
     logs
 }
 
+/// The stack of each runtime thread. An embedded SurrealDB (`mem://`) lowers
+/// and drops its query trees by recursion on the calling thread and asks for
+/// 10 MiB (surrealdb `engine::local`); tokio's default of 2 MiB aborts the
+/// process on a deep query.
+const RUNTIME_STACK: usize = 10 * 1024 * 1024;
+
 fn main() -> Result<(), String> {
     let cli = Cli::parse();
     // The sandbox's helper (Linux, FreeBSD) confines its program before
@@ -103,7 +109,10 @@ fn main() -> Result<(), String> {
     if let Some(Commands::Daemon(DaemonCommand::SandboxRun { policy, command })) = &cli.command {
         return sandbox_run(policy, command);
     }
-    tokio::runtime::Runtime::new()
+    tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(RUNTIME_STACK)
+        .enable_all()
+        .build()
         .map_err(|e| format!("the async runtime did not start: {e}"))?
         .block_on(run(cli))
 }
