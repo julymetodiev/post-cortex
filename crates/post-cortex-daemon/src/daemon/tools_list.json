@@ -560,7 +560,7 @@
             "type": "integer"
           },
           "mode": {
-            "description": "Ranking effort (default set by the server): fast (vector + keyword fused, ~40 ms), local (plus a local cross-encoder, ~1 s on CPU), accurate (plus the Voyage reranker when the server has a key, ~0.5 s; else as local).",
+            "description": "Ranking effort (default set by the server): fast (vector + keyword fused, ~40 ms), local (plus the server's local cross-encoder, ~1 s on CPU; the cloud has none), accurate (plus the Voyage reranker where every workspace searched allows it, ~0.5 s; else the local one, if any). A search not reranked says why (rerank_skipped).",
             "nullable": true,
             "type": "string"
           },

@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A file's memory finds its own history.** The file view and the
+  before-edit hook read the files a record names in its `file`, `file_path` or `files` for
+  any type, not only a code change's title; a code change's long title is kept whole before
+  it is cut. A file's own entities are those named after it, also as an item or member of
+  its stem (`Scope::working_in`, `Scope.tenant`, `veil_core::limiter::Limiter`); when
+  several files share its name, the records that name it say which are its own, so files
+  of one name no longer share one history. The other code its records name is listed as
+  changed with it (`changed_with`, a new field of `FileView`), not walked as its
+  dependents. Each dependent says why (`- B (depends on A)`).
+- **`required_by` is read in its own direction.** `A required_by B` made A a dependent of
+  B as well as B a dependent of A; impact analysis, the file view and assembled context
+  now list only B.
+
+### Changed
+
+- **One text for the cards and a file's memory in every client.** The JS plugins
+  (opencode, kilo, pi, openclaw, the DeepSeek harness) and the opencode template ask the
+  memory module for them (`POST /api/events`, a `SessionStart` and a `PreToolUse` event),
+  as the Claude Code hooks do, instead of rendering the cards and the file view
+  themselves: `PcxClient.cards` answers the module's text, `PcxClient.fileContext`
+  replaces `PcxClient.file`, and `cardsText(cards, ...)` and `fileContextText(view, path)`
+  are gone from `@post-cortex/plugin-core`. The `[PCX] Session: ... | Workspace: ...`
+  line comes before the cards, as the Claude Code plugin prints it.
+
+### Security
+
+- **`candle` 0.11.1** (from 0.9.2) brings `zip` 9.6.1: the five `zip` 7 advisories are gone
+  from the ignore lists. `tokenizers` follows to 0.23. `chrono`, `chrono-tz` and `humantime`,
+  declared unmaintained with no successor release, are ignored with their reason in
+  `deny.toml` and `.cargo/audit.toml`.
+
 ## [0.6.1] - 2026-11-16
 
 ### Fixed

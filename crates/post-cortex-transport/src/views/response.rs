@@ -299,7 +299,17 @@ pub fn entity(e: EntityDetail) -> pb::EntityDetail {
             entity: e.impact.entity,
             depth: n(e.impact.depth),
             dependents: dependents(e.impact.dependents),
-            risks: records(e.impact.risks),
+            risks: e
+                .impact
+                .risks
+                .into_iter()
+                .map(|r| pb::Risk {
+                    record: Some(record(r.record)),
+                    about: r.about,
+                    depth: n(r.depth),
+                })
+                .collect(),
+            total_risks: n(e.impact.total_risks),
         }),
         lineage: Some(pb::Lineage {
             entity: e.lineage.entity,
@@ -377,6 +387,7 @@ pub fn file(f: FileDetail) -> pb::FileView {
         decisions: records(f.decisions),
         entities: nodes(f.entities),
         dependents: dependents(f.dependents),
+        changed_with: nodes(f.changed_with),
     }
 }
 
@@ -430,5 +441,6 @@ pub fn search(s: SearchDetail) -> Result<pb::SearchResponse, Status> {
         took_ms: u32::try_from(s.took_ms).unwrap_or(u32::MAX),
         neighbour_radius: n(s.neighbour_radius),
         reranked: s.reranked,
+        rerank_skipped: s.rerank_skipped.map(|r| r.as_str().to_string()),
     })
 }

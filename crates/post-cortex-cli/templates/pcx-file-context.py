@@ -8,8 +8,8 @@ tool call on stdin. For each file the call changes (`file_path`, else `file`
 or `path` and those of its `edits`; a relative path is the project's), up to
 FILES, it sends the event to the daemon (POST /api/events) with that file as
 `file_path`; the memory module answers with the problems solved in that
-file, the decisions and requirements about it, and what depends on the
-entities naming it, as additional context. Nothing known about the files, or
+file, the decisions and requirements about it, what depends on it (each
+with why) and the code it was changed with, as additional context. Nothing known about the files, or
 any failure, prints nothing: the hook must never get in the way of an edit.
 
 Usage (from .claude/settings.json):

@@ -19,7 +19,7 @@ pub enum ContextQuery {
     /// Retrieve context updates created after a given timestamp.
     GetRecentChanges {
         /// Earliest timestamp to include; the last
-        /// [`RECENT_CHANGES_DEFAULT_DAYS`] days when absent.
+        /// `RECENT_CHANGES_DEFAULT_DAYS` days when absent.
         since: Option<chrono::DateTime<chrono::Utc>>,
     },
     /// Look up code references for a specific file path.

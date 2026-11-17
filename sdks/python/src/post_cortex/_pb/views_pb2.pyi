@@ -903,7 +903,7 @@ class Record(_message.Message):
 
     @_builtins.property
     def derived_from(self) -> _containers.RepeatedScalarFieldContainer[_builtins.str]:
-        """Captured messages it was drawn from (message:<seq>)."""
+        """Captured messages it was drawn from (`message:<seq>`)."""
 
     @_builtins.property
     def supersedes(self) -> _containers.RepeatedScalarFieldContainer[_builtins.str]:
@@ -1496,6 +1496,40 @@ class Dependent(_message.Message):
 Global___Dependent: _TypeAlias = Dependent  # noqa: Y015
 
 @_typing.final
+class Risk(_message.Message):
+    """A record at risk, with what it is about."""
+
+    DESCRIPTOR: _descriptor.Descriptor
+
+    RECORD_FIELD_NUMBER: _builtins.int
+    ABOUT_FIELD_NUMBER: _builtins.int
+    DEPTH_FIELD_NUMBER: _builtins.int
+    about: _builtins.str
+    """The nearest entity of the report it names: the one asked for or a
+    dependent.
+    """
+    depth: _builtins.int
+    """Hops of `about` from the entity asked for (0: that entity)."""
+    @_builtins.property
+    def record(self) -> Global___Record:
+        """The record."""
+
+    def __init__(
+        self,
+        *,
+        record: Global___Record | None = ...,
+        about: _builtins.str = ...,
+        depth: _builtins.int = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _typing.Literal["record", b"record"]  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["about", b"about", "depth", b"depth", "record", b"record"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___Risk: _TypeAlias = Risk  # noqa: Y015
+
+@_typing.final
 class Impact(_message.Message):
     """What depends on an entity."""
 
@@ -1505,18 +1539,23 @@ class Impact(_message.Message):
     DEPTH_FIELD_NUMBER: _builtins.int
     DEPENDENTS_FIELD_NUMBER: _builtins.int
     RISKS_FIELD_NUMBER: _builtins.int
+    TOTAL_RISKS_FIELD_NUMBER: _builtins.int
     entity: _builtins.str
     """Canonical name."""
     depth: _builtins.int
     """Hops followed."""
+    total_risks: _builtins.int
+    """All such records."""
     @_builtins.property
     def dependents(self) -> _containers.RepeatedCompositeFieldContainer[Global___Dependent]:
         """Dependents, nearest first."""
 
     @_builtins.property
-    def risks(self) -> _containers.RepeatedCompositeFieldContainer[Global___Record]:
+    def risks(self) -> _containers.RepeatedCompositeFieldContainer[Global___Risk]:
         """Current decisions, requirements and problems about it and its
-        dependents, newest first.
+        dependents, most relevant first: about the entity itself, then by the
+        dependent's depth, then by closeness to the relations' contexts, then
+        newest (at most the limit).
         """
 
     def __init__(
@@ -1525,11 +1564,12 @@ class Impact(_message.Message):
         entity: _builtins.str = ...,
         depth: _builtins.int = ...,
         dependents: _abc.Iterable[Global___Dependent] | None = ...,
-        risks: _abc.Iterable[Global___Record] | None = ...,
+        risks: _abc.Iterable[Global___Risk] | None = ...,
+        total_risks: _builtins.int = ...,
     ) -> None: ...
     _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
     def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
-    _ClearFieldArgType: _TypeAlias = _typing.Literal["dependents", b"dependents", "depth", b"depth", "entity", b"entity", "risks", b"risks"]  # noqa: Y015
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["dependents", b"dependents", "depth", b"depth", "entity", b"entity", "risks", b"risks", "total_risks", b"total_risks"]  # noqa: Y015
     def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
     def WhichOneof(self, oneof_group: _Never) -> None: ...
 
@@ -1731,6 +1771,7 @@ class SearchRequest(_message.Message):
     FROM_FIELD_NUMBER: _builtins.int
     TO_FIELD_NUMBER: _builtins.int
     RECENCY_BIAS_FIELD_NUMBER: _builtins.int
+    RERANK_WITHHELD_FIELD_NUMBER: _builtins.int
     query: _builtins.str
     """What to look for."""
     mode: Global___SearchMode.ValueType
@@ -1745,6 +1786,11 @@ class SearchRequest(_message.Message):
     """Hits (default 10, at most 100)."""
     recency_bias: _builtins.float
     """Temporal decay (0 = off)."""
+    rerank_withheld: _builtins.str
+    """Set by the cloud's gateway, never by a client: "plan_limit" when the
+    organisation's plan has no reranker calls left, so the search runs as
+    fast and answers rerank_skipped "plan_limit".
+    """
     @_builtins.property
     def scope(self) -> Global___Scope:
         """A session, a workspace, or global."""
@@ -1765,10 +1811,11 @@ class SearchRequest(_message.Message):
         limit: _builtins.int = ...,
         to: _timestamp_pb2.Timestamp | None = ...,
         recency_bias: _builtins.float | None = ...,
+        rerank_withheld: _builtins.str | None = ...,
     ) -> None: ...
-    _HasFieldArgType: _TypeAlias = _typing.Literal["_author", b"_author", "_from", b"_from", "_prefer_author", b"_prefer_author", "_recency_bias", b"_recency_bias", "_to", b"_to", "author", b"author", "from", b"from", "prefer_author", b"prefer_author", "recency_bias", b"recency_bias", "scope", b"scope", "to", b"to"]  # noqa: Y015
+    _HasFieldArgType: _TypeAlias = _typing.Literal["_author", b"_author", "_from", b"_from", "_prefer_author", b"_prefer_author", "_recency_bias", b"_recency_bias", "_rerank_withheld", b"_rerank_withheld", "_to", b"_to", "author", b"author", "from", b"from", "prefer_author", b"prefer_author", "recency_bias", b"recency_bias", "rerank_withheld", b"rerank_withheld", "scope", b"scope", "to", b"to"]  # noqa: Y015
     def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
-    _ClearFieldArgType: _TypeAlias = _typing.Literal["_author", b"_author", "_from", b"_from", "_prefer_author", b"_prefer_author", "_recency_bias", b"_recency_bias", "_to", b"_to", "author", b"author", "from", b"from", "limit", b"limit", "mode", b"mode", "prefer_author", b"prefer_author", "query", b"query", "recency_bias", b"recency_bias", "scope", b"scope", "sources", b"sources", "to", b"to"]  # noqa: Y015
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["_author", b"_author", "_from", b"_from", "_prefer_author", b"_prefer_author", "_recency_bias", b"_recency_bias", "_rerank_withheld", b"_rerank_withheld", "_to", b"_to", "author", b"author", "from", b"from", "limit", b"limit", "mode", b"mode", "prefer_author", b"prefer_author", "query", b"query", "recency_bias", b"recency_bias", "rerank_withheld", b"rerank_withheld", "scope", b"scope", "sources", b"sources", "to", b"to"]  # noqa: Y015
     def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
     _WhichOneofReturnType__author: _TypeAlias = _typing.Literal["author"]  # noqa: Y015
     _WhichOneofArgType__author: _TypeAlias = _typing.Literal["_author", b"_author"]  # noqa: Y015
@@ -1778,6 +1825,8 @@ class SearchRequest(_message.Message):
     _WhichOneofArgType__prefer_author: _TypeAlias = _typing.Literal["_prefer_author", b"_prefer_author"]  # noqa: Y015
     _WhichOneofReturnType__recency_bias: _TypeAlias = _typing.Literal["recency_bias"]  # noqa: Y015
     _WhichOneofArgType__recency_bias: _TypeAlias = _typing.Literal["_recency_bias", b"_recency_bias"]  # noqa: Y015
+    _WhichOneofReturnType__rerank_withheld: _TypeAlias = _typing.Literal["rerank_withheld"]  # noqa: Y015
+    _WhichOneofArgType__rerank_withheld: _TypeAlias = _typing.Literal["_rerank_withheld", b"_rerank_withheld"]  # noqa: Y015
     _WhichOneofReturnType__to: _TypeAlias = _typing.Literal["to"]  # noqa: Y015
     _WhichOneofArgType__to: _TypeAlias = _typing.Literal["_to", b"_to"]  # noqa: Y015
     @_typing.overload
@@ -1788,6 +1837,8 @@ class SearchRequest(_message.Message):
     def WhichOneof(self, oneof_group: _WhichOneofArgType__prefer_author) -> _WhichOneofReturnType__prefer_author | None: ...
     @_typing.overload
     def WhichOneof(self, oneof_group: _WhichOneofArgType__recency_bias) -> _WhichOneofReturnType__recency_bias | None: ...
+    @_typing.overload
+    def WhichOneof(self, oneof_group: _WhichOneofArgType__rerank_withheld) -> _WhichOneofReturnType__rerank_withheld | None: ...
     @_typing.overload
     def WhichOneof(self, oneof_group: _WhichOneofArgType__to) -> _WhichOneofReturnType__to | None: ...
 
@@ -1808,7 +1859,7 @@ class SearchItem(_message.Message):
     RECORD_FIELD_NUMBER: _builtins.int
     MESSAGE_FIELD_NUMBER: _builtins.int
     content_id: _builtins.str
-    """Entry id, message:<seq>, or an entity description's id."""
+    """Entry id, `message:<seq>`, or an entity description's id."""
     session_id: _builtins.str
     """Its session."""
     content_type: _builtins.str
@@ -1993,6 +2044,7 @@ class SearchResponse(_message.Message):
     TOOK_MS_FIELD_NUMBER: _builtins.int
     NEIGHBOUR_RADIUS_FIELD_NUMBER: _builtins.int
     RERANKED_FIELD_NUMBER: _builtins.int
+    RERANK_SKIPPED_FIELD_NUMBER: _builtins.int
     took_ms: _builtins.int
     """Milliseconds the search took."""
     neighbour_radius: _builtins.int
@@ -2000,6 +2052,12 @@ class SearchResponse(_message.Message):
     reranked: _builtins.bool
     """Whether a reranker ordered the hits: a local or accurate search is not
     reranked where the server has no reranker for it.
+    """
+    rerank_skipped: _builtins.str
+    """Why a search that asked for a reranker got none: no_local_reranker
+    (the server has no local one; the cloud never has: use accurate),
+    no_reranker, remote_not_allowed (a workspace searched does not allow
+    Voyage and there is no local one). Unset: fast, or reranked.
     """
     @_builtins.property
     def hits(self) -> _containers.RepeatedCompositeFieldContainer[Global___SearchHit]:
@@ -2012,12 +2070,15 @@ class SearchResponse(_message.Message):
         took_ms: _builtins.int = ...,
         neighbour_radius: _builtins.int = ...,
         reranked: _builtins.bool = ...,
+        rerank_skipped: _builtins.str | None = ...,
     ) -> None: ...
-    _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
+    _HasFieldArgType: _TypeAlias = _typing.Literal["_rerank_skipped", b"_rerank_skipped", "rerank_skipped", b"rerank_skipped"]  # noqa: Y015
     def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
-    _ClearFieldArgType: _TypeAlias = _typing.Literal["hits", b"hits", "neighbour_radius", b"neighbour_radius", "reranked", b"reranked", "took_ms", b"took_ms"]  # noqa: Y015
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["_rerank_skipped", b"_rerank_skipped", "hits", b"hits", "neighbour_radius", b"neighbour_radius", "rerank_skipped", b"rerank_skipped", "reranked", b"reranked", "took_ms", b"took_ms"]  # noqa: Y015
     def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
-    def WhichOneof(self, oneof_group: _Never) -> None: ...
+    _WhichOneofReturnType__rerank_skipped: _TypeAlias = _typing.Literal["rerank_skipped"]  # noqa: Y015
+    _WhichOneofArgType__rerank_skipped: _TypeAlias = _typing.Literal["_rerank_skipped", b"_rerank_skipped"]  # noqa: Y015
+    def WhichOneof(self, oneof_group: _WhichOneofArgType__rerank_skipped) -> _WhichOneofReturnType__rerank_skipped | None: ...
 
 Global___SearchResponse: _TypeAlias = SearchResponse  # noqa: Y015
 
@@ -2360,6 +2421,7 @@ class FileView(_message.Message):
     DECISIONS_FIELD_NUMBER: _builtins.int
     ENTITIES_FIELD_NUMBER: _builtins.int
     DEPENDENTS_FIELD_NUMBER: _builtins.int
+    CHANGED_WITH_FIELD_NUMBER: _builtins.int
     path: _builtins.str
     """The path asked for."""
     @_builtins.property
@@ -2376,11 +2438,17 @@ class FileView(_message.Message):
 
     @_builtins.property
     def entities(self) -> _containers.RepeatedCompositeFieldContainer[Global___Node]:
-        """Entities naming the file."""
+        """Entities named after the file."""
 
     @_builtins.property
     def dependents(self) -> _containers.RepeatedCompositeFieldContainer[Global___Dependent]:
-        """What depends on those entities."""
+        """What depends on those entities, hop by hop, code first in a hop."""
+
+    @_builtins.property
+    def changed_with(self) -> _containers.RepeatedCompositeFieldContainer[Global___Node]:
+        """The code the records that name the file changed with it (neither its
+        own entities nor its dependents), the most often named first.
+        """
 
     def __init__(
         self,
@@ -2391,10 +2459,11 @@ class FileView(_message.Message):
         decisions: _abc.Iterable[Global___Record] | None = ...,
         entities: _abc.Iterable[Global___Node] | None = ...,
         dependents: _abc.Iterable[Global___Dependent] | None = ...,
+        changed_with: _abc.Iterable[Global___Node] | None = ...,
     ) -> None: ...
     _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
     def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
-    _ClearFieldArgType: _TypeAlias = _typing.Literal["decisions", b"decisions", "dependents", b"dependents", "entities", b"entities", "path", b"path", "problems", b"problems", "records", b"records"]  # noqa: Y015
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["changed_with", b"changed_with", "decisions", b"decisions", "dependents", b"dependents", "entities", b"entities", "path", b"path", "problems", b"problems", "records", b"records"]  # noqa: Y015
     def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
     def WhichOneof(self, oneof_group: _Never) -> None: ...
 
@@ -2495,7 +2564,7 @@ class Message(_message.Message):
     seq: _builtins.int
     """Position in the session's stream."""
     content_id: _builtins.str
-    """message:<seq>, as records' derived_from and search hits name it."""
+    """`message:<seq>`, as records' derived_from and search hits name it."""
     turn_id: _builtins.str
     """The client's id for the turn."""
     role: _builtins.str

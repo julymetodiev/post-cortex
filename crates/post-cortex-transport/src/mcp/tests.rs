@@ -19,6 +19,7 @@ fn an_output_is_its_text_then_its_results() {
         text: "Created".to_string(),
         data: Some(serde_json::json!({"id": 1})),
         failed: false,
+        meta: None,
     }));
     assert_eq!(result.is_error, Some(false));
     assert_eq!(text(&result), "Created\n\nResults:\n{\"id\":1}");
@@ -30,6 +31,7 @@ fn a_failed_output_keeps_its_results() {
         text: "1 failed".to_string(),
         data: Some(serde_json::json!([{"ok": false}])),
         failed: true,
+        meta: None,
     }));
     assert_eq!(result.is_error, Some(true));
     assert!(text(&result).contains("Results:"));

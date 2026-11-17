@@ -67,6 +67,43 @@ async fn test_potion_multilingual_live_load_and_encode() {
     }
 }
 
+/// Live load + encode of `all-MiniLM-L6-v2` through Candle (the `bert`
+/// backend), so a Candle upgrade is checked where it runs. Marked
+/// `#[ignore]` because it needs network and downloads a ~90MB checkpoint.
+/// Run with `scripts/cargo.sh ignored bert_live`.
+#[cfg(feature = "bert")]
+#[tokio::test]
+#[ignore = "requires network + HF Hub download (~90MB)"]
+async fn test_bert_live_load_and_encode() {
+    use super::backends::BertBackend;
+    use crate::embeddings::backend::EmbeddingBackend;
+
+    let backend = BertBackend::load(EmbeddingModelType::MiniLM)
+        .await
+        .expect("all-MiniLM-L6-v2 must load from HF Hub");
+    assert_eq!(backend.embedding_dimension(), 384);
+
+    let texts = vec![
+        "The cat sits on the mat.".to_string(),
+        "A cat is sitting on a rug.".to_string(),
+        "The quarterly tax report is due on Friday.".to_string(),
+    ];
+    let embeddings = backend.embed(&texts).expect("encode must succeed");
+    assert_eq!(embeddings.len(), texts.len());
+    for v in &embeddings {
+        assert_eq!(v.len(), 384);
+        let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 0.01, "L2-normalised, got norm {norm}");
+    }
+    let cosine = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
+    let near = cosine(&embeddings[0], &embeddings[1]);
+    let far = cosine(&embeddings[0], &embeddings[2]);
+    assert!(
+        near > 0.6 && far < 0.3,
+        "paraphrases are near ({near}), unrelated text far ({far})"
+    );
+}
+
 #[test]
 fn test_potion_model_ids() {
     assert_eq!(

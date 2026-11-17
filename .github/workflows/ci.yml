@@ -8,8 +8,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # Surface deprecations as errors so the workspace stays clean.
-  RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
 
 jobs:
   # -------------------------------------------------------------------------
@@ -133,8 +131,8 @@ jobs:
       - run: cargo test --workspace --doc --all-features
 
   # -------------------------------------------------------------------------
-  # Documentation — must build cleanly. RUSTDOCFLAGS at the env level
-  # rejects broken intra-doc links workspace-wide.
+  # Documentation — must build cleanly: any rustdoc warning fails the job
+  # (owner 2026-11-17).
   # -------------------------------------------------------------------------
   docs:
     name: cargo doc
@@ -146,6 +144,8 @@ jobs:
       - name: Install system deps
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: cargo doc --workspace --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
 
   # -------------------------------------------------------------------------
   # Supply-chain checks — cargo-audit (vulnerabilities) + cargo-deny

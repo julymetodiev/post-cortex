@@ -18,7 +18,7 @@ use pcx_module_api::{Effect, ModuleError, Scope, ToolOutput, ToolSpec, metadata}
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, CustomNotification,
     ErrorData as McpError, Extensions, GetPromptRequestParams, GetPromptResponse, Implementation,
-    InitializeRequestParams, InitializeResult, ListPromptsResult, ListToolsResult,
+    InitializeRequestParams, InitializeResult, ListPromptsResult, ListToolsResult, MetaObject,
     PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerConfig, ServerNotification,
     Tool, ToolAnnotations,
 };
@@ -227,11 +227,11 @@ fn tool(spec: &ToolSpec) -> Tool {
 pub const RESULTS: &str = "\n\nResults:\n";
 
 /// The MCP result of a tool's outcome: its text (none for an RPC's, which
-/// has only data), then its data as `Results:`; a failure is a tool error (`isError: true`) with its
+/// has only data), then its data as `Results:`, its meta as `_meta`; a failure is a tool error (`isError: true`) with its
 /// message, then its details as `Details:`. Clients render a tool call's
 /// JSON-RPC error opaquely, so a known tool never answers with one.
 pub fn call_result(outcome: Result<ToolOutput, ModuleError>) -> CallToolResult {
-    let (contents, failed) = match outcome {
+    let (contents, failed, meta) = match outcome {
         Ok(output) => {
             let mut contents = Vec::new();
             if !output.text.is_empty() {
@@ -240,21 +240,23 @@ pub fn call_result(outcome: Result<ToolOutput, ModuleError>) -> CallToolResult {
             if let Some(data) = output.data {
                 contents.push(ContentBlock::text(format!("{RESULTS}{data}")));
             }
-            (contents, output.failed)
+            (contents, output.failed, output.meta)
         }
         Err(error) => {
             let mut contents = vec![ContentBlock::text(error.message)];
             if let Some(details) = error.details {
                 contents.push(ContentBlock::text(format!("\n\nDetails:\n{details}")));
             }
-            (contents, true)
+            (contents, true, None)
         }
     };
-    if failed {
+    let mut result = if failed {
         CallToolResult::error(contents)
     } else {
         CallToolResult::success(contents)
-    }
+    };
+    result.meta = meta.map(MetaObject);
+    result
 }
 
 /// The default author of a tool call: the `X-PCX-Author` header of the

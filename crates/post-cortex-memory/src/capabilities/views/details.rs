@@ -20,7 +20,7 @@ use crate::capabilities::sessions::Sessions;
 use crate::capabilities::views::streams;
 use crate::capabilities::views::watch::{self, ActivityStream, WatchRequest};
 use crate::capabilities::views::{Views, ViewsError};
-use crate::content_vectorizer::SearchOptions;
+use crate::content_vectorizer::{RerankSkipped, SearchOptions};
 use crate::graph_views::detail::{
     EntityDetail, FileDetail, Files, GraphDetail, Overview, PageCursor, RadarDetail, RecordDetail,
     RecordFilter, RecordPage, SearchHitDetail, Timeline, TopicsDetail,
@@ -71,6 +71,8 @@ pub struct SearchDetail {
     /// Whether a reranker ordered the hits (a `local` or `accurate` search
     /// is not reranked where no reranker for it is configured).
     pub reranked: bool,
+    /// Why a search that asked for a reranker got none.
+    pub rerank_skipped: Option<RerankSkipped>,
 }
 
 /// The detail views of the Views capability (see the module docs).
@@ -360,7 +362,8 @@ impl DetailViews {
         let started = Instant::now();
         let found = self.search.find(scope_of, query, options).await?;
         let took_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let (results, reranked) = (found.hits, found.reranked);
+        let (results, reranked, rerank_skipped) =
+            (found.hits, found.reranked, found.rerank_skipped);
         let turns = streams::turns(&self.messages, &results).await?;
         let hits = on_index(scope, move |index| index.search_hits(results, &turns)).await?;
         Ok(SearchDetail {
@@ -368,6 +371,7 @@ impl DetailViews {
             took_ms,
             neighbour_radius: self.search.neighbour_radius(),
             reranked,
+            rerank_skipped,
         })
     }
 

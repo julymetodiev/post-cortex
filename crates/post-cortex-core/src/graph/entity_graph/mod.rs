@@ -7,10 +7,10 @@
 //!
 //! Split by concern: this module holds the graph itself (nodes, edges, the
 //! one edge walker [`SimpleEntityGraph::relationships_of`]);
-//! [`resolution`] maps names to entities (the only name entry point is
-//! [`SimpleEntityGraph::resolve`]); [`mentions`] records what records say
-//! about entities; [`traversal`] walks the graph; [`ranking`] scores it;
-//! [`matching`] finds the graph's entities in a text; `codec` is the
+//! `resolution` maps names to entities (the only name entry point is
+//! [`SimpleEntityGraph::resolve`]); `mentions` records what records say
+//! about entities; `traversal` walks the graph; `ranking` scores it;
+//! `matching` finds the graph's entities in a text; `codec` is the
 //! serialised form.
 
 mod codec;

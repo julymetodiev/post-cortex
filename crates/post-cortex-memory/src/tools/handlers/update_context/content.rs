@@ -49,16 +49,23 @@ pub fn build(
                 &["changes", "diff", "change_type", "change"],
                 &["description"],
             );
-            let details = extract_extras(&[
-                "file_path",
-                "file",
-                "title",
-                "description",
-                "changes",
-                "diff",
-                "change_type",
-                "change",
-            ]);
+            // The `file` key the title came from; the other, when both are
+            // given, stays in the details, so no path it names is lost.
+            let title_key = ["file_path", "file"]
+                .into_iter()
+                .find(|k| content.get(*k).is_some_and(|v| !v.trim().is_empty()));
+            let used: Vec<&str> = title_key
+                .into_iter()
+                .chain([
+                    "title",
+                    "description",
+                    "changes",
+                    "diff",
+                    "change_type",
+                    "change",
+                ])
+                .collect();
+            let details = extract_extras(&used);
             (UpdateType::CodeChanged, title, description, details)
         }
         "problem_solved" => {

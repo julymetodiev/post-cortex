@@ -1,5 +1,6 @@
-// The daemon's REST routes the plugins use (crates/post-cortex-daemon/src/
-// daemon/rmcp_server.rs): GET /api/cards, GET /api/file, POST /api/messages,
+// The daemon's REST routes the plugins use (crates/post-cortex-transport/src/
+// rest.rs): POST /api/events (the cards and a file's memory, worded by the
+// memory module for every client), POST /api/messages,
 // POST /api/projects/resolve, POST /api/search. Every call has a timeout
 // (3 s by default) and fails open: any error, timeout or non-2xx answer is
 // null / false, so memory never gets in the way of the agent. A refused
@@ -153,20 +154,32 @@ export class PcxClient {
     }
   }
 
-  /** `{user, workspace}` cards, or null. */
-  cards(workspaceId: string, refused?: Refused): Promise<unknown> {
-    return this.request("GET", `/api/cards?workspace_id=${encodeURIComponent(workspaceId)}`, undefined, false, refused);
-  }
-
-  /** The file view of `path` (project-relative), or null. */
-  file(workspaceId: string, path: string, limit = 3, refused?: Refused): Promise<unknown> {
-    return this.request(
-      "GET",
-      `/api/file?workspace_id=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}&limit=${limit}`,
-      undefined,
+  /**
+   * The text the memory module adds for `event` in the workspace (POST
+   * /api/events: the hook event, as Claude Code's JSON, with its scope);
+   * null when it adds nothing or on any failure.
+   */
+  private async event(workspaceId: string, event: Record<string, unknown>, refused?: Refused): Promise<string | null> {
+    const answer = await this.request(
+      "POST",
+      "/api/events",
+      { scope: { workspace_id: workspaceId, author: this.author }, event },
       false,
       refused,
     );
+    const output = typeof answer === "object" && answer !== null ? (answer as Record<string, unknown>).hookSpecificOutput : undefined;
+    const text = typeof output === "object" && output !== null ? (output as Record<string, unknown>).additionalContext : undefined;
+    return typeof text === "string" && text ? text : null;
+  }
+
+  /** The user card and the project card (or how to write the project card), as a session start gets them; null on any failure. */
+  cards(workspaceId: string, refused?: Refused): Promise<string | null> {
+    return this.event(workspaceId, { hook_event_name: "SessionStart" }, refused);
+  }
+
+  /** What the memory knows about `path` (project-relative) before it is edited; null when nothing is known or on any failure. */
+  fileContext(workspaceId: string, path: string, refused?: Refused): Promise<string | null> {
+    return this.event(workspaceId, { hook_event_name: "PreToolUse", tool_input: { file_path: path } }, refused);
   }
 
   /** Hits for `query` (malformed ones dropped), or null on any failure. */

@@ -6,7 +6,8 @@ use crate::graph_views::test_support::{at, rec, scope};
 use chrono::{Duration, Utc};
 use post_cortex_core::core::context_update::{EntityType, RelationType, UpdateType};
 use post_cortex_core::core::dismissal::{RadarDismissal, RadarItemKind, alias_key};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use uuid::Uuid;
 
 use EntityType::{CodeComponent as Code, Concept, Decision, Problem, Technology as Tech};
 use RelationType::*;
@@ -56,19 +57,123 @@ async fn impact_view_walks_dependents_and_reports_risks() {
         .collect();
     assert_eq!(found, [("api", 1), ("ui", 2)]);
     assert_eq!(view.dependents[1].via, "api");
-    let kinds: Vec<&str> = view
+    let kinds: Vec<(&str, &str, usize)> = view
         .risks
         .iter()
-        .map(|r| r.interaction_type.as_str())
+        .map(|r| {
+            (
+                r.record.interaction_type.as_str(),
+                r.about.as_str(),
+                r.depth,
+            )
+        })
         .collect();
     assert_eq!(
         kinds,
-        ["requirement_added", "decision_made"],
-        "no QA, newest first"
+        [
+            ("decision_made", "core", 0),
+            ("requirement_added", "api", 1)
+        ],
+        "no QA; the record about core itself first"
     );
+    assert_eq!(view.total_risks, 2);
 
     let shallow = Index::of(&s).impact_view("core", 1, 10).unwrap();
     assert_eq!(shallow.dependents.len(), 1);
+}
+
+/// `A required_by B`: B needs A, so B depends on A and A does not depend on
+/// B (the edge `OrgStore::slug required_by Scope.tenant` of board task
+/// b22dfd96 showed the slug as a dependent of the tenant).
+#[tokio::test]
+async fn required_by_is_read_in_its_own_direction() {
+    let s = scope(vec![
+        rec(0, UpdateType::DecisionMade, "the tenant reads the org slug")
+            .about(&[("OrgStore::slug", Code), ("Scope.tenant", Code)])
+            .rel("OrgStore::slug", "Scope.tenant", RequiredBy)
+            .update(),
+    ])
+    .await;
+    let index = Index::of(&s);
+    let of_slug = index.impact_view("OrgStore::slug", 2, 10).unwrap();
+    let names: Vec<&str> = of_slug
+        .dependents
+        .iter()
+        .map(|d| d.entity.as_str())
+        .collect();
+    assert_eq!(names, ["Scope.tenant"]);
+    let of_tenant = index.impact_view("Scope.tenant", 2, 10).unwrap();
+    assert!(
+        of_tenant.dependents.is_empty(),
+        "{:?}",
+        of_tenant.dependents
+    );
+}
+
+/// The case of board task 6bc2fd86: a dependent's many records must not
+/// bury the one about the entity, and of the dependent's records those
+/// about the relation's reason come before newer unrelated ones.
+#[tokio::test]
+async fn impact_risks_put_the_entity_and_the_relations_reason_first() {
+    let entity = rec(0, UpdateType::ProblemSolved, "the film exports at -20 LUFS instead of -14")
+        .about(&[("export loudness", Problem), ("promo film", Concept)])
+        .rel("promo film", "export loudness", DependsOn)
+        .because("the film cannot reach -14 LUFS until the export can bring peaks down, since its gain is capped by the true peak")
+        .update();
+    let limiter = rec(
+        1,
+        UpdateType::DecisionMade,
+        "does the limiter bring the film to -14 LUFS",
+    )
+    .about(&[("promo film", Concept)])
+    .described("the limiter holds the true peak under the ceiling")
+    .update();
+    let title = rec(5, UpdateType::DecisionMade, "the film's YouTube title")
+        .about(&[("promo film", Concept)])
+        .described("the title names the film and the channel")
+        .update();
+    let upload = rec(
+        6,
+        UpdateType::DecisionMade,
+        "finish the film's upload in the browser",
+    )
+    .about(&[("promo film", Concept)])
+    .update();
+    let script = rec(
+        7,
+        UpdateType::RequirementAdded,
+        "the v2 script needs the film",
+    )
+    .about(&[("v2 script", Concept), ("promo film", Concept)])
+    .rel("v2 script", "promo film", DependsOn)
+    .update();
+    let s = scope(vec![
+        entity.clone(),
+        limiter.clone(),
+        title.clone(),
+        upload.clone(),
+        script.clone(),
+    ])
+    .await;
+
+    let view = Index::of(&s).impact_view("export loudness", 2, 10).unwrap();
+    let order: Vec<(Uuid, &str, usize)> = view
+        .risks
+        .iter()
+        .map(|r| (r.record.id, r.about.as_str(), r.depth))
+        .collect();
+    assert_eq!(order[0], (entity.id, "export loudness", 0));
+    assert_eq!(
+        order[1],
+        (limiter.id, "promo film", 1),
+        "closest to the reason"
+    );
+    let rest: HashSet<Uuid> = order[2..].iter().map(|r| r.0).collect();
+    assert_eq!(rest, HashSet::from([title.id, upload.id, script.id]));
+
+    let cut = Index::of(&s).impact_view("export loudness", 2, 2).unwrap();
+    assert_eq!(cut.risks.len(), 2);
+    assert_eq!(cut.total_risks, 5, "the total counts what the limit cut");
 }
 
 #[tokio::test]

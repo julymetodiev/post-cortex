@@ -97,7 +97,7 @@ impl Index<'_> {
         EdgeDetail { edge, provenance }
     }
 
-    /// The files the records `ids` name ([`files_of`]), most recently
+    /// The files the records `ids` name (`files_of`), most recently
     /// touched first (then by path, descending, as files are paged).
     pub fn file_touches<'i>(&self, ids: impl IntoIterator<Item = &'i Uuid>) -> Vec<FileTouch> {
         // path -> (records, latest time, its type)

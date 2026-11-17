@@ -8,11 +8,12 @@ use crate::context_assembly::analyze_impact;
 use crate::graph_views::index::Index;
 use crate::graph_views::index::sort_by_importance;
 use crate::graph_views::types::{
-    EntityView, GraphNode, ImpactItem, ImpactView, LineageLink, LineageLinks, LineageStep,
-    LineageView, RecordView, RelationRef, TopicView, TopicsView,
+    EntityView, GraphNode, ImpactItem, ImpactRisk, ImpactView, LineageLink, LineageLinks,
+    LineageStep, LineageView, RecordView, RelationRef, TopicView, TopicsView,
 };
 use chrono::{DateTime, Utc};
 use post_cortex_core::core::context_update::{RelationType, UpdateType};
+use post_cortex_core::graph::retrieval_graph::terms;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 
@@ -83,25 +84,94 @@ impl Index<'_> {
             UpdateType::RequirementAdded.as_str(),
             UpdateType::ProblemSolved.as_str(),
         ];
-        let mut risks: Vec<RecordView> = Vec::new();
+        // Each record once, about the nearest entity it names (dependents
+        // are nearest first).
+        let mut found: Vec<ImpactRisk> = Vec::new();
         let mut listed = HashSet::new();
-        for name in std::iter::once(&entity).chain(dependents.iter().map(|d| &d.entity)) {
+        let names =
+            std::iter::once((&entity, 0)).chain(dependents.iter().map(|d| (&d.entity, d.depth)));
+        for (name, hops) in names {
             for record in index.mentioning(name) {
                 if record.validity.is_current()
                     && risky.contains(&record.interaction_type.as_str())
                     && listed.insert(record.id)
                 {
-                    risks.push(record);
+                    found.push(ImpactRisk {
+                        record,
+                        about: name.clone(),
+                        depth: hops,
+                    });
                 }
             }
         }
-        risks.sort_by_key(|r| std::cmp::Reverse(r.timestamp));
+        let total_risks = found.len();
+        let mut risks = index.rank_risks(found, &dependents);
         risks.truncate(limit);
         Some(ImpactView {
             entity,
             dependents,
             risks,
+            total_risks,
         })
+    }
+
+    /// Orders an impact report's risks: by the depth of the entity each is
+    /// about (the entity that changes first); at one depth by how close the
+    /// record is to the relations that make its entity a dependent (the
+    /// terms its title and description share with their contexts, each
+    /// counted as one over the risks that have it, so words every record
+    /// has count little); then newest first.
+    fn rank_risks(&self, risks: Vec<ImpactRisk>, dependents: &[ImpactItem]) -> Vec<ImpactRisk> {
+        let scores: Vec<f64> = {
+            let by_name: HashMap<&str, &ImpactItem> =
+                dependents.iter().map(|d| (d.entity.as_str(), d)).collect();
+            let own: Vec<HashSet<String>> = risks
+                .iter()
+                .map(|r| {
+                    self.records
+                        .get(&r.record.id)
+                        .map_or_else(HashSet::new, |(_, u)| {
+                            terms(&format!("{} {}", u.content.title, u.content.description))
+                        })
+                })
+                .collect();
+            let mut df: HashMap<&str, usize> = HashMap::new();
+            for t in own.iter().flatten() {
+                *df.entry(t.as_str()).or_default() += 1;
+            }
+            // The terms of the relation contexts from each dependent back to
+            // the entity that changes.
+            let mut paths: HashMap<&str, HashSet<String>> = HashMap::new();
+            risks
+                .iter()
+                .zip(&own)
+                .map(|(risk, own)| {
+                    let path = paths.entry(risk.about.as_str()).or_insert_with(|| {
+                        let mut contexts = String::new();
+                        let mut at = by_name.get(risk.about.as_str());
+                        while let Some(item) = at {
+                            contexts.push_str(&item.context);
+                            contexts.push('\n');
+                            at = by_name.get(item.via.as_str());
+                        }
+                        terms(&contexts)
+                    });
+                    own.intersection(path)
+                        .filter_map(|t| df.get(t.as_str()))
+                        .map(|n| 1.0 / *n as f64)
+                        .sum()
+                })
+                .collect()
+        };
+        let mut scored: Vec<(f64, ImpactRisk)> = scores.into_iter().zip(risks).collect();
+        scored.sort_by(|(sa, a), (sb, b)| {
+            a.depth
+                .cmp(&b.depth)
+                .then_with(|| sb.total_cmp(sa))
+                .then_with(|| b.record.timestamp.cmp(&a.record.timestamp))
+                .then_with(|| a.record.id.cmp(&b.record.id))
+        });
+        scored.into_iter().map(|(_, r)| r).collect()
     }
 
     /// Topic communities with their central entities and key decisions.

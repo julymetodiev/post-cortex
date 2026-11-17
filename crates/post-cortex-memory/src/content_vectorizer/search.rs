@@ -19,7 +19,9 @@ use crate::content_vectorizer::fusion::rank;
 use crate::content_vectorizer::fusion::rerank;
 use crate::content_vectorizer::fusion::search_depth;
 use crate::content_vectorizer::fusion::traces;
-use crate::content_vectorizer::types::{SearchMode, SearchOptions, SemanticSearchResult};
+use crate::content_vectorizer::types::{
+    RerankSkipped, SearchMode, SearchOptions, SemanticSearchResult,
+};
 use crate::query_cache::CacheScope;
 use post_cortex_ports::error::Result;
 use std::collections::HashMap;
@@ -225,6 +227,20 @@ impl ContentVectorizer {
     /// reranker allowed when `remote`.
     pub fn reranks(&self, mode: Option<SearchMode>, remote: bool) -> bool {
         self.reranker_for(mode, remote).1.is_some()
+    }
+
+    /// Why a search in `mode` that asks for a reranker gets none, with the
+    /// remote reranker allowed when `remote`; none for a `fast` search and
+    /// for one that is reranked.
+    pub fn rerank_skipped(&self, mode: Option<SearchMode>, remote: bool) -> Option<RerankSkipped> {
+        match self.reranker_for(mode, remote) {
+            (_, Some(_)) | (SearchMode::Fast, None) => None,
+            (SearchMode::Local, None) => Some(RerankSkipped::NoLocalReranker),
+            (SearchMode::Accurate, None) if self.would_rerank_remotely(mode) => {
+                Some(RerankSkipped::RemoteNotAllowed)
+            }
+            (SearchMode::Accurate, None) => Some(RerankSkipped::NoReranker),
+        }
     }
 }
 

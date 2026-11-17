@@ -64,66 +64,22 @@ async function call(path: string, body?: unknown): Promise<Json | null> {
   }
 }
 
-const q = encodeURIComponent;
-
-async function cardsText(): Promise<string | null> {
-  const cards = await call(`/api/cards?workspace_id=${q(WORKSPACE)}`);
-  if (!cards) return null;
-  const parts: string[] = [];
-  for (const [key, title] of [
-    ["user", "User card"],
-    ["workspace", "Project card"],
-  ]) {
-    const text = String(cards[key]?.text ?? "").trim();
-    if (text) parts.push(`### ${title} (v${cards[key]?.version})\n${text}`);
-  }
-  if (!String(cards.workspace?.text ?? "").trim()) {
-    parts.push(
-      "No project card yet. Once you know the stack, conventions and current goals, " +
-        "write a short one (max 2 KB): manage_workspace action update_card, workspace_id " +
-        `${WORKSPACE}, expected_version 0.`,
-    );
-  }
-  return `## post-cortex cards\n\n${parts.join("\n\n")}`;
+// The text the memory module adds for a hook `event` in the workspace, the
+// same for every client: the cards for a session start, a file's memory
+// before an edit.
+async function memoryText(event: Json): Promise<string | null> {
+  const answer = await call("/api/events", {
+    scope: { workspace_id: WORKSPACE, author: AUTHOR },
+    event,
+  });
+  const text = answer?.hookSpecificOutput?.additionalContext;
+  return typeof text === "string" && text ? text : null;
 }
 
-function line(r: Json): string {
-  const when = String(r.timestamp ?? "").slice(0, 10);
-  let text = String(r.title ?? "");
-  const description = String(r.description ?? "").trim();
-  if (description) text += `: ${[...description].slice(0, 200).join("")}`;
-  if (typeof r.validity?.valid_to === "string") {
-    text += ` (no longer holds: ${r.validity?.reason ?? "ended"})`;
-  }
-  return `- ${when} ${text} [entry ${r.id ?? ""}]`;
-}
+const cardsText = (): Promise<string | null> => memoryText({ hook_event_name: "SessionStart" });
 
-async function fileText(path: string): Promise<string | null> {
-  const view = await call(
-    `/api/file?workspace_id=${q(WORKSPACE)}&path=${q(path)}&limit=3`,
-  );
-  if (!view) return null;
-  const list = (key: string): string[] =>
-    Array.isArray(view[key]) ? view[key].slice(0, 3).map(line) : [];
-  const parts: string[] = [];
-  const problems = list("problems");
-  if (problems.length) {
-    parts.push(`Problems solved here before:\n${problems.join("\n")}`);
-  }
-  const decisions = list("decisions");
-  if (decisions.length) {
-    parts.push(`Decisions and requirements about it:\n${decisions.join("\n")}`);
-  }
-  const dependents: string[] = Array.isArray(view.dependents)
-    ? view.dependents
-        .slice(0, 10)
-        .map((d: Json) => d?.entity)
-        .filter((e: unknown): e is string => typeof e === "string")
-    : [];
-  if (dependents.length) parts.push(`Depends on it: ${dependents.join(", ")}`);
-  if (!parts.length) return null;
-  return `post-cortex memory for ${path}:\n\n${parts.join("\n\n")}`;
-}
+const fileText = (path: string): Promise<string | null> =>
+  memoryText({ hook_event_name: "PreToolUse", tool_input: { file_path: path } });
 
 // The files an edit tool call touches, relative to the project.
 function editedFiles(tool: string, args: Json, directory: string): string[] {

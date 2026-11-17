@@ -4,7 +4,7 @@
 //! The rows of the operation table.
 
 use crate::tools::operations::{
-    Count, Counter, Effect, McpRoute, Operation, Rerank, ScopeFields, Tally,
+    Count, Counter, Effect, McpRoute, Operation, RERANKED, Rerank, ScopeFields, Tally,
 };
 
 /// An MCP route.
@@ -121,7 +121,8 @@ const SEARCH_RERANKS: Effect = Effect::Search {
         field: "mode",
         values: &["local", "accurate"],
         fallback: "fast",
-        answered: "reranked",
+        answered: RERANKED,
+        withheld: "rerank_withheld",
     }),
 };
 
@@ -131,7 +132,8 @@ const VIEW_SEARCH: Effect = Effect::Search {
         field: "mode",
         values: &["SEARCH_MODE_LOCAL", "SEARCH_MODE_ACCURATE"],
         fallback: "SEARCH_MODE_FAST",
-        answered: "reranked",
+        answered: RERANKED,
+        withheld: "rerank_withheld",
     }),
 };
 

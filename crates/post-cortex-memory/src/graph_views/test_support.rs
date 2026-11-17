@@ -29,6 +29,7 @@ pub struct Rec {
     description: &'static str,
     entities: Vec<(&'static str, EntityType)>,
     relations: Vec<(&'static str, &'static str, RelationType)>,
+    because: Option<&'static str>,
     meta: UpdateMeta,
     author: &'static str,
     file: Option<&'static str>,
@@ -45,6 +46,7 @@ pub fn rec(minutes: i64, kind: UpdateType, title: &'static str) -> Rec {
         description: "because",
         entities: Vec::new(),
         relations: Vec::new(),
+        because: None,
         meta: UpdateMeta::default(),
         author: "claude-code",
         file: None,
@@ -61,6 +63,11 @@ impl Rec {
     /// It asserts `a` -`r`-> `b`.
     pub fn rel(mut self, a: &'static str, b: &'static str, r: RelationType) -> Self {
         self.relations.push((a, b, r));
+        self
+    }
+    /// Its relations hold because of `context` (else "a <relation> b").
+    pub fn because(mut self, context: &'static str) -> Self {
+        self.because = Some(context);
         self
     }
     /// Written by `author`.
@@ -120,7 +127,9 @@ impl Rec {
                     from_entity: a.to_string(),
                     to_entity: b.to_string(),
                     relation_type: *r,
-                    context: format!("{a} {} {b}", r.as_str()),
+                    context: self
+                        .because
+                        .map_or_else(|| format!("{a} {} {b}", r.as_str()), str::to_string),
                 })
                 .collect(),
             references_entities: Vec::new(),

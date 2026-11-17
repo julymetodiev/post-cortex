@@ -315,7 +315,7 @@ message Record {
   repeated RecordRelation relations = 15;
   // The code it points at.
   optional CodeRef code = 16;
-  // Captured messages it was drawn from (message:<seq>).
+  // Captured messages it was drawn from (`message:<seq>`).
   repeated string derived_from = 17;
   // Records the writer said it replaces.
   repeated string supersedes = 18;
@@ -513,8 +513,20 @@ message Dependent {
   uint32 depth = 6;
 }
 
+// A record at risk, with what it is about.
+message Risk {
+  // The record.
+  Record record = 1;
+  // The nearest entity of the report it names: the one asked for or a
+  // dependent.
+  string about = 2;
+  // Hops of `about` from the entity asked for (0: that entity).
+  uint32 depth = 3;
+}
+
 // What depends on an entity.
 message Impact {
+  reserved 4;
   // Canonical name.
   string entity = 1;
   // Hops followed.
@@ -522,8 +534,12 @@ message Impact {
   // Dependents, nearest first.
   repeated Dependent dependents = 3;
   // Current decisions, requirements and problems about it and its
-  // dependents, newest first.
-  repeated Record risks = 4;
+  // dependents, most relevant first: about the entity itself, then by the
+  // dependent's depth, then by closeness to the relations' contexts, then
+  // newest (at most the limit).
+  repeated Risk risks = 5;
+  // All such records.
+  uint32 total_risks = 6;
 }
 
 // A record on an entity's causal chain.
@@ -631,11 +647,15 @@ message SearchRequest {
   optional google.protobuf.Timestamp to = 9;
   // Temporal decay (0 = off).
   optional float recency_bias = 10;
+  // Set by the cloud's gateway, never by a client: "plan_limit" when the
+  // organisation's plan has no reranker calls left, so the search runs as
+  // fast and answers rerank_skipped "plan_limit".
+  optional string rerank_withheld = 11;
 }
 
 // A record, a message or an entity description found by search.
 message SearchItem {
-  // Entry id, message:<seq>, or an entity description's id.
+  // Entry id, `message:<seq>`, or an entity description's id.
   string content_id = 1;
   // Its session.
   string session_id = 2;
@@ -704,6 +724,11 @@ message SearchResponse {
   // Whether a reranker ordered the hits: a local or accurate search is not
   // reranked where the server has no reranker for it.
   bool reranked = 4;
+  // Why a search that asked for a reranker got none: no_local_reranker
+  // (the server has no local one; the cloud never has: use accurate),
+  // no_reranker, remote_not_allowed (a workspace searched does not allow
+  // Voyage and there is no local one). Unset: fast, or reranked.
+  optional string rerank_skipped = 5;
 }
 
 // ------------------------------------------------------------ topics, radar
@@ -822,10 +847,13 @@ message FileView {
   repeated Record problems = 3;
   // Current decisions and requirements.
   repeated Record decisions = 4;
-  // Entities naming the file.
+  // Entities named after the file.
   repeated Node entities = 5;
-  // What depends on those entities.
+  // What depends on those entities, hop by hop, code first in a hop.
   repeated Dependent dependents = 6;
+  // The code the records that name the file changed with it (neither its
+  // own entities nor its dependents), the most often named first.
+  repeated Node changed_with = 7;
 }
 
 // ListFiles.
@@ -858,7 +886,7 @@ message Message {
   string session_id = 1;
   // Position in the session's stream.
   uint64 seq = 2;
-  // message:<seq>, as records' derived_from and search hits name it.
+  // `message:<seq>`, as records' derived_from and search hits name it.
   string content_id = 3;
   // The client's id for the turn.
   string turn_id = 4;

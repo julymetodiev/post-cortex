@@ -54,9 +54,17 @@ pub struct Rerank {
     /// The value that runs the search without its reranker.
     pub fallback: &'static str,
     /// The boolean field of the answer that says whether a reranker
-    /// ordered the hits (one may not be configured, or not allowed).
+    /// ordered the hits (one may not be configured, or not allowed); over
+    /// MCP, of the answer's meta, which a `select` does not take away.
     pub answered: &'static str,
+    /// The request field that marks a search whose reranker the cloud
+    /// withheld (the plan has no reranker calls left), which then answers
+    /// why (`RerankSkipped::PlanLimit`).
+    pub withheld: &'static str,
 }
+
+/// The `answered` field of every reranking search.
+pub const RERANKED: &str = "reranked";
 
 /// What an operation does to memory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -58,9 +58,9 @@ test("cards go into the post-cortex prompt section; fetched once per cwd", async
     for (let i = 0; i < 2; i++) {
       const event = { type: "before_agent_start", messageType: "user", prompt: "hi", systemPrompt: "", systemPromptOptions: { sections: {} as Record<string, string> } };
       assert.equal(await emit("before_agent_start", event, ctx), undefined);
-      assert.ok(event.systemPromptOptions.sections[SECTION]?.startsWith(`## post-cortex cards\n\n[PCX] Session: ${TEST_SESSION}`));
+      assert.ok(event.systemPromptOptions.sections[SECTION]?.startsWith(`[PCX] Session: ${TEST_SESSION}`));
     }
-    assert.equal(daemon.requests.filter((r) => r.path === "/api/cards").length, 1);
+    assert.equal(daemon.events("SessionStart").length, 1);
   } finally {
     t.cleanup();
     await daemon.close();

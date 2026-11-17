@@ -118,6 +118,18 @@ pub struct ImpactItem {
     pub depth: usize,
 }
 
+/// A record at risk in an impact report, with what it is about.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ImpactRisk {
+    /// The record.
+    pub record: RecordView,
+    /// The nearest entity of the report it names: the entity that changes
+    /// or one of its dependents.
+    pub about: String,
+    /// Hops of `about` from the entity that changes (0: that entity).
+    pub depth: usize,
+}
+
 /// The `impact` view: who depends on an entity, and what
 /// the records say about them (a pre-change risk report).
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -127,8 +139,13 @@ pub struct ImpactView {
     /// Everything that depends on it, nearest first.
     pub dependents: Vec<ImpactItem>,
     /// Valid decisions, requirements and problems about the entity or its
-    /// dependents, newest first.
-    pub risks: Vec<RecordView>,
+    /// dependents, most relevant first (at most the limit): those about the
+    /// entity itself, then by the depth of the dependent they are about;
+    /// at one depth, those closest to the contexts of the relations that
+    /// make it a dependent; then newest first.
+    pub risks: Vec<ImpactRisk>,
+    /// All such records.
+    pub total_risks: usize,
 }
 
 /// One topic: a community of entities with what the records say about it.
@@ -193,10 +210,14 @@ pub struct FileView {
     pub problems: Vec<RecordView>,
     /// Valid decisions and requirements about it.
     pub decisions: Vec<RecordView>,
-    /// Entities naming the file (its path, file name or stem).
+    /// Entities named after the file (its path, file name or stem).
     pub entities: Vec<GraphNode>,
-    /// What depends on those entities (impact analysis).
+    /// What depends on those entities (impact analysis), hop by hop, code
+    /// first in a hop.
     pub dependents: Vec<ImpactItem>,
+    /// The code the records that name the file changed with it (neither its
+    /// own entities nor its dependents), the most often named first.
+    pub changed_with: Vec<GraphNode>,
 }
 
 /// A pair of entities that may be one.

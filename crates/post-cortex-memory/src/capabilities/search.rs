@@ -17,7 +17,8 @@ use uuid::Uuid;
 
 use crate::capabilities::search::completion::Completion;
 use crate::content_vectorizer::{
-    ContentVectorizer, RERANK_POOL, SearchMode, SearchOptions, SemanticSearchResult, VectorScope,
+    ContentVectorizer, RERANK_POOL, RerankSkipped, SearchMode, SearchOptions, SemanticSearchResult,
+    VectorScope,
 };
 use crate::memory_system::MemoryRuntime;
 
@@ -73,6 +74,9 @@ pub struct Found {
     /// configured, the remote one only where every workspace of the scope
     /// allows it.
     pub reranked: bool,
+    /// Why a search that asked for a reranker got none (none for a `fast`
+    /// search and for one that was reranked).
+    pub rerank_skipped: Option<RerankSkipped>,
 }
 
 /// The Search capability service.
@@ -258,6 +262,11 @@ impl Search {
             .remote_allowed(&vectorizer, options.mode, sessions.as_deref())
             .await?;
         let reranked = vectorizer.reranks(options.mode, options.remote_rerank);
+        let rerank_skipped = if options.rerank_withheld {
+            Some(RerankSkipped::PlanLimit)
+        } else {
+            vectorizer.rerank_skipped(options.mode, options.remote_rerank)
+        };
 
         // The session of a one-session search, loaded for the graph and the
         // completion.
@@ -316,6 +325,7 @@ impl Search {
         Ok(Found {
             hits: completed,
             reranked,
+            rerank_skipped,
         })
     }
 

@@ -72,6 +72,7 @@ fn every_field_the_table_names_is_in_its_messages() {
                     rerank: Some(rerank),
                 } => {
                     request.push(rerank.field);
+                    request.push(rerank.withheld);
                     &[]
                 }
                 Effect::Search { rerank: None } | Effect::Read => &[],

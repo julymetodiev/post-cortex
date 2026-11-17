@@ -33,7 +33,7 @@ mod types;
 pub use index::Index;
 pub use request::{DEFAULT_LIMIT, MAX_LIMIT, RenderedView, VIEW_NAMES, ViewError, ViewRequest};
 pub use types::{
-    AliasCandidate, EntityView, FileView, GraphEdge, GraphNode, ImpactItem, ImpactView,
+    AliasCandidate, EntityView, FileView, GraphEdge, GraphNode, ImpactItem, ImpactRisk, ImpactView,
     LineageLink, LineageLinks, LineageStep, LineageView, RadarView, RecordView, RelationRef,
     TopicView, TopicsView,
 };
@@ -51,6 +51,8 @@ pub struct GraphScope {
     pub graph: Arc<SimpleEntityGraph>,
 }
 
+#[cfg(test)]
+mod file_view_tests;
 #[cfg(test)]
 mod record_files_tests;
 #[cfg(test)]

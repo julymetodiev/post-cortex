@@ -24,7 +24,7 @@ pub struct ListRecords {
     pub types: Vec<UpdateType>,
     /// Only records written strictly after this time.
     pub after: Option<DateTime<Utc>>,
-    /// At most this many ([`DEFAULT_LIST_LIMIT`] when 0).
+    /// At most this many (`DEFAULT_LIST_LIMIT` when 0).
     pub limit: usize,
 }
 

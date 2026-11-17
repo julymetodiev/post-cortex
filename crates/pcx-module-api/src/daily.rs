@@ -16,7 +16,7 @@ const FIRST: Duration = Duration::from_secs(600);
 /// How often it is done then.
 const EVERY: Duration = Duration::from_secs(24 * 3_600);
 
-/// Do `work` [`FIRST`] after now, then every [`EVERY`], until `stop` is
+/// Do `work` `FIRST` after now, then every `EVERY`, until `stop` is
 /// cancelled.
 pub fn daily<F, W>(stop: CancellationToken, work: F)
 where

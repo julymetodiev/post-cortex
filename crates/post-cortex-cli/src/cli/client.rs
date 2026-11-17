@@ -152,7 +152,7 @@ pub enum ClientCommand {
         $ pcx connect --off"
     )]
     Connect {
-        /// The cloud (default: https://api.pcx.is)
+        /// The cloud (default: <https://api.pcx.is>)
         #[arg(long, value_name = "URL")]
         cloud: Option<String>,
 

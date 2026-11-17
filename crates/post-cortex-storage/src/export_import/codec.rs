@@ -2,7 +2,7 @@
 // Licensed under the MIT License. See LICENSE at the workspace root.
 
 //! Archive files: JSON, optionally gzip or zstd compressed, written and
-//! read one part at a time ([`write`], [`read`]); [`JsonArchive`] is the
+//! read one part at a time ([`write`], `read`); [`JsonArchive`] is the
 //! codec.
 
 use std::io::{Read, Write};

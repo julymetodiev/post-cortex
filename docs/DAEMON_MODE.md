@@ -226,8 +226,17 @@ evidence is in the top 50, with neighbours):
 | `mode` | Reranker | all@50 | Latency (server CPU) |
 |---|---|---|---|
 | `fast` | none | 0.803 | ~40 ms |
-| `local` | local cross-encoder (`reranker_model`) | 0.879 | ~1 s |
-| `accurate` | Voyage (`voyage_api_key`) in a workspace that allows it, else local | 0.937 | ~0.4 s |
+| `local` | local cross-encoder (`reranker_model`); none in the cloud | 0.879 | ~1 s |
+| `accurate` | Voyage (`voyage_api_key`) in a workspace that allows it, else local, if any | 0.937 | ~0.4 s |
+
+A search that asked for a reranker and got none says why in its answer
+(`rerank_skipped`): `no_local_reranker` (`local` on a server without one,
+as every cloud tenant), `no_reranker` (`accurate` on a server with none),
+`remote_not_allowed` (`accurate` where a workspace searched does not allow
+Voyage and there is no local reranker to fall back to), `plan_limit` (in the
+cloud: the organisation's plan has no reranker calls left, so its gateway ran
+the search as `fast`; it marks the request `rerank_withheld`, a field only the
+gateway sets).
 
 `fast` and `accurate` from the W8 gate (October 2026, 1 535 questions);
 `local` from the last run that measured it (2026-10-20).
@@ -258,7 +267,10 @@ neighbour_radius = 1                                    # records on each side o
   search its workspace, a session search every workspace the session is in
   (a session in none never), a global search every workspace and every
   session in one. Otherwise it uses the local reranker, if any.
-  `SearchResponse.reranked` says whether a reranker ordered the hits.
+  `SearchResponse.reranked` says whether a reranker ordered the hits; over
+  MCP the result's `_meta.reranked` says it too, also when a `select` keeps
+  only part of the data (`ToolOutput.meta`; the cloud counts reranker calls
+  by it).
 
 ## Conversation capture
 
@@ -844,9 +856,12 @@ forgotten (`manage_entity` `forget`). Ended records stay in the history and sear
 them lower.
 
 The Claude Code plugin's PreToolUse hook, `pcx-file-context.py`, gives
-the agent what the memory says about a file (past problems, decisions, dependents) before
-it edits it. It reads the `file` view over REST, with the same auth and allowed hosts as
-the rest of `/api/*`:
+the agent what the memory says about a file before it edits it: past problems, decisions,
+what depends on it (each with the relation that makes it a dependent) and the code it was
+changed with. It sends the `PreToolUse` event to `POST /api/events`, and the memory module
+answers with that text from the `file` view; every other client (`pcx hook`, the JS
+plugins) asks the same way, so all of them get the same words. The view itself is served
+over REST, with the same auth and allowed hosts as the rest of `/api/*`:
 
 ```bash
 curl "http://127.0.0.1:3737/api/file?workspace_id=<uuid>&path=src/lib.rs"
@@ -1025,7 +1040,7 @@ plugin, a Gemini CLI extension, MCP Registry entries, and native plugins for
 OpenCode, Kilo, Pi, OpenClaw and DeepSeek Harness. They take the backend
 from their own settings (a URL and a key) or the same profiles
 (`config.json`, `credentials.json`), resolve the project the same way (see
-above) and call the same REST routes (`/api/cards`, `/api/file`,
+above) and call the same REST routes (`/api/cards`, `/api/events`,
 `/api/messages`, `/api/projects/resolve`, `/api/search`). See
 [`integrations/`](../integrations/README.md).
 

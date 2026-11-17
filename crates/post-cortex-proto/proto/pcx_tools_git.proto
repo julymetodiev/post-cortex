@@ -53,7 +53,7 @@ message Pushed {
 message AddWorktreeRequest {
   // The repository.
   Repo at = 1;
-  // Its directory, relative to the repository (e.g. .worktrees/<task>).
+  // Its directory, relative to the repository (e.g. `.worktrees/<task>`).
   string path = 2;
   // Its branch.
   string branch = 3;

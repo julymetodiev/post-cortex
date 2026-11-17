@@ -4,9 +4,9 @@
 //! A session as a value: its metadata, its records (append-only, oldest
 //! first) and its entity graph. Everything else (current state, flow, hot
 //! window, code references, change history) is derived from the records on
-//! read ([`views`]); the record list changes only through
+//! read (`views`); the record list changes only through
 //! [`ActiveSession::apply_record`], [`ActiveSession::remove_records`] and
-//! [`ActiveSession::retire_update`] ([`mutate`]). Time is always a
+//! [`ActiveSession::retire_update`] (`mutate`). Time is always a
 //! parameter.
 //!
 //! The value holds its components behind `Arc`s so that a copy (one per
@@ -24,7 +24,7 @@ pub use codec::{ActiveSessionView, StoredSession};
 pub use views::ChangeRecord;
 
 use crate::collections::SharedVec;
-use crate::core::context_update::ContextUpdate;
+use crate::core::context_update::{ContextUpdate, UpdateType};
 use crate::graph::entity_graph::SimpleEntityGraph;
 use crate::session::session_components::SessionMetadata;
 
@@ -76,9 +76,25 @@ impl Default for UserPreferences {
 pub const MAX_DESCRIPTION_BYTES: usize = 64 * 1024;
 
 /// Longest title kept, in bytes; longer ones are cut to
-/// `TRUNCATED_TITLE_BYTES` plus an ellipsis.
+/// `TRUNCATED_TITLE_BYTES` plus `...`.
 pub const MAX_TITLE_BYTES: usize = 200;
 const TRUNCATED_TITLE_BYTES: usize = 190;
+
+/// What ends a title that was cut.
+const CUT_MARKER: &str = "...";
+
+/// The details key under which a code change keeps its whole `file` when
+/// its title (the `file`) is cut.
+pub const FILE_DETAIL_KEY: &str = "file";
+
+/// What is left of `title` if [`normalised`] cut it (`...` after
+/// `TRUNCATED_TITLE_BYTES`, or up to three bytes fewer: the cut keeps whole
+/// characters), without the marker; `None` for a title that was not cut.
+pub fn cut_title(title: &str) -> Option<&str> {
+    title
+        .strip_suffix(CUT_MARKER)
+        .filter(|kept| (TRUNCATED_TITLE_BYTES - 3..=TRUNCATED_TITLE_BYTES).contains(&kept.len()))
+}
 
 /// Truncate a string to at most `max_bytes` without splitting a multi-byte
 /// UTF-8 character.
@@ -95,15 +111,21 @@ fn truncate_safe(s: &mut String, max_bytes: usize) {
 
 /// `update` within the size limits: a description over
 /// [`MAX_DESCRIPTION_BYTES`] and a title over [`MAX_TITLE_BYTES`] are cut
-/// at a character boundary and marked as cut.
+/// at a character boundary and marked as cut. A code change's title is its
+/// `file`: before it is cut, the whole of it is kept as the details entry
+/// [`FILE_DETAIL_KEY`], so no path it lists is lost.
 pub fn normalised(mut update: ContextUpdate) -> ContextUpdate {
     if update.content.description.len() > MAX_DESCRIPTION_BYTES {
         truncate_safe(&mut update.content.description, MAX_DESCRIPTION_BYTES);
         update.content.description.push_str("... (truncated)");
     }
     if update.content.title.len() > MAX_TITLE_BYTES {
+        if update.update_type == UpdateType::CodeChanged {
+            let whole = format!("{FILE_DETAIL_KEY}: {}", update.content.title);
+            update.content.details.push(whole);
+        }
         truncate_safe(&mut update.content.title, TRUNCATED_TITLE_BYTES);
-        update.content.title.push_str("...");
+        update.content.title.push_str(CUT_MARKER);
     }
     update
 }

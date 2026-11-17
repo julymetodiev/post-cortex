@@ -4,6 +4,7 @@
 //! The table's fields read from the JSON form of a request: the shared
 //! core of every surface.
 
+use crate::content_vectorizer::RerankSkipped;
 use crate::tools::operations::{Count, Effect, Operation, Tally};
 use serde_json::Value;
 use uuid::Uuid;
@@ -182,7 +183,8 @@ pub fn answer_flag(answer: &Value, field: &str) -> Option<bool> {
 }
 
 /// The JSON request of `operation` without its reranker: its rerank field
-/// set to the fallback. Nothing changes for an operation that never
+/// set to the fallback, and marked as withheld by the plan (its answer says
+/// so). Nothing changes for an operation that never
 /// reranks.
 pub fn without_rerank(operation: &Operation, request: &mut Value) {
     let Effect::Search {
@@ -193,5 +195,9 @@ pub fn without_rerank(operation: &Operation, request: &mut Value) {
     };
     if let Some(object) = request.as_object_mut() {
         object.insert(rerank.field.to_string(), Value::from(rerank.fallback));
+        object.insert(
+            rerank.withheld.to_string(),
+            Value::from(RerankSkipped::PlanLimit.as_str()),
+        );
     }
 }

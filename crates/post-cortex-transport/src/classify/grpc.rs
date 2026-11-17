@@ -8,6 +8,7 @@
 
 use std::sync::OnceLock;
 
+use post_cortex_memory::content_vectorizer::RerankSkipped;
 use post_cortex_memory::tools::operations::{Effect, OPERATIONS, Operation};
 use prost_reflect::{
     DescriptorPool, DynamicMessage, Kind, MessageDescriptor, ReflectMessage, SerializeOptions,
@@ -151,7 +152,8 @@ pub fn answer_flag(path: &str, message: &[u8], field: &str) -> Result<bool, Clas
 }
 
 /// The request `message` of `path` without its reranker: its rerank field
-/// set to the fallback. An RPC that never reranks gets its message back.
+/// set to the fallback, and marked as withheld by the plan (its answer says
+/// so). An RPC that never reranks gets its message back.
 ///
 /// # Errors
 /// An unknown RPC or a message that does not decode.
@@ -176,5 +178,12 @@ pub fn without_rerank(path: &str, message: &[u8]) -> Result<Vec<u8>, ClassifyErr
         None => Field::String(rerank.fallback.to_string()),
     };
     request.set_field(&field, value);
+    let withheld = input
+        .get_field_by_name(rerank.withheld)
+        .ok_or_else(|| ClassifyError::Malformed(format!("no field {}", rerank.withheld)))?;
+    request.set_field(
+        &withheld,
+        Field::String(RerankSkipped::PlanLimit.as_str().to_string()),
+    );
     Ok(prost::Message::encode_to_vec(&request))
 }

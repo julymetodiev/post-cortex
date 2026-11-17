@@ -322,6 +322,11 @@ pub struct SearchOptions {
     /// the candidates' text). Set by the Search capability from the
     /// workspaces of the scope: what a caller sets is replaced.
     pub remote_rerank: bool,
+
+    /// The cloud withheld the reranker (the plan has no reranker calls
+    /// left; its gateway runs the search as `fast`): the answer says so
+    /// ([`RerankSkipped::PlanLimit`]).
+    pub rerank_withheld: bool,
 }
 
 /// What [`SearchOptions::prefer_author`] adds to a matching result's
@@ -355,6 +360,54 @@ impl std::str::FromStr for SearchMode {
             other => Err(format!(
                 "unknown search mode '{other}' (expected fast, local or accurate)"
             )),
+        }
+    }
+}
+
+/// Why a search that asked for a reranker (`local` or `accurate`) was not
+/// reranked: what its answer says beside `reranked: false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RerankSkipped {
+    /// `local`, and the server has no local reranker (the cloud never has
+    /// one: use `accurate`).
+    NoLocalReranker,
+    /// `accurate`, and the server has no reranker at all.
+    NoReranker,
+    /// `accurate`, the server has the remote reranker, but a workspace of
+    /// the scope does not allow it (or the scope is in none), and there is
+    /// no local reranker to fall back to.
+    RemoteNotAllowed,
+    /// The cloud withheld the reranker: the organisation's plan has no
+    /// reranker calls left (the search ran as `fast`).
+    PlanLimit,
+}
+
+impl RerankSkipped {
+    /// Its name on every wire.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NoLocalReranker => "no_local_reranker",
+            Self::NoReranker => "no_reranker",
+            Self::RemoteNotAllowed => "remote_not_allowed",
+            Self::PlanLimit => "plan_limit",
+        }
+    }
+
+    /// What it means, for the one who asked.
+    #[must_use]
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::NoLocalReranker => {
+                "this server has no local reranker; mode accurate reranks with Voyage where the workspace allows it"
+            }
+            Self::NoReranker => "this server has no reranker",
+            Self::RemoteNotAllowed => {
+                "a workspace searched does not allow Voyage reranking (its settings), and this server has no local reranker"
+            }
+            Self::PlanLimit => {
+                "the organisation's plan has no reranker calls left this month, so the search ran as fast"
+            }
         }
     }
 }

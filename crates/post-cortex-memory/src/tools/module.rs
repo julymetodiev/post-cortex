@@ -346,7 +346,7 @@ impl Module for MemoryModule {
 
     /// Tell the warm-up to stop and wait for it to finish the session it
     /// is on (no query or commit is cut off; it is aborted only past
-    /// [`WARM_UP_DEADLINE`]), then write every session before the process
+    /// `WARM_UP_DEADLINE`), then write every session before the process
     /// ends.
     async fn stop(&self) -> Result<(), ModuleError> {
         if let Some(announcing) = self.announcing.lock().take() {

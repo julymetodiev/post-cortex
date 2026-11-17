@@ -235,8 +235,8 @@ const GROUP: usize = FAN * FAN;
 type Group<T> = Arc<Vec<Arc<Vec<T>>>>;
 
 /// An append-mostly vector in two levels of shared blocks (see the module
-/// docs): groups of [`FAN`] blocks of [`FAN`] elements. An append copies the
-/// group list (one pointer per [`GROUP`] elements), the last group and the
+/// docs): groups of `FAN` blocks of `FAN` elements. An append copies the
+/// group list (one pointer per `GROUP` elements), the last group and the
 /// last block, so at most a few hundred pointers whatever the length.
 #[derive(Clone)]
 pub struct SharedVec<T> {

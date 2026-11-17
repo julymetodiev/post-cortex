@@ -125,6 +125,7 @@ impl Module for Fake {
             text: "echo".to_string(),
             data: Some(input),
             failed: false,
+            meta: None,
         })
     }
 

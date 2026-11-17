@@ -390,7 +390,16 @@ fn impact_view(v: ImpactView) -> pb::ImpactView {
     pb::ImpactView {
         entity: v.entity,
         dependents: impact_items(v.dependents),
-        risks: records(v.risks),
+        risks: v
+            .risks
+            .into_iter()
+            .map(|r| pb::ImpactRisk {
+                record: Some(record(r.record)),
+                about: r.about,
+                depth: n(r.depth),
+            })
+            .collect(),
+        total_risks: n(v.total_risks),
     }
 }
 
@@ -442,6 +451,7 @@ fn file_view(v: FileView) -> pb::FileView {
         decisions: records(v.decisions),
         entities: nodes(v.entities),
         dependents: impact_items(v.dependents),
+        changed_with: nodes(v.changed_with),
     }
 }
 

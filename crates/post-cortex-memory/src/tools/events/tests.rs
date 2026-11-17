@@ -155,6 +155,35 @@ async fn turn_end_captures_the_turns_once() {
     assert_eq!(texts, ["hello", "hi"]);
 }
 
+/// `entity` depends on `via` through `relation`, one hop away.
+fn dependent(entity: &str, via: &str, relation: RelationType) -> ImpactItem {
+    ImpactItem {
+        entity: entity.into(),
+        entity_type: Some("code_component".into()),
+        via: via.into(),
+        relation_type: relation.as_str().into(),
+        context: String::new(),
+        depth: 1,
+    }
+}
+
+/// A code component named `name`.
+fn node(name: &str) -> crate::graph_views::GraphNode {
+    let at = chrono::Utc::now();
+    crate::graph_views::GraphNode {
+        name: name.into(),
+        entity_type: "code_component".into(),
+        aliases: Vec::new(),
+        description: None,
+        importance: 1.0,
+        mention_count: 1,
+        records: 1,
+        first_seen: at,
+        last_seen: at,
+        community: None,
+    }
+}
+
 #[test]
 fn a_file_s_memory_lists_problems_decisions_and_dependents() {
     let record = |title: &str, ended: bool| RecordView {
@@ -183,7 +212,20 @@ fn a_file_s_memory_lists_problems_decisions_and_dependents() {
         problems: vec![record("Deadlock", false)],
         decisions: vec![record("Use one lock", true)],
         entities: Vec::new(),
-        dependents: Vec::new(),
+        dependents: vec![
+            dependent(
+                "compose_runner_tests",
+                "Scope::working_in",
+                RelationType::DependsOn,
+            ),
+            dependent(
+                "ServiceRoute::target",
+                "Scope.tenant",
+                RelationType::Implements,
+            ),
+            dependent("Scope.tenant", "OrgStore::slug", RelationType::RequiredBy),
+        ],
+        changed_with: vec![node("pcx-host route"), node("SharedDocuments")],
     };
     let text = render_file(&view, "src/a.rs").unwrap();
     let description = "x".repeat(DESCRIPTION_CHARS);
@@ -194,13 +236,20 @@ fn a_file_s_memory_lists_problems_decisions_and_dependents() {
              Problems solved here before:\n\
              - 2026-10-01 Deadlock: {description} [entry {nil}]\n\n\
              Decisions and requirements about it:\n\
-             - 2026-10-01 Use one lock: {description} (no longer holds: superseded) [entry {nil}]",
+             - 2026-10-01 Use one lock: {description} (no longer holds: superseded) [entry {nil}]\n\n\
+             Depends on it:\n\
+             - compose_runner_tests (depends on Scope::working_in)\n\
+             - ServiceRoute::target (implements Scope.tenant)\n\
+             - Scope.tenant (requires OrgStore::slug)\n\n\
+             Changed with it: pcx-host route, SharedDocuments",
             nil = Uuid::nil()
         )
     );
     let empty = FileView {
         problems: Vec::new(),
         decisions: Vec::new(),
+        dependents: Vec::new(),
+        changed_with: Vec::new(),
         ..view
     };
     assert_eq!(render_file(&empty, "src/a.rs"), None);

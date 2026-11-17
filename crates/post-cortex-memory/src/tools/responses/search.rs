@@ -4,7 +4,7 @@
 //! Search responses: one shape for every scope and every transport (it was
 //! three in MCP and another in gRPC `select`).
 
-use crate::content_vectorizer::{SemanticSearchResult, Signals};
+use crate::content_vectorizer::{RerankSkipped, SemanticSearchResult, Signals};
 use chrono::{DateTime, Utc};
 use post_cortex_core::graph::temporal::{EndReason, Validity};
 use serde::Serialize;
@@ -29,6 +29,10 @@ pub struct SearchResponse {
     pub results: Vec<SearchHit>,
     /// Whether a reranker ordered them.
     pub reranked: bool,
+    /// Why a search that asked for a reranker got none
+    /// (`no_local_reranker`, `no_reranker`, `remote_not_allowed`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rerank_skipped: Option<&'static str>,
     /// Why there are none, when that is known up front.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<&'static str>,
@@ -36,9 +40,14 @@ pub struct SearchResponse {
 
 impl SearchResponse {
     /// The response of `hits` for `query`, `reranked` when a reranker
-    /// ordered them.
+    /// ordered them, else why not when one was asked for.
     #[must_use]
-    pub fn new(query: &str, hits: &[SemanticSearchResult], reranked: bool) -> Self {
+    pub fn new(
+        query: &str,
+        hits: &[SemanticSearchResult],
+        reranked: bool,
+        rerank_skipped: Option<RerankSkipped>,
+    ) -> Self {
         let results: Vec<SearchHit> = hits.iter().map(SearchHit::from).collect();
         Self {
             session_id: None,
@@ -47,6 +56,7 @@ impl SearchResponse {
             total_results: results.len(),
             results,
             reranked,
+            rerank_skipped: rerank_skipped.map(RerankSkipped::as_str),
             note: None,
         }
     }

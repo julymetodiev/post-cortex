@@ -28,7 +28,7 @@ pub use types::{
     AuthorCount, EdgeDetail, EntityDetail, EntityRef, EventKind, FileDetail, FileTouch, Files,
     GraphDetail, ImpactDetail, LineageDetail, LineageStepDetail, NodeDetail, Overview, PageCursor,
     Provenance, RadarCounts, RadarDetail, RecordDetail, RecordFilter, RecordPage, RecordRelation,
-    SessionStat, Timeline, TimelineEvent, TopicDetail, TopicsDetail, ValidityFilter,
+    RiskDetail, SessionStat, Timeline, TimelineEvent, TopicDetail, TopicsDetail, ValidityFilter,
 };
 
 #[cfg(test)]

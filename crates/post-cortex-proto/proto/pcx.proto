@@ -610,14 +610,31 @@ message ImpactItem {
   uint64 depth = 6;
 }
 
+// A record at risk in the impact view, with what it is about.
+message ImpactRisk {
+  // The record.
+  RecordView record = 1;
+  // The nearest entity of the view it names: the one asked for or a
+  // dependent.
+  string about = 2;
+  // Hops of `about` from the entity asked for (0: that entity).
+  uint64 depth = 3;
+}
+
 // The impact view.
 message ImpactView {
+  reserved 3;
   // The entity asked for.
   string entity = 1;
   // Who depends on it, nearest first.
   repeated ImpactItem dependents = 2;
-  // Problems and decisions recorded about the dependents.
-  repeated RecordView risks = 3;
+  // Current decisions, requirements and problems about it and its
+  // dependents, most relevant first: about the entity itself, then by the
+  // dependent's depth, then by closeness to the relations' contexts, then
+  // newest (at most the limit).
+  repeated ImpactRisk risks = 4;
+  // All such records.
+  uint64 total_risks = 5;
 }
 
 // A topic of the topics view.
@@ -676,10 +693,13 @@ message FileView {
   repeated RecordView problems = 3;
   // Valid decisions and requirements about it.
   repeated RecordView decisions = 4;
-  // Entities naming it (its path, file name or stem).
+  // Entities named after it (its path, file name or stem).
   repeated GraphNode entities = 5;
-  // What depends on those entities.
+  // What depends on those entities, hop by hop, code first in a hop.
   repeated ImpactItem dependents = 6;
+  // The code the records that name it changed with it (neither its own
+  // entities nor its dependents), the most often named first.
+  repeated GraphNode changed_with = 7;
 }
 
 // The radar view.
@@ -913,6 +933,10 @@ message SemanticSearchRequest {
   // Fill each result's signals (its ranks in the vector, BM25 and graph
   // rankings, the fused and reranker scores).
   optional bool trace = 12;
+  // Set by the cloud's gateway, never by a client: "plan_limit" when the
+  // organisation's plan has no reranker calls left, so the search runs as
+  // fast and answers rerank_skipped "plan_limit".
+  optional string rerank_withheld = 13;
 }
 
 // One search hit.
@@ -989,6 +1013,11 @@ message SemanticSearchResponse {
   // Whether a reranker ordered the hits: a local or accurate search where
   // one is configured (the remote one only in workspaces that allow it).
   bool reranked = 4;
+  // Why a search that asked for a reranker got none: no_local_reranker
+  // (the server has no local one; the cloud never has: use accurate),
+  // no_reranker, remote_not_allowed (a workspace searched does not allow
+  // Voyage and there is no local one). Unset: fast, or reranked.
+  optional string rerank_skipped = 5;
 }
 
 // Content of other sessions related to a topic.
@@ -1660,7 +1689,7 @@ message DeleteWorkspaceResponse {
 
 // Same fields as REST POST /api/projects/resolve.
 message ResolveProjectRequest {
-  string key = 1;                // normalised git remote or local:<hash>, 1 to 512 chars
+  string key = 1;                // normalised git remote or `local:<hash>`, 1 to 512 chars
   string name = 2;               // name of a new workspace and session
   optional string client = 3;    // the client asking
   optional string workspace = 4; // workspace to put a new key in (created if missing)

@@ -1,5 +1,6 @@
 // Test helpers for the plugins (subpath export `@post-cortex/plugin-core/testing`):
-// a fake daemon serving the five REST routes, and a temporary config dir.
+// a fake daemon serving the REST routes the plugins call, and a temporary
+// config dir.
 
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
@@ -19,10 +20,16 @@ export interface RecordedRequest {
 }
 
 export interface FakeDaemonOptions {
-  /** `GET /api/cards` answer (default: a user card and a project card). */
-  cards?: unknown;
-  /** `GET /api/file` answer by path (default: one problem for every path). */
-  file?: (path: string) => unknown;
+  /**
+   * The cards a `SessionStart` event gets (`POST /api/events`), as the
+   * memory module words them (default: {@link DEFAULT_CARDS}).
+   */
+  cards?: string;
+  /**
+   * What memory knows about a file, by the path of a `PreToolUse` event
+   * (`POST /api/events`); null: nothing (default: {@link defaultFileContext}).
+   */
+  fileContext?: (path: string) => string | null;
   /** `POST /api/search` answer by request body (default: {@link DEFAULT_SEARCH} for every query). */
   search?: (body: Record<string, unknown>) => unknown;
   /** Answer every request with this status instead. */
@@ -38,13 +45,20 @@ export interface FakeDaemon {
   requests: RecordedRequest[];
   /** Captured message bodies (POST /api/messages). */
   messages(): Array<Record<string, unknown>>;
+  /** The events of `name` (`SessionStart`, `PreToolUse`) posted to `/api/events`. */
+  events(name: string): RecordedRequest[];
   close(): Promise<void>;
 }
 
-export const DEFAULT_CARDS = {
-  user: { text: "Prefers short answers.", version: 2 },
-  workspace: { text: "Rust workspace, tokio.", version: 5 },
-};
+/** The cards of a workspace with a user card and a project card, as the memory module words them. */
+export const DEFAULT_CARDS =
+  "## post-cortex cards\n\n### User card (v2)\nPrefers short answers.\n\n### Project card (v5)\nRust workspace, tokio.";
+
+/** The cards of a workspace with none, as the memory module words them. */
+export const NO_CARDS =
+  "## post-cortex cards\n\nNo project card yet. Once you know the stack, conventions and current goals, " +
+  "write a short one (max 2 KB): manage_workspace action update_card, workspace_id " +
+  `${TEST_WORKSPACE}, expected_version 0.`;
 
 export const DEFAULT_SEARCH = {
   results: [
@@ -61,18 +75,33 @@ export const DEFAULT_SEARCH = {
   ],
 };
 
-export const defaultFileView = (path: string): unknown => ({
-  problems: [
-    {
-      id: "e1",
-      title: `Fixed a bug in ${path}`,
-      description: "The cache was not invalidated.",
-      timestamp: "2026-10-01T12:00:00Z",
-    },
-  ],
-  decisions: [],
-  dependents: [{ entity: "server.rs" }],
-});
+/** A file's memory as the memory module words it: one problem and one dependent. */
+export const defaultFileContext = (path: string): string =>
+  `post-cortex memory for ${path}:\n\n` +
+  "Problems solved here before:\n" +
+  `- 2026-10-01 Fixed a bug in ${path}: The cache was not invalidated. [entry e1]\n\n` +
+  "Depends on it:\n- server.rs (depends on Cache)";
+
+type PostedEvent = { hook_event_name?: unknown; tool_input?: { file_path?: unknown } };
+
+/** The event a `POST /api/events` body carries. */
+function eventOf(body: unknown): PostedEvent | undefined {
+  return (body as { event?: PostedEvent } | undefined)?.event;
+}
+
+/** The answer of `POST /api/events` to `body`: the cards for a session start, a file's memory before an edit. */
+function eventAnswer(body: unknown, options: FakeDaemonOptions): unknown {
+  const event = eventOf(body);
+  const path = event?.tool_input?.file_path;
+  const name = event?.hook_event_name;
+  const text =
+    name === "SessionStart"
+      ? (options.cards ?? DEFAULT_CARDS)
+      : name === "PreToolUse" && typeof path === "string"
+        ? (options.fileContext ?? defaultFileContext)(path)
+        : null;
+  return text === null ? {} : { hookSpecificOutput: { hookEventName: name, additionalContext: text } };
+}
 
 async function readBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -106,15 +135,14 @@ export async function startFakeDaemon(options: FakeDaemonOptions = {}): Promise<
         res.end(JSON.stringify(value));
       };
       if (options.status) return send(options.status, { error: "forced" });
-      const named = url.searchParams.get("workspace_id") ?? (body as { id?: unknown } | undefined)?.id;
+      const scoped = (body as { scope?: { workspace_id?: unknown } } | undefined)?.scope?.workspace_id;
+      const named = url.searchParams.get("workspace_id") ?? (body as { id?: unknown } | undefined)?.id ?? scoped;
       if (options.refuseWorkspace && named === options.refuseWorkspace) return send(404, { error: "no such workspace" });
       switch (`${req.method} ${url.pathname}`) {
         case "POST /api/projects/resolve":
           return send(200, { workspace_id: TEST_WORKSPACE, session_id: TEST_SESSION, created: true });
-        case "GET /api/cards":
-          return send(200, options.cards ?? DEFAULT_CARDS);
-        case "GET /api/file":
-          return send(200, (options.file ?? defaultFileView)(url.searchParams.get("path") ?? ""));
+        case "POST /api/events":
+          return send(200, eventAnswer(body, options));
         case "POST /api/messages":
           return send(200, { appended: 1 });
         case "POST /api/search":
@@ -133,6 +161,8 @@ export async function startFakeDaemon(options: FakeDaemonOptions = {}): Promise<
       requests
         .filter((r) => r.path === "/api/messages")
         .map((r) => r.body as Record<string, unknown>),
+    events: (name: string) =>
+      requests.filter((r) => r.path === "/api/events" && eventOf(r.body)?.hook_event_name === name),
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections?.();

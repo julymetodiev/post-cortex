@@ -42,7 +42,7 @@ pub struct SemanticSearchRequest {
     pub recency_bias: Option<f32>,
     /// Ranking effort: `fast`, `local` or `accurate`.
     #[schemars(
-        description = r#"Ranking effort (default set by the server): fast (vector + keyword fused, ~40 ms), local (plus a local cross-encoder, ~1 s on CPU), accurate (plus the Voyage reranker when the server has a key, ~0.5 s; else as local)."#
+        description = r#"Ranking effort (default set by the server): fast (vector + keyword fused, ~40 ms), local (plus the server's local cross-encoder, ~1 s on CPU; the cloud has none), accurate (plus the Voyage reranker where every workspace searched allows it, ~0.5 s; else the local one, if any). A search not reranked says why (rerank_skipped)."#
     )]
     pub mode: Option<String>,
     /// What to search: `records`, `messages` or `all`.
@@ -66,6 +66,11 @@ pub struct SemanticSearchRequest {
     )]
     #[serde(default)]
     pub trace: Option<bool>,
+    /// Set by the cloud's gateway, never by a client, so not in the tool's
+    /// schema: `plan_limit` when the plan has no reranker calls left.
+    #[schemars(skip)]
+    #[serde(default)]
+    pub rerank_withheld: Option<String>,
     /// How much of each result's text.
     #[schemars(description = r#"How much of each result's text (default snippet).
 

@@ -43,6 +43,7 @@ impl Module for Whoami {
             text: scope.author.clone().unwrap_or_default(),
             data: Some(input),
             failed: false,
+            meta: None,
         })
     }
     async fn on_event(&self, _scope: &Scope, _event: &Event) -> Result<Outcome, ModuleError> {

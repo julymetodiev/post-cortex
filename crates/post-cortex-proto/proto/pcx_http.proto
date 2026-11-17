@@ -253,7 +253,7 @@ message Param {
   string name = 1;
   // Where it goes.
   Place in = 2;
-  // Its type as CEL writes it: string, int, double, bool, list<T>,
+  // Its type as CEL writes it: string, int, double, bool, `list<T>`,
   // map<string, T>.
   string type = 3;
   // What it is.

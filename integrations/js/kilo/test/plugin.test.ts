@@ -50,8 +50,8 @@ test("cards go into the system prompt once per session; file memory is appended 
     await h["experimental.chat.system.transform"]?.({ sessionID: "s1", model }, { system });
     await h["experimental.chat.system.transform"]?.({ sessionID: "s1", model }, { system });
     assert.equal(system.length, 2);
-    assert.ok(system[0]?.startsWith(`## post-cortex cards\n\n[PCX] Session: ${TEST_SESSION}`));
-    assert.equal(daemon.requests.filter((r) => r.path === "/api/cards").length, 1);
+    assert.ok(system[0]?.startsWith(`[PCX] Session: ${TEST_SESSION}`));
+    assert.equal(daemon.events("SessionStart").length, 1);
 
     const call = { tool: "edit", sessionID: "s1", callID: "c1" };
     await h["tool.execute.before"]?.(call, { args: { filePath: join(t.projectDir, "src", "a.rs") } });

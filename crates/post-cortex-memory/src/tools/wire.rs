@@ -10,7 +10,7 @@
 //! `dependson` are one relation type. A name that matches no variant is an
 //! invalid argument naming the field and the valid values: never a default.
 
-use crate::content_vectorizer::SearchMode;
+use crate::content_vectorizer::{RerankSkipped, SearchMode};
 use chrono::{DateTime, Utc};
 use post_cortex_core::core::content::ContentKind;
 use post_cortex_core::core::context_update::{
@@ -304,6 +304,23 @@ pub fn mode(mode: Option<&str>) -> Result<Option<SearchMode>, Failure> {
             .map_err(|e: String| Failure::invalid(e).parameter("mode"))
     })
     .transpose()
+}
+
+/// Whether the cloud withheld a search's reranker (`rerank_withheld`, set
+/// by its gateway): `plan_limit`, or unset.
+///
+/// # Errors
+/// `InvalidArgument` for another value.
+pub fn rerank_withheld(value: Option<&str>) -> Result<bool, Failure> {
+    match value {
+        None => Ok(false),
+        Some(v) if v == RerankSkipped::PlanLimit.as_str() => Ok(true),
+        Some(other) => Err(Failure::invalid(format!(
+            "rerank_withheld is {}, not {other}",
+            RerankSkipped::PlanLimit.as_str()
+        ))
+        .parameter("rerank_withheld")),
+    }
 }
 
 /// The `(date_from, date_to)` pair as a UTC range: both RFC 3339, given

@@ -3,7 +3,7 @@
 
 //! `pcx_module._core`: the Rust core of a pcx module for Python
 //! (docs/modules/dynamic.md, the bindings' API). The core serves on its own
-//! runtime; Python's worker threads take each call ([`Core::next_call`]),
+//! runtime; Python's worker threads take each call (`Core::next_call`),
 //! run its handler and answer it, without the GIL (free-threaded CPython).
 //! Only bytes and plain values cross; `pcx_module` (Python) is the layer a
 //! module's author writes against.

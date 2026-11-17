@@ -119,6 +119,34 @@ fn records_are_normalised() {
     assert!(stored.content.description.ends_with("... (truncated)"));
     assert!(stored.content.title.ends_with("..."));
     assert!(Arc::ptr_eq(&stored, &s.records()[0]));
+    assert!(
+        stored.content.details.is_empty(),
+        "only a code change keeps its title"
+    );
+    assert!(cut_title(&stored.content.title).is_some());
+}
+
+/// A code change's title is its `file`: cut, the whole of it stays in its
+/// details, and a title that fits is not marked as cut.
+#[test]
+fn a_cut_code_change_keeps_its_whole_file() {
+    let mut s = session_with(prefs(50));
+    let mut change = update(0, UpdateType::CodeChanged, false);
+    let whole = (0..12)
+        .map(|i| format!("crates/post-cortex-memory/src/graph_views/file_{i}.rs"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    change.content.title = whole.clone();
+    let stored = s.apply_record(change);
+    assert_eq!(
+        cut_title(&stored.content.title).map(str::len),
+        Some(TRUNCATED_TITLE_BYTES)
+    );
+    assert_eq!(
+        stored.content.details.last().map(String::as_str),
+        Some(format!("{FILE_DETAIL_KEY}: {whole}").as_str())
+    );
+    assert_eq!(cut_title("src/a.rs ..."), None);
 }
 
 #[test]

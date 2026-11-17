@@ -287,12 +287,12 @@ impl post_cortex_ports::Reranker for SameScore {
     }
 }
 
-/// A search says whether a reranker ordered it: a `local` search where no
-/// reranker is configured is not reranked (the cloud's tenants have none),
-/// `fast` never is.
+/// A search says whether a reranker ordered it, and why not when it asked
+/// for one: a `local` or `accurate` search where no reranker is configured
+/// is not reranked (the cloud's tenants have no local one), `fast` never is.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_search_says_whether_it_was_reranked() {
-    use crate::content_vectorizer::{SearchMode, SearchOptions};
+    use crate::content_vectorizer::{RerankSkipped, SearchMode, SearchOptions};
     use crate::memory_system::backends_tests::{backends, embeddings_config, hash_engine};
 
     let in_mode = |mode| SearchOptions {
@@ -300,11 +300,27 @@ async fn a_search_says_whether_it_was_reranked() {
         ..Default::default()
     };
     let backend = backends().await.into_iter().next().unwrap();
-    for (reranker, local) in [
-        (None, false),
+    // Each mode, without and with a local reranker: whether it reranks,
+    // and why not when it asked for one.
+    let without = [
+        (SearchMode::Fast, false, None),
+        (
+            SearchMode::Local,
+            false,
+            Some(RerankSkipped::NoLocalReranker),
+        ),
+        (SearchMode::Accurate, false, Some(RerankSkipped::NoReranker)),
+    ];
+    let with = [
+        (SearchMode::Fast, false, None),
+        (SearchMode::Local, true, None),
+        (SearchMode::Accurate, true, None),
+    ];
+    for (reranker, cases) in [
+        (None, without),
         (
             Some(Arc::new(SameScore) as Arc<dyn post_cortex_ports::Reranker>),
-            true,
+            with,
         ),
     ] {
         let mut ports = backend.ports(Some(hash_engine()), None);
@@ -320,16 +336,17 @@ async fn a_search_says_whether_it_was_reranked() {
                 .await
         );
         let views = &memory.detail_views;
-        let found = views
-            .search(Target::Global, "compaction", in_mode(SearchMode::Local))
-            .await
-            .unwrap();
-        assert_eq!((found.hits.is_empty(), found.reranked), (false, local));
-        let fast = views
-            .search(Target::Global, "compaction", in_mode(SearchMode::Fast))
-            .await
-            .unwrap();
-        assert!(!fast.reranked);
+        for (mode, reranked, skipped) in cases {
+            let found = views
+                .search(Target::Global, "compaction", in_mode(mode))
+                .await
+                .unwrap();
+            assert_eq!(
+                (found.hits.is_empty(), found.reranked, found.rerank_skipped),
+                (false, reranked, skipped),
+                "{mode:?}"
+            );
+        }
     }
 }
 
@@ -402,6 +419,10 @@ async fn only_workspaces_that_allow_it_reach_the_remote_reranker() {
     let found = search(Target::Workspace(ws)).await.unwrap();
     assert_eq!((found.hits.is_empty(), found.reranked), (false, false));
     assert_eq!(
+        found.rerank_skipped,
+        Some(crate::content_vectorizer::RerankSkipped::RemoteNotAllowed)
+    );
+    assert_eq!(
         remote.0.load(Ordering::SeqCst),
         0,
         "a new workspace forbids it"
@@ -413,7 +434,8 @@ async fn only_workspaces_that_allow_it_reach_the_remote_reranker() {
     };
     let updated = memory.workspaces.update(ws, allowed).await.unwrap();
     assert!(updated.remote_rerank());
-    assert!(search(Target::Workspace(ws)).await.unwrap().reranked);
+    let allowed = search(Target::Workspace(ws)).await.unwrap();
+    assert_eq!((allowed.reranked, allowed.rerank_skipped), (true, None));
     assert!(search(Target::Session(member)).await.unwrap().reranked);
     let reached = remote.0.load(Ordering::SeqCst);
     assert_eq!(reached, 2);

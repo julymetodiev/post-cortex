@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { PostCortex, pluginOptions } from "../src/memory.js";
 import { cacheIds, cachedIds, identity, localKey } from "../src/project.js";
 import { isInjected, stableId, textOf } from "../src/text.js";
-import { TEST_SESSION, TEST_WORKSPACE, startFakeDaemon, tempEnv } from "../src/testing.js";
+import { DEFAULT_CARDS, TEST_SESSION, TEST_WORKSPACE, startFakeDaemon, tempEnv } from "../src/testing.js";
 
 const noGit = async (): Promise<null> => null;
 
@@ -16,11 +16,11 @@ test("resolves once per directory, caches in projects.json, then serves cards an
   try {
     const pc = new PostCortex("opencode", {}, { env: t.env, origin: noGit });
     const cards = await pc.cardsText(t.projectDir);
-    assert.ok(cards?.startsWith(`## post-cortex cards\n\n[PCX] Session: ${TEST_SESSION} | Workspace: ${TEST_WORKSPACE}\n\n### User card (v2)`));
+    assert.equal(cards, `[PCX] Session: ${TEST_SESSION} | Workspace: ${TEST_WORKSPACE}\n\n${DEFAULT_CARDS}`);
     const file = await pc.fileContextText(t.projectDir, [join(t.projectDir, "src", "a.rs"), "src/a.rs"]);
     assert.ok(file?.startsWith("post-cortex memory for src/a.rs:"), file ?? "null");
     assert.equal(daemon.requests.filter((r) => r.path === "/api/projects/resolve").length, 1);
-    assert.equal(daemon.requests.filter((r) => r.path === "/api/file").length, 1);
+    assert.equal(daemon.events("PreToolUse").length, 1);
     const cache = JSON.parse(readFileSync(join(t.configDir, "projects.json"), "utf8"));
     const [entry] = Object.values(cache) as Array<Record<string, string>>;
     assert.deepEqual(entry, { workspace_id: TEST_WORKSPACE, session_id: TEST_SESSION, url: daemon.url });
@@ -73,7 +73,10 @@ test("pinned ids in the repository win and are not cached", async () => {
     assert.equal(project?.session_id, "S");
     assert.equal(daemon.requests.length, 0);
     await pc.cardsText(t.projectDir);
-    assert.deepEqual(daemon.requests[0]?.query, { workspace_id: "W" });
+    assert.deepEqual((daemon.events("SessionStart")[0]?.body as { scope?: unknown } | undefined)?.scope, {
+      workspace_id: "W",
+      author: "pi",
+    });
   } finally {
     t.cleanup();
     await daemon.close();

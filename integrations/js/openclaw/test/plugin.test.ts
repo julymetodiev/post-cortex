@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { PostCortex } from "@post-cortex/plugin-core";
-import { TEST_SESSION, TEST_WORKSPACE, startFakeDaemon, tempEnv, withEnv } from "@post-cortex/plugin-core/testing";
+import { NO_CARDS, TEST_SESSION, TEST_WORKSPACE, startFakeDaemon, tempEnv, withEnv } from "@post-cortex/plugin-core/testing";
 
 import entry from "../src/index.js";
 import { AUTHOR, CARDS_TTL_MS, PLUGIN_ID, register, requestOf, turnsOf } from "../src/plugin.js";
@@ -46,12 +46,12 @@ test("cards are appended to the system prompt, reused within the TTL", async () 
     assert.deepEqual([...handlers.keys()].sort(), ["agent_end", "before_prompt_build"]);
     const ctx = { workspaceDir: t.projectDir, sessionId: "oc-s" };
     const first = (await call("before_prompt_build", { prompt: "hi", messages: [] }, ctx)) as { appendSystemContext: string };
-    assert.ok(first.appendSystemContext.startsWith(`## post-cortex cards\n\n[PCX] Session: ${TEST_SESSION}`));
+    assert.ok(first.appendSystemContext.startsWith(`[PCX] Session: ${TEST_SESSION}`));
     await call("before_prompt_build", { prompt: "again", messages: [] }, ctx);
-    assert.equal(daemon.requests.filter((r) => r.path === "/api/cards").length, 1);
+    assert.equal(daemon.events("SessionStart").length, 1);
     clock += CARDS_TTL_MS + 1;
     await call("before_prompt_build", { prompt: "later", messages: [] }, ctx);
-    assert.equal(daemon.requests.filter((r) => r.path === "/api/cards").length, 2);
+    assert.equal(daemon.events("SessionStart").length, 2);
     assert.ok(daemon.requests.every((r) => r.headers["x-pcx-author"] === "openclaw"));
   } finally {
     t.cleanup();
@@ -67,7 +67,7 @@ test("related memory for the request goes to the turn context; cards stay cached
     register(api, new PostCortex(AUTHOR, {}, { env: t.env, origin: noGit }), () => 1000);
     const ctx = { workspaceDir: t.projectDir, sessionId: "oc-s" };
     const first = (await call("before_prompt_build", { prompt: "which store do sessions use?", messages: [] }, ctx)) as Record<string, string>;
-    assert.ok(first.appendSystemContext?.startsWith("## post-cortex cards"));
+    assert.ok(first.appendSystemContext?.startsWith("[PCX] Session: "));
     assert.equal(first.appendContext, "## Related memory (post-cortex)\n\n- 2026-10-02 Use RocksDB for sessions: Embedded, no server to run. [entry r1]");
     assert.ok(!first.appendSystemContext?.includes("Related memory"), "recall stays out of the cached system prompt");
 
@@ -81,7 +81,7 @@ test("related memory for the request goes to the turn context; cards stay cached
     const searches = daemon.requests.filter((r) => r.path === "/api/search");
     assert.equal(searches.length, 1);
     assert.deepEqual(searches[0]?.body, { query: "which store do sessions use?", scope: "workspace", id: TEST_WORKSPACE, mode: "fast", limit: 3 });
-    assert.equal(daemon.requests.filter((r) => r.path === "/api/cards").length, 1);
+    assert.equal(daemon.events("SessionStart").length, 1);
   } finally {
     t.cleanup();
     await daemon.close();
@@ -89,7 +89,7 @@ test("related memory for the request goes to the turn context; cards stay cached
 });
 
 test("recall without cards; nothing found leaves the turn alone", async () => {
-  const noCards = await startFakeDaemon({ cards: { user: null, workspace: null } });
+  const noCards = await startFakeDaemon({ cards: NO_CARDS });
   const t = tempEnv(noCards.url);
   try {
     const { api, call } = fakeApi();

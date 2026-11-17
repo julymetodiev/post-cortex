@@ -43,8 +43,8 @@ pub mod vectorizer;
 pub(crate) use fusion::RERANK_POOL;
 pub use search::VectorScope;
 pub use types::{
-    ContentKind, ContentVectorizerConfig, DocumentHit, HitSource, PREFER_AUTHOR_BOOST, SearchMode,
-    SearchOptions, SemanticSearchResult, Signals, VectorizationStats,
+    ContentKind, ContentVectorizerConfig, DocumentHit, HitSource, PREFER_AUTHOR_BOOST,
+    RerankSkipped, SearchMode, SearchOptions, SemanticSearchResult, Signals, VectorizationStats,
 };
 pub use vectorizer::ContentVectorizer;
 

@@ -856,7 +856,7 @@ message Field {
   // Its name: a lowercase letter or '_', then letters, digits and '_'.
   string name = 1;
   // Its type as CEL writes it: string, int, uint, double, bool, bytes,
-  // timestamp, duration, list<T>, map<string, T>.
+  // timestamp, duration, `list<T>`, `map<string, T>`.
   string type = 2;
   // What it is.
   string description = 3;

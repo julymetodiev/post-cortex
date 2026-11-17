@@ -23,6 +23,7 @@ pub fn with<T: Serialize>(text: impl Into<String>, response: &T) -> Result<ToolO
         text: text.into(),
         data: Some(data),
         failed: false,
+        meta: None,
     })
 }
 

@@ -674,7 +674,7 @@ export interface Record {
   code?:
     | CodeRef
     | undefined;
-  /** Captured messages it was drawn from (message:<seq>). */
+  /** Captured messages it was drawn from (`message:<seq>`). */
   derivedFrom: string[];
   /** Records the writer said it replaces. */
   supersedes: string[];
@@ -884,6 +884,21 @@ export interface Dependent {
   depth: number;
 }
 
+/** A record at risk, with what it is about. */
+export interface Risk {
+  /** The record. */
+  record?:
+    | Record
+    | undefined;
+  /**
+   * The nearest entity of the report it names: the one asked for or a
+   * dependent.
+   */
+  about: string;
+  /** Hops of `about` from the entity asked for (0: that entity). */
+  depth: number;
+}
+
 /** What depends on an entity. */
 export interface Impact {
   /** Canonical name. */
@@ -894,9 +909,13 @@ export interface Impact {
   dependents: Dependent[];
   /**
    * Current decisions, requirements and problems about it and its
-   * dependents, newest first.
+   * dependents, most relevant first: about the entity itself, then by the
+   * dependent's depth, then by closeness to the relations' contexts, then
+   * newest (at most the limit).
    */
-  risks: Record[];
+  risks: Risk[];
+  /** All such records. */
+  totalRisks: number;
 }
 
 /** A record on an entity's causal chain. */
@@ -997,12 +1016,20 @@ export interface SearchRequest {
     | Date
     | undefined;
   /** Temporal decay (0 = off). */
-  recencyBias?: number | undefined;
+  recencyBias?:
+    | number
+    | undefined;
+  /**
+   * Set by the cloud's gateway, never by a client: "plan_limit" when the
+   * organisation's plan has no reranker calls left, so the search runs as
+   * fast and answers rerank_skipped "plan_limit".
+   */
+  rerankWithheld?: string | undefined;
 }
 
 /** A record, a message or an entity description found by search. */
 export interface SearchItem {
-  /** Entry id, message:<seq>, or an entity description's id. */
+  /** Entry id, `message:<seq>`, or an entity description's id. */
   contentId: string;
   /** Its session. */
   sessionId: string;
@@ -1095,6 +1122,13 @@ export interface SearchResponse {
    * reranked where the server has no reranker for it.
    */
   reranked: boolean;
+  /**
+   * Why a search that asked for a reranker got none: no_local_reranker
+   * (the server has no local one; the cloud never has: use accurate),
+   * no_reranker, remote_not_allowed (a workspace searched does not allow
+   * Voyage and there is no local one). Unset: fast, or reranked.
+   */
+  rerankSkipped?: string | undefined;
 }
 
 /** ListTopics. */
@@ -1227,10 +1261,15 @@ export interface FileView {
   problems: Record[];
   /** Current decisions and requirements. */
   decisions: Record[];
-  /** Entities naming the file. */
+  /** Entities named after the file. */
   entities: Node[];
-  /** What depends on those entities. */
+  /** What depends on those entities, hop by hop, code first in a hop. */
   dependents: Dependent[];
+  /**
+   * The code the records that name the file changed with it (neither its
+   * own entities nor its dependents), the most often named first.
+   */
+  changedWith: Node[];
 }
 
 /** ListFiles. */
@@ -1263,7 +1302,7 @@ export interface Message {
   sessionId: string;
   /** Position in the session's stream. */
   seq: number;
-  /** message:<seq>, as records' derived_from and search hits name it. */
+  /** `message:<seq>`, as records' derived_from and search hits name it. */
   contentId: string;
   /** The client's id for the turn. */
   turnId: string;
@@ -5589,8 +5628,111 @@ export const Dependent: MessageFns<Dependent> = {
   },
 };
 
+function createBaseRisk(): Risk {
+  return { record: undefined, about: "", depth: 0 };
+}
+
+export const Risk: MessageFns<Risk> = {
+  encode(message: Risk, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.record !== undefined) {
+      Record.encode(message.record, writer.uint32(10).fork()).join();
+    }
+    if (message.about !== "") {
+      writer.uint32(18).string(message.about);
+    }
+    if (message.depth !== 0) {
+      writer.uint32(24).uint32(message.depth);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): Risk {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseRisk();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.record = Record.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.about = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.depth = reader.uint32();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): Risk {
+    return {
+      record: isSet(object.record) ? Record.fromJSON(object.record) : undefined,
+      about: isSet(object.about) ? globalThis.String(object.about) : "",
+      depth: isSet(object.depth) ? globalThis.Number(object.depth) : 0,
+    };
+  },
+
+  toJSON(message: Risk): unknown {
+    const obj: any = {};
+    if (message.record !== undefined) {
+      obj.record = Record.toJSON(message.record);
+    }
+    if (message.about !== "") {
+      obj.about = message.about;
+    }
+    if (message.depth !== 0) {
+      obj.depth = Math.round(message.depth);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<Risk>, I>>(base?: I): Risk {
+    return Risk.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<Risk>, I>>(object: I): Risk {
+    const message = createBaseRisk();
+    message.record = (object.record !== undefined && object.record !== null)
+      ? Record.fromPartial(object.record)
+      : undefined;
+    message.about = object.about ?? "";
+    message.depth = object.depth ?? 0;
+    return message;
+  },
+};
+
 function createBaseImpact(): Impact {
-  return { entity: "", depth: 0, dependents: [], risks: [] };
+  return { entity: "", depth: 0, dependents: [], risks: [], totalRisks: 0 };
 }
 
 export const Impact: MessageFns<Impact> = {
@@ -5605,7 +5747,10 @@ export const Impact: MessageFns<Impact> = {
       Dependent.encode(v!, writer.uint32(26).fork()).join();
     }
     for (const v of message.risks) {
-      Record.encode(v!, writer.uint32(34).fork()).join();
+      Risk.encode(v!, writer.uint32(42).fork()).join();
+    }
+    if (message.totalRisks !== 0) {
+      writer.uint32(48).uint32(message.totalRisks);
     }
     return writer;
   },
@@ -5647,12 +5792,20 @@ export const Impact: MessageFns<Impact> = {
             message.dependents.push(Dependent.decode(reader, reader.uint32()));
             continue;
           }
-          case 4: {
-            if (tag !== 34) {
+          case 5: {
+            if (tag !== 42) {
               break;
             }
 
-            message.risks.push(Record.decode(reader, reader.uint32()));
+            message.risks.push(Risk.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.totalRisks = reader.uint32();
             continue;
           }
         }
@@ -5674,7 +5827,12 @@ export const Impact: MessageFns<Impact> = {
       dependents: globalThis.Array.isArray(object?.dependents)
         ? object.dependents.map((e: any) => Dependent.fromJSON(e))
         : [],
-      risks: globalThis.Array.isArray(object?.risks) ? object.risks.map((e: any) => Record.fromJSON(e)) : [],
+      risks: globalThis.Array.isArray(object?.risks) ? object.risks.map((e: any) => Risk.fromJSON(e)) : [],
+      totalRisks: isSet(object.totalRisks)
+        ? globalThis.Number(object.totalRisks)
+        : isSet(object.total_risks)
+        ? globalThis.Number(object.total_risks)
+        : 0,
     };
   },
 
@@ -5690,7 +5848,10 @@ export const Impact: MessageFns<Impact> = {
       obj.dependents = message.dependents.map((e) => Dependent.toJSON(e));
     }
     if (message.risks?.length) {
-      obj.risks = message.risks.map((e) => Record.toJSON(e));
+      obj.risks = message.risks.map((e) => Risk.toJSON(e));
+    }
+    if (message.totalRisks !== 0) {
+      obj.totalRisks = Math.round(message.totalRisks);
     }
     return obj;
   },
@@ -5703,7 +5864,8 @@ export const Impact: MessageFns<Impact> = {
     message.entity = object.entity ?? "";
     message.depth = object.depth ?? 0;
     message.dependents = object.dependents?.map((e) => Dependent.fromPartial(e)) || [];
-    message.risks = object.risks?.map((e) => Record.fromPartial(e)) || [];
+    message.risks = object.risks?.map((e) => Risk.fromPartial(e)) || [];
+    message.totalRisks = object.totalRisks ?? 0;
     return message;
   },
 };
@@ -6292,6 +6454,7 @@ function createBaseSearchRequest(): SearchRequest {
     from: undefined,
     to: undefined,
     recencyBias: undefined,
+    rerankWithheld: undefined,
   };
 }
 
@@ -6326,6 +6489,9 @@ export const SearchRequest: MessageFns<SearchRequest> = {
     }
     if (message.recencyBias !== undefined) {
       writer.uint32(85).float(message.recencyBias);
+    }
+    if (message.rerankWithheld !== undefined) {
+      writer.uint32(90).string(message.rerankWithheld);
     }
     return writer;
   },
@@ -6423,6 +6589,14 @@ export const SearchRequest: MessageFns<SearchRequest> = {
             message.recencyBias = reader.float();
             continue;
           }
+          case 11: {
+            if (tag !== 90) {
+              break;
+            }
+
+            message.rerankWithheld = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -6454,6 +6628,11 @@ export const SearchRequest: MessageFns<SearchRequest> = {
         ? globalThis.Number(object.recencyBias)
         : isSet(object.recency_bias)
         ? globalThis.Number(object.recency_bias)
+        : undefined,
+      rerankWithheld: isSet(object.rerankWithheld)
+        ? globalThis.String(object.rerankWithheld)
+        : isSet(object.rerank_withheld)
+        ? globalThis.String(object.rerank_withheld)
         : undefined,
     };
   },
@@ -6490,6 +6669,9 @@ export const SearchRequest: MessageFns<SearchRequest> = {
     if (message.recencyBias !== undefined) {
       obj.recencyBias = floatToJson(message.recencyBias);
     }
+    if (message.rerankWithheld !== undefined) {
+      obj.rerankWithheld = message.rerankWithheld;
+    }
     return obj;
   },
 
@@ -6508,6 +6690,7 @@ export const SearchRequest: MessageFns<SearchRequest> = {
     message.from = object.from ?? undefined;
     message.to = object.to ?? undefined;
     message.recencyBias = object.recencyBias ?? undefined;
+    message.rerankWithheld = object.rerankWithheld ?? undefined;
     return message;
   },
 };
@@ -7100,7 +7283,7 @@ export const SearchHit: MessageFns<SearchHit> = {
 };
 
 function createBaseSearchResponse(): SearchResponse {
-  return { hits: [], tookMs: 0, neighbourRadius: 0, reranked: false };
+  return { hits: [], tookMs: 0, neighbourRadius: 0, reranked: false, rerankSkipped: undefined };
 }
 
 export const SearchResponse: MessageFns<SearchResponse> = {
@@ -7116,6 +7299,9 @@ export const SearchResponse: MessageFns<SearchResponse> = {
     }
     if (message.reranked !== false) {
       writer.uint32(32).bool(message.reranked);
+    }
+    if (message.rerankSkipped !== undefined) {
+      writer.uint32(42).string(message.rerankSkipped);
     }
     return writer;
   },
@@ -7165,6 +7351,14 @@ export const SearchResponse: MessageFns<SearchResponse> = {
             message.reranked = reader.bool();
             continue;
           }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.rerankSkipped = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -7191,6 +7385,11 @@ export const SearchResponse: MessageFns<SearchResponse> = {
         ? globalThis.Number(object.neighbour_radius)
         : 0,
       reranked: isSet(object.reranked) ? globalThis.Boolean(object.reranked) : false,
+      rerankSkipped: isSet(object.rerankSkipped)
+        ? globalThis.String(object.rerankSkipped)
+        : isSet(object.rerank_skipped)
+        ? globalThis.String(object.rerank_skipped)
+        : undefined,
     };
   },
 
@@ -7208,6 +7407,9 @@ export const SearchResponse: MessageFns<SearchResponse> = {
     if (message.reranked !== false) {
       obj.reranked = message.reranked;
     }
+    if (message.rerankSkipped !== undefined) {
+      obj.rerankSkipped = message.rerankSkipped;
+    }
     return obj;
   },
 
@@ -7220,6 +7422,7 @@ export const SearchResponse: MessageFns<SearchResponse> = {
     message.tookMs = object.tookMs ?? 0;
     message.neighbourRadius = object.neighbourRadius ?? 0;
     message.reranked = object.reranked ?? false;
+    message.rerankSkipped = object.rerankSkipped ?? undefined;
     return message;
   },
 };
@@ -8210,7 +8413,7 @@ export const GetFileViewRequest: MessageFns<GetFileViewRequest> = {
 };
 
 function createBaseFileView(): FileView {
-  return { path: "", records: [], problems: [], decisions: [], entities: [], dependents: [] };
+  return { path: "", records: [], problems: [], decisions: [], entities: [], dependents: [], changedWith: [] };
 }
 
 export const FileView: MessageFns<FileView> = {
@@ -8232,6 +8435,9 @@ export const FileView: MessageFns<FileView> = {
     }
     for (const v of message.dependents) {
       Dependent.encode(v!, writer.uint32(50).fork()).join();
+    }
+    for (const v of message.changedWith) {
+      Node.encode(v!, writer.uint32(58).fork()).join();
     }
     return writer;
   },
@@ -8297,6 +8503,14 @@ export const FileView: MessageFns<FileView> = {
             message.dependents.push(Dependent.decode(reader, reader.uint32()));
             continue;
           }
+          case 7: {
+            if (tag !== 58) {
+              break;
+            }
+
+            message.changedWith.push(Node.decode(reader, reader.uint32()));
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -8321,6 +8535,11 @@ export const FileView: MessageFns<FileView> = {
       dependents: globalThis.Array.isArray(object?.dependents)
         ? object.dependents.map((e: any) => Dependent.fromJSON(e))
         : [],
+      changedWith: globalThis.Array.isArray(object?.changedWith)
+        ? object.changedWith.map((e: any) => Node.fromJSON(e))
+        : globalThis.Array.isArray(object?.changed_with)
+        ? object.changed_with.map((e: any) => Node.fromJSON(e))
+        : [],
     };
   },
 
@@ -8344,6 +8563,9 @@ export const FileView: MessageFns<FileView> = {
     if (message.dependents?.length) {
       obj.dependents = message.dependents.map((e) => Dependent.toJSON(e));
     }
+    if (message.changedWith?.length) {
+      obj.changedWith = message.changedWith.map((e) => Node.toJSON(e));
+    }
     return obj;
   },
 
@@ -8358,6 +8580,7 @@ export const FileView: MessageFns<FileView> = {
     message.decisions = object.decisions?.map((e) => Record.fromPartial(e)) || [];
     message.entities = object.entities?.map((e) => Node.fromPartial(e)) || [];
     message.dependents = object.dependents?.map((e) => Dependent.fromPartial(e)) || [];
+    message.changedWith = object.changedWith?.map((e) => Node.fromPartial(e)) || [];
     return message;
   },
 };

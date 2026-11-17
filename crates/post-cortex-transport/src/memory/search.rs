@@ -41,6 +41,10 @@ pub async fn semantic_search(
             author: req.author.clone().filter(|a| !a.trim().is_empty()),
             prefer_author: req.prefer_author.clone().filter(|a| !a.trim().is_empty()),
             trace: req.trace.unwrap_or(false),
+            rerank_withheld: post_cortex_memory::tools::wire::rerank_withheld(
+                req.rerank_withheld.as_deref(),
+            )
+            .map_err(status)?,
             ..Default::default()
         };
         // workspace_id takes precedence over session_id
@@ -78,6 +82,7 @@ pub async fn semantic_search(
             results,
             total_matches,
             reranked: found.reranked,
+            rerank_skipped: found.rerank_skipped.map(|r| r.as_str().to_string()),
         }))
     }
 }

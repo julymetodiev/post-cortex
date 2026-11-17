@@ -31,6 +31,10 @@ pub struct SearchBody {
     /// Only records and messages by this author.
     #[serde(default)]
     author: Option<String>,
+    /// Set by the cloud's gateway, never by a client: `plan_limit` when the
+    /// plan has no reranker calls left.
+    #[serde(default)]
+    rerank_withheld: Option<String>,
 }
 
 /// One hit of `POST /api/search`.
@@ -58,6 +62,9 @@ pub struct SearchResponseBody {
     results: Vec<SearchHitBody>,
     /// Whether a reranker ordered them.
     reranked: bool,
+    /// Why a search that asked for a reranker got none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rerank_skipped: Option<&'static str>,
 }
 
 pub const SEARCH_TITLE_CHARS: usize = 120;
@@ -89,6 +96,10 @@ pub async fn api_search(
         corpus: post_cortex_memory::tools::wire::sources(body.sources.as_deref())
             .map_err(|f| bad(f.message))?,
         author: body.author.filter(|a| !a.trim().is_empty()),
+        rerank_withheld: post_cortex_memory::tools::wire::rerank_withheld(
+            body.rerank_withheld.as_deref(),
+        )
+        .map_err(|f| bad(f.message))?,
         ..Default::default()
     };
     let id = || {
@@ -135,5 +146,6 @@ pub async fn api_search(
     Ok(Json(SearchResponseBody {
         results: hits,
         reranked: found.reranked,
+        rerank_skipped: found.rerank_skipped.map(|r| r.as_str()),
     }))
 }

@@ -206,10 +206,10 @@ impl Messages {
     }
 
     /// Up to `limit` turns of a session from position `from`, in order
-    /// (none: [`DEFAULT_PAGE`]), and where the next page starts.
+    /// (none: `DEFAULT_PAGE`), and where the next page starts.
     ///
     /// # Errors
-    /// `InvalidArgument` for a limit of 0 or over [`MAX_PAGE`]; storage
+    /// `InvalidArgument` for a limit of 0 or over `MAX_PAGE`; storage
     /// failed.
     pub async fn stream(
         &self,

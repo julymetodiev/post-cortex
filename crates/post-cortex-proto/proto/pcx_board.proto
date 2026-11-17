@@ -177,7 +177,7 @@ message Decision {
   // What it risks.
   Risk risk = 5;
   // Who approved it; unset: not approved (needed unless its risk is
-  // none). A team's policy approves as policy:<version>.
+  // none). A team's policy approves as `policy:<version>`.
   optional string approved_by = 6;
   // What it puts at stake.
   pcx.team.v1.Stakes stakes = 7;
@@ -613,7 +613,7 @@ message DecisionApproved {
   string decision = 1;
   // Its task.
   string task = 2;
-  // Who approved it (a person, or policy:<version>).
+  // Who approved it (a person, or `policy:<version>`).
   string approved_by = 3;
 }
 

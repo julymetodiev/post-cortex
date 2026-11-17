@@ -11,7 +11,7 @@ use post_cortex_core::core::dismissal::RadarDismissal;
 use crate::graph_views::Index;
 use crate::graph_views::detail::types::{
     EntityDetail, FileDetail, ImpactDetail, LineageDetail, LineageStepDetail, NodeDetail,
-    RadarDetail, RecordDetail, TopicDetail, TopicsDetail,
+    RadarDetail, RecordDetail, RiskDetail, TopicDetail, TopicsDetail,
 };
 use crate::graph_views::types::{GraphNode, RecordView};
 
@@ -80,7 +80,18 @@ impl Index<'_> {
                 entity: impact.entity,
                 depth: impact_depth,
                 dependents: impact.dependents,
-                risks: self.full(&impact.risks),
+                risks: impact
+                    .risks
+                    .into_iter()
+                    .filter_map(|risk| {
+                        Some(RiskDetail {
+                            record: self.record_detail(risk.record.id)?,
+                            about: risk.about,
+                            depth: risk.depth,
+                        })
+                    })
+                    .collect(),
+                total_risks: impact.total_risks,
             },
             lineage: LineageDetail {
                 entity: lineage.entity,
@@ -152,6 +163,7 @@ impl Index<'_> {
             decisions: self.full(&view.decisions),
             entities: self.node_details(view.entities),
             dependents: view.dependents,
+            changed_with: self.node_details(view.changed_with),
         }
     }
 }

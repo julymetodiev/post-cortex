@@ -56,7 +56,7 @@ case $what in
   # system library (ROCKSDB_LIB_DIR) would make a binary that runs only there.
   pcx) ROCKSDB_COMPILE=1 SNAPPY_COMPILE=1 ROCKSDB_INCLUDE_DIR=rocksdb/include \
     cargo build --release -p post-cortex-daemon --bin pcx --features surrealdb-storage,rerank-voyage ${1:+--target "$1"} >"$log" 2>&1; rc=$? ;;
-  rustdoc) RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc "${F[@]}" --no-deps --keep-going >"$log" 2>&1; rc=$? ;;
+  rustdoc) RUSTDOCFLAGS="-D warnings" cargo doc "${F[@]}" --no-deps --keep-going >"$log" 2>&1; rc=$? ;;
   deny) cargo deny check >"$log" 2>&1; rc=$? ;;
   cloud-deny) (cd ../post-cortex-cloud && cargo deny check --config "$root/deny.toml" advisories) >"$log" 2>&1; rc=$? ;;
   cloud) (cd ../post-cortex-cloud && cargo clippy --workspace --all-targets -- -D warnings) >"$log" 2>&1; rc=$? ;;

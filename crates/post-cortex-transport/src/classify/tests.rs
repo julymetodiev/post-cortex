@@ -103,6 +103,7 @@ fn mcp_answers_carry_their_counts() {
         text: "Deleted 4 messages".into(),
         data: Some(json!({ "session_id": "s", "deleted": 4, "remaining": 0 })),
         failed: false,
+        meta: None,
     };
     let result = serde_json::to_value(crate::mcp::call_result(Ok(output))).unwrap();
     assert_eq!(mcp_answer_count(&result, "deleted").unwrap(), 4);
@@ -110,9 +111,32 @@ fn mcp_answers_carry_their_counts() {
         text: "done".into(),
         data: None,
         failed: false,
+        meta: None,
     })))
     .unwrap();
     assert!(mcp_answer_count(&bare, "deleted").is_err());
+}
+
+/// Whether a search was reranked is read from the result's `_meta`, which a
+/// `select` of its data keeps; a flag only in the data is not the answer.
+#[test]
+fn mcp_answers_carry_their_flags_in_their_meta() {
+    let result = |data: serde_json::Value, meta: Option<serde_json::Value>| {
+        serde_json::to_value(crate::mcp::call_result(Ok(pcx_module_api::ToolOutput {
+            text: "Found 1 results".into(),
+            data: Some(data),
+            failed: false,
+            meta: meta.and_then(|m| m.as_object().cloned()),
+        })))
+        .unwrap()
+    };
+    let selected = result(json!(["id"]), Some(json!({ "reranked": true })));
+    assert_eq!(selected["_meta"], json!({ "reranked": true }));
+    assert_eq!(mcp_answer_flag(&selected, "reranked"), Some(true));
+    let unranked = result(json!(["id"]), Some(json!({ "reranked": false })));
+    assert_eq!(mcp_answer_flag(&unranked, "reranked"), Some(false));
+    let in_data_only = result(json!({ "reranked": true }), None);
+    assert_eq!(mcp_answer_flag(&in_data_only, "reranked"), None);
 }
 
 #[test]
@@ -173,6 +197,13 @@ fn grpc_calls_read_their_message_through_the_descriptor() {
             .as_deref(),
         Some("fast")
     );
+    assert_eq!(
+        pb::SemanticSearchRequest::decode(&fast[..])
+            .unwrap()
+            .rerank_withheld
+            .as_deref(),
+        Some("plan_limit")
+    );
     assert!(
         !grpc("/pcx.v1.PostCortex/SemanticSearch", &fast)
             .unwrap()
@@ -232,6 +263,13 @@ fn view_calls_name_their_scope_message() {
     assert_eq!(
         v::SearchRequest::decode(&fast[..]).unwrap().mode,
         v::SearchMode::Fast as i32
+    );
+    assert_eq!(
+        v::SearchRequest::decode(&fast[..])
+            .unwrap()
+            .rerank_withheld
+            .as_deref(),
+        Some("plan_limit")
     );
 
     let global = v::ListConversationsRequest {
@@ -315,6 +353,7 @@ fn rest_routes_fill_their_scope_from_path_query_and_body() {
     let mut body = json!({ "query": "q", "mode": "accurate" });
     without_rerank(c.operation, &mut body);
     assert_eq!(body["mode"], "fast");
+    assert_eq!(body["rerank_withheld"], "plan_limit");
 
     // A hook event names the scope of its envelope, not the agent's own
     // session id.

@@ -2,12 +2,19 @@
 // Licensed under the MIT License. See LICENSE at the workspace root.
 
 //! The source files a record names, as the files views read them: its code
-//! reference, and for a code change the files its title lists (the `file`
-//! of the write, free text that agents fill with several paths, brace
-//! lists and the symbols they touched). Read time only: every stored
-//! record counts as it is.
+//! reference, and the paths a record's `file`, `file_path` or `files`
+//! lists, for any type (free text that agents fill with several paths,
+//! brace lists and the symbols they touched). A code change's title is its
+//! `file`, kept whole in its details when a long title is cut; a code
+//! change whose title was cut before that also names the paths in its
+//! description. Read time only: every stored record counts as it is.
 
 use post_cortex_core::core::context_update::{ContextUpdate, UpdateType};
+use post_cortex_core::session::active_session::{FILE_DETAIL_KEY, cut_title};
+
+/// The keys of a write's `content` that name files, as its details keep
+/// them (`key: value`).
+const FILE_KEYS: &[&str] = &[FILE_DETAIL_KEY, "file_path", "files"];
 
 /// Longest file extension taken for one (`.rs`, `.dart`, `.proto`,
 /// `.gradle`); `Rerank.fallback` is an expression, not a file.
@@ -37,8 +44,27 @@ pub fn files_of(update: &ContextUpdate) -> Vec<String> {
     if let Some(code) = &update.related_code {
         add(&code.file_path);
     }
+    let mut named_in_details = false;
+    for entry in &update.content.details {
+        if let Some((key, value)) = entry.split_once(": ")
+            && FILE_KEYS.contains(&key)
+        {
+            named_in_details = true;
+            add(value);
+        }
+    }
     if update.update_type == UpdateType::CodeChanged {
-        add(&update.content.title);
+        match cut_title(&update.content.title) {
+            None => add(&update.content.title),
+            Some(_) if named_in_details => {}
+            Some(kept) => {
+                // The item the cut went through is not a path.
+                add(kept
+                    .rsplit_once([',', ';', '\n', ' '])
+                    .map_or("", |(whole, _)| whole));
+                add(&update.content.description);
+            }
+        }
     }
     out
 }

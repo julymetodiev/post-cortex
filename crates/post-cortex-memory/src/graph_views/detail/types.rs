@@ -196,8 +196,21 @@ pub struct ImpactDetail {
     /// Dependents, nearest first.
     pub dependents: Vec<ImpactItem>,
     /// Current decisions, requirements and problems about it and its
-    /// dependents, newest first.
-    pub risks: Vec<RecordDetail>,
+    /// dependents, most relevant first (as `ImpactView::risks`).
+    pub risks: Vec<RiskDetail>,
+    /// All such records.
+    pub total_risks: usize,
+}
+
+/// A record at risk, with what it is about.
+#[derive(Clone, Debug)]
+pub struct RiskDetail {
+    /// The record.
+    pub record: RecordDetail,
+    /// The nearest entity of the report it names.
+    pub about: String,
+    /// Hops of `about` from the entity asked for (0: that entity).
+    pub depth: usize,
 }
 
 /// A record on an entity's causal chain.
@@ -303,10 +316,12 @@ pub struct FileDetail {
     pub problems: Vec<RecordDetail>,
     /// Current decisions and requirements about it.
     pub decisions: Vec<RecordDetail>,
-    /// Entities naming it.
+    /// Entities named after it.
     pub entities: Vec<NodeDetail>,
     /// What depends on those entities.
     pub dependents: Vec<ImpactItem>,
+    /// The code its records changed with it.
+    pub changed_with: Vec<NodeDetail>,
 }
 
 /// Which records a page of the browser holds.

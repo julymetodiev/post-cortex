@@ -148,8 +148,11 @@ Always search in order: **session → workspace → global**.
 ### Search modes
 
 `mode` picks the reranker: `fast` (none, ~40 ms), `local` (a local
-cross-encoder, ~1 s) or `accurate` (Voyage where every workspace searched
-allows it, else local). Without
+cross-encoder, ~1 s; the cloud has none) or `accurate` (Voyage where every
+workspace searched allows it, else local, if any). A search that asked for
+a reranker and got none says why (`rerank_skipped`: `no_local_reranker`,
+`no_reranker`, `remote_not_allowed`, or in the cloud `plan_limit`: the plan
+has no reranker calls left). Without
 `mode` the daemon's `search_mode` applies, else the best the configured
 rerankers allow. Measured quality per mode:
 [Search quality](DAEMON_MODE.md#search-quality).

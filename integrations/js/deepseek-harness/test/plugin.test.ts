@@ -95,20 +95,20 @@ test("cards reach every request once: a runtime context, never a step message", 
     const first = await f.emit("agent/pre-step", payload, enter([userMessage]));
     assert.deepEqual(first, { kind: "enter", messages: [userMessage] }, "the step's messages are untouched");
     // admission after pre-step reads the text again: the first request has the cards
-    assert.ok(textFor(context, "session-1").startsWith(`## post-cortex cards\n\n[PCX] Session: ${TEST_SESSION}`));
+    assert.ok(textFor(context, "session-1").startsWith(`[PCX] Session: ${TEST_SESSION}`));
 
     // later steps: no new fetch, no message, the same single cards context
     const second = await f.emit("agent/pre-step", { ...payload, step: 2 }, enter([userMessage]));
     assert.deepEqual(second.messages, [userMessage]);
     assert.equal(f.contexts.filter((c) => c.name === CONTEXT_NAME).length, 1);
-    assert.equal(daemon.requests.filter((r) => r.path === "/api/cards").length, 1);
+    assert.equal(daemon.events("SessionStart").length, 1);
 
     // another session has no cards until its own first step; a reject passes through
     assert.equal(textFor(context, "session-2"), "");
     assert.equal(textFor(context, "unknown"), "");
     const other = { ...payload, agent: agentIn(t.projectDir, "session-2") };
     assert.deepEqual(await f.emit("agent/pre-step", other, async () => ({ kind: "reject" })), { kind: "reject" });
-    assert.ok(textFor(context, "session-2").startsWith("## post-cortex cards"));
+    assert.ok(textFor(context, "session-2").startsWith("[PCX] Session: "));
   } finally {
     t.cleanup();
     await daemon.close();
@@ -140,7 +140,7 @@ test("cards fetch failed: retried on the next step", async () => {
     up = true;
     await new Promise((r) => setTimeout(r, 20)); // the failed resolution is forgotten after retryMs
     await f.emit("agent/pre-step", { ...payload, step: 2 }, enter());
-    assert.ok(textFor(cardsContext(f), "session-1").startsWith("## post-cortex cards"));
+    assert.ok(textFor(cardsContext(f), "session-1").startsWith("[PCX] Session: "));
   } finally {
     t2.cleanup();
     await daemon.close();

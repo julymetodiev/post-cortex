@@ -38,7 +38,7 @@ impl SurrealDBStorage {
     /// let storage = SurrealDBStorage::new("localhost:8000", Some("root"), Some("root"), None, None).await?;
     /// ```
     ///
-    /// Accepts embeddings of any length of at least [`crate::surrealdb_storage::MIN_VECTOR_LEN`];
+    /// Accepts embeddings of any length of at least `MIN_VECTOR_LEN`;
     /// [`Self::new_with_dimension`] accepts only the embedding model's.
     pub async fn new(
         endpoint: &str,

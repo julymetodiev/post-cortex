@@ -4,7 +4,7 @@
 
 import { type Backend, type Env, clean, configDir, hostSettings, resolveBackend } from "./config.js";
 import { DEFAULT_TIMEOUT_MS, PcxClient, type Turn } from "./client.js";
-import { cardsText, fileContextText, joinTexts, recallText } from "./format.js";
+import { idsLine, joinTexts, recallText } from "./format.js";
 import {
   type Ids,
   type Project,
@@ -149,7 +149,7 @@ export class PostCortex {
     const project = await this.project(dir);
     if (!project || !this.client) return null;
     const cards = await this.client.cards(project.workspace_id, this.refused(dir, project));
-    return cards === null ? null : cardsText(cards, project.workspace_id, project);
+    return cards === null ? null : `${idsLine(project)}\n\n${cards}`;
   }
 
   /**
@@ -178,10 +178,7 @@ export class PostCortex {
     if (!project || !client) return null;
     const relative = [...new Set(paths.map((p) => projectRelative(p, project.root, dir)))];
     const texts = await Promise.all(
-      relative.map(async (path) => {
-        const view = await client.file(project.workspace_id, path, undefined, this.refused(dir, project));
-        return view === null ? null : fileContextText(view, path);
-      }),
+      relative.map((path) => client.fileContext(project.workspace_id, path, this.refused(dir, project))),
     );
     return joinTexts(texts);
   }

@@ -14,7 +14,7 @@
 //!   a single-use download link (`{"url": "/v1/export/<ticket>",
 //!   "filename", "expires_in"}`); `GET` of the link streams the file as an
 //!   attachment, so the browser saves it itself. A navigation carries no
-//!   `Authorization`, so the link is its credential ([`Tickets`]:
+//!   `Authorization`, so the link is its credential (`Tickets`:
 //!   [`downloads`] is served without the token; [`routes`] with it).
 //! - **Blobs** (W24, [`blobs`]): `POST /v1/blobs?workspace_id=` with an
 //!   image as the raw body answers what it is (`BlobInfo` as JSON);

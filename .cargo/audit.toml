@@ -48,11 +48,6 @@ ignore = [
     # never configure); surrealdb 3.3.4 pins it. Re-check on the next surrealdb.
     "RUSTSEC-2026-0195", # quick-xml NsReader namespace allocation
     "RUSTSEC-2026-0194", # quick-xml duplicate-attribute quadratic check
-    # zip 7.4 via candle-core, only with the opt-in `bert` feature; affects
-    # archive extraction, which candle/post-cortex never call.
-    "RUSTSEC-2026-0367", # zip SUID/SGID bits on extract
-    "RUSTSEC-2026-0368", # zip symlink targets outside destination
-    "RUSTSEC-2026-0369", # zip permissions applied through symlinks
 
     # webpki-roots 0.26.11 is a shim that re-exports webpki-roots 1.x, locked
     # at 1.0.10, which removes the distrusted emSign root. The advisory's
@@ -60,11 +55,17 @@ ignore = [
     # ureq 2 <- hf-hub <- model2vec-rs.
     "RUSTSEC-2026-0381", # webpki-roots emSign root (0.26 shim of patched 1.0.10)
 
-    # No compatible fix (2026-11-15): three come with surrealdb 3.3 and are
-    # fixed only in surrealdb 4.0; zip 7 comes with candle-core, which reads
-    # its own model files, and is fixed only in zip 9.0.
+    # No compatible fix (2026-11-15): these come with surrealdb 3.3 and are
+    # fixed only in surrealdb 4.0.
     "RUSTSEC-2026-0454", # reblessive unsound Send/Sync in surrealdb-core 3.3
     "RUSTSEC-2026-0441", # pin-utils unmaintained (wasmtimer of surrealdb 3.3)
     "RUSTSEC-2026-0387", # crypto-bigint 0.5 timing (jsonwebtoken of surrealdb 3.3)
-    "RUSTSEC-2026-0429", # zip 7 aborts on a symlink entry (candle-core)
+
+    # chrono is declared unmaintained (2026-11; chronotope/chrono#1768) with no
+    # successor release; it is the time type of the whole workspace and of
+    # surrealdb, cel-core and object_store. Moving to jiff or time is its own
+    # task (owner 2026-11-17: ignore now).
+    "RUSTSEC-2026-0543", # chrono unmaintained
+    "RUSTSEC-2026-0555", # chrono-tz unmaintained (transitive via cel-core)
+    "RUSTSEC-2026-0542", # humantime unmaintained, wraps chrono (transitive via object_store)
 ]

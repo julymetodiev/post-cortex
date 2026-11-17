@@ -1,69 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { RECALL_HEADING, cardsText, fileContextText, idsLine, joinTexts, patchPaths, recallText } from "../src/format.js";
+import { RECALL_HEADING, idsLine, joinTexts, patchPaths, recallText } from "../src/format.js";
 import { isInjected } from "../src/text.js";
 
 const W = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const S = "11111111-2222-3333-4444-555555555555";
 
-test("cards text as common.rs prints it", () => {
-  const cards = { user: { text: " be brief \n", version: 2 }, workspace: { text: "Rust.", version: 5 } };
-  assert.equal(
-    cardsText(cards, W),
-    "## post-cortex cards\n\n### User card (v2)\nbe brief\n\n### Project card (v5)\nRust.",
-  );
-});
-
-test("no project card: how to write one; null cards and missing versions", () => {
-  assert.equal(
-    cardsText({ user: null, workspace: null }, W),
-    "## post-cortex cards\n\nNo project card yet. Once you know the stack, conventions and current goals, " +
-      `write a short one (max 2 KB): manage_workspace action update_card, workspace_id ${W}, expected_version 0.`,
-  );
-  // serde_json Display: a missing version prints `null`, a string keeps its quotes
-  assert.match(cardsText({ user: { text: "x" } }, W), /### User card \(vnull\)\nx/);
-  assert.match(cardsText({ user: { text: "x", version: "3" } }, W), /### User card \(v"3"\)\nx/);
-});
-
-test("ids line comes first in global mode", () => {
-  const text = cardsText({ workspace: { text: "p", version: 1 } }, W, { session_id: S, workspace_id: W });
-  assert.equal(
-    text,
-    `## post-cortex cards\n\n[PCX] Session: ${S} | Workspace: ${W}\n\n### Project card (v1)\np`,
-  );
+test("ids line, as the Claude Code plugin prints it", () => {
   assert.equal(idsLine({ session_id: S, workspace_id: W }), `[PCX] Session: ${S} | Workspace: ${W}`);
-});
-
-test("file context text", () => {
-  const long = "é".repeat(250);
-  const view = {
-    problems: [
-      { id: "e1", title: "Fixed race", description: ` ${long} `, timestamp: "2026-10-01T12:00:00Z" },
-      { id: "e2", title: "Old", validity: { valid_to: "2026-10-02", reason: "superseded" } },
-      { id: "e3", title: "Gone", validity: { valid_to: "2026-10-02" } },
-      { id: "e4", title: "fourth is cut" },
-    ],
-    decisions: [{ title: "Use tokio", timestamp: "2026-09-01" }],
-    dependents: [{ entity: "a.rs" }, { entity: 3 }, {}, { entity: "b.rs" }],
-  };
-  assert.equal(
-    fileContextText(view, "src/x.rs"),
-    "post-cortex memory for src/x.rs:\n\n" +
-      "Problems solved here before:\n" +
-      `- 2026-10-01 Fixed race: ${"é".repeat(200)} [entry e1]\n` +
-      "-  Old (no longer holds: superseded) [entry e2]\n" +
-      "-  Gone (no longer holds: ended) [entry e3]\n\n" +
-      "Decisions and requirements about it:\n" +
-      "- 2026-09-01 Use tokio [entry ]\n\n" +
-      "Depends on it: a.rs, b.rs",
-  );
-});
-
-test("nothing known about a file is null", () => {
-  assert.equal(fileContextText({ problems: [], decisions: [], dependents: [] }, "a"), null);
-  assert.equal(fileContextText({}, "a"), null);
-  assert.equal(fileContextText(null, "a"), null);
 });
 
 test("joined texts", () => {

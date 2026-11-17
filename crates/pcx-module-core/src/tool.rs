@@ -128,6 +128,10 @@ pub struct ToolOutput {
     /// The call failed yet answers with its data (a bulk write's per-item
     /// results).
     pub failed: bool,
+    /// What the call says about itself beside its data (MCP's `_meta`),
+    /// which no selection of the data leaves out: a search, whether a
+    /// reranker ordered its hits, which the cloud counts.
+    pub meta: Option<Map<String, Value>>,
 }
 
 impl ToolSpec {
@@ -165,6 +169,7 @@ impl ToolOutput {
             text,
             data: Some(data),
             failed: false,
+            meta: None,
         }
     }
 }

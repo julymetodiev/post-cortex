@@ -96,3 +96,34 @@ async fn dry_run_validates_like_a_write_and_stores_nothing() {
     let session = service.sessions.get(sid).await.unwrap();
     assert!(session.records().is_empty(), "a dry run stores nothing");
 }
+
+/// A code change's title is its `file_path`, else its `file`; when it
+/// gives both, the other stays in the details, so the file view reads
+/// every path it names (board task b22dfd96).
+#[test]
+fn a_code_change_keeps_every_file_it_names() {
+    let content = |pairs: &[(&str, &str)]| {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect::<std::collections::HashMap<_, _>>()
+    };
+    let (_, both) = content::build(
+        "code_change",
+        &content(&[
+            ("file_path", "src/a.rs"),
+            ("file", "src/b.rs"),
+            ("changes", "x"),
+        ]),
+    )
+    .unwrap();
+    assert_eq!(both.title, "src/a.rs");
+    assert_eq!(both.details, ["file: src/b.rs"]);
+    let (_, one) = content::build(
+        "code_change",
+        &content(&[("file", "src/b.rs"), ("changes", "x")]),
+    )
+    .unwrap();
+    assert_eq!(one.title, "src/b.rs");
+    assert!(one.details.is_empty());
+}

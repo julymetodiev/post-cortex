@@ -92,13 +92,15 @@ pub fn mcp_answer_count(result: &Value, field: &str) -> Result<i64, ClassifyErro
     answer_count(&mcp_data(result, field)?, field)
 }
 
-/// The flag in `field` of the data of an MCP tool result; `None` when the
-/// data does not carry it (a `select` left it out).
-///
-/// # Errors
-/// The result carries no data.
-pub fn mcp_answer_flag(result: &Value, field: &str) -> Result<Option<bool>, ClassifyError> {
-    Ok(answer_flag(&mcp_data(result, field)?, field))
+/// The flag in `field` of the meta (`_meta`) of an MCP tool result, which
+/// no `select` of its data takes away; `None` when the result does not
+/// carry it or it is not a boolean.
+#[must_use]
+pub fn mcp_answer_flag(result: &Value, field: &str) -> Option<bool> {
+    result
+        .get("_meta")
+        .and_then(|meta| meta.get(field))
+        .and_then(Value::as_bool)
 }
 
 /// The data of an MCP tool result, for reading `field` of it.

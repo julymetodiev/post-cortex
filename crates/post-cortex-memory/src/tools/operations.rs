@@ -8,13 +8,13 @@
 //! It is data: the MCP server takes each tool's valid actions from it, the
 //! tools reference is rendered from it, and the parity test fails when a
 //! transport exposes something the table does not list or lacks what it
-//! lists. Each row also states its effect and scope fields ([`effect`]).
+//! lists. Each row also states its effect and scope fields (`effect`).
 
 pub mod classify;
 mod effect;
 mod table;
 
-pub use effect::{Count, Counter, Effect, Rerank, ScopeFields, Tally};
+pub use effect::{Count, Counter, Effect, RERANKED, Rerank, ScopeFields, Tally};
 pub use table::OPERATIONS;
 
 /// One user-facing operation.

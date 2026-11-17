@@ -27,14 +27,15 @@ You do not install this package yourself: the plugins depend on it.
   workspace and session are created on first use; teammates on the same remote
   share them). The algorithm is asserted against the shared vectors in
   `integrations/testdata/project-keys.json`, like `pcx` and the Python hooks.
-- **REST client.** `GET /api/cards`, `GET /api/file`, `POST /api/messages`,
-  `POST /api/projects/resolve`, each with a 3 s timeout, `X-PCX-Author` set to
-  the client's name and the bearer token when there is one. Every failure
-  (offline daemon, HTTP error, timeout) is `null`: memory never blocks the
-  agent.
-- **Text.** The cards text and the file-memory text are byte-for-byte the
-  ones `pcx hook` prints (`HookEnv` in `pcx/clients/common.rs`), plus the
-  `[PCX] Session: ... | Workspace: ...` line in global mode, and the
+- **REST client.** `POST /api/events`, `POST /api/messages`,
+  `POST /api/projects/resolve`, `POST /api/search`, each with a 3 s timeout,
+  `X-PCX-Author` set to the client's name and the bearer token when there is
+  one. Every failure (offline daemon, HTTP error, timeout) is `null`: memory
+  never blocks the agent.
+- **Text.** The cards and a file's memory are the memory module's own text
+  (its answers to a `SessionStart` and a `PreToolUse` event), the same for
+  every client; the cards come after the `[PCX] Session: ... | Workspace: ...`
+  line, as the Claude Code plugin prints them. Also the recall section and the
   `apply_patch` path parser.
 
 ## API
@@ -43,15 +44,15 @@ You do not install this package yourself: the plugins depend on it.
 import { PostCortex } from "@post-cortex/plugin-core";
 
 const pc = new PostCortex("opencode", { capture: true });
-await pc.cardsText(directory);              // string | null
-await pc.fileContextText(directory, paths); // string | null
+await pc.cardsText(directory);              // string | null: the ids line, then the cards
+await pc.fileContextText(directory, paths); // string | null: the memory module's text
 await pc.capture(directory, turns);         // boolean
 ```
 
 The lower-level pieces (`resolveBackend`, `hostSettings`, `project`,
-`normalizeRemote`, `localKey`, `PcxClient`, `cardsText`, `fileContextText`,
-`patchPaths`) are exported too. `@post-cortex/plugin-core/testing` has the fake
-daemon the plugin tests use.
+`normalizeRemote`, `localKey`, `PcxClient`, `idsLine`, `patchPaths`) are
+exported too. `@post-cortex/plugin-core/testing` has the fake daemon the
+plugin tests use.
 
 ## Privacy
 

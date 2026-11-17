@@ -285,7 +285,7 @@ message Input {
   // digits and _.
   string name = 1;
   // Its type as CEL writes it: string, int, double, bool, timestamp,
-  // list<T>, map<string, T>.
+  // `list<T>`, `map<string, T>`.
   string type = 2;
   // A value of it, which a preview and a test fill the template with.
   google.protobuf.Value example = 3;

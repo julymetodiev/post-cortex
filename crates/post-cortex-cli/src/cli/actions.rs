@@ -21,7 +21,7 @@ pub enum ProfileAction {
         /// The profile.
         #[arg(value_name = "NAME")]
         name: String,
-        /// The backend's base URL, e.g. https://pcx.example.com
+        /// The backend's base URL, e.g. <https://pcx.example.com>
         #[arg(long, value_name = "URL")]
         url: String,
     },

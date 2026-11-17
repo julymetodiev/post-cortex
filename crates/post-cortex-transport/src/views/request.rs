@@ -136,6 +136,10 @@ pub fn search_options(req: &pb::SearchRequest) -> Result<SearchOptions, Status> 
         author: text(req.author.clone()),
         prefer_author: text(req.prefer_author.clone()),
         trace: true,
+        rerank_withheld: post_cortex_memory::tools::wire::rerank_withheld(
+            req.rerank_withheld.as_deref(),
+        )
+        .map_err(|f| Status::invalid_argument(f.message))?,
         ..SearchOptions::default()
     })
 }

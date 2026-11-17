@@ -140,13 +140,11 @@ fn get_relationship_description(from: &str, to: &str, graph: &SimpleEntityGraph)
 }
 
 /// Perform impact analysis: find all entities that depend on any of the query entities.
-/// Traverses DependsOn, RequiredBy, and Implements edges in reverse.
+/// `B depends_on A` and `B implements A` make B a dependent of A; `A
+/// required_by B` does too (B needs A), so a `required_by` edge is read in
+/// its own direction, never the other way.
 pub fn analyze_impact(query_entities: &[String], graph: &SimpleEntityGraph) -> Vec<ImpactEntry> {
-    let dependency_types = [
-        RelationType::DependsOn,
-        RelationType::RequiredBy,
-        RelationType::Implements,
-    ];
+    let dependency_types = [RelationType::DependsOn, RelationType::Implements];
 
     let mut impacts: Vec<ImpactEntry> = Vec::new();
     let query_set: HashSet<&str> = query_entities.iter().map(String::as_str).collect();

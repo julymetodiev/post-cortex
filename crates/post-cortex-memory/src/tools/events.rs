@@ -12,6 +12,7 @@ use pcx_module_api::{
     Event, EventKind, FailurePolicy, HookSpecificOutput, Outcome, Scope, Subscription, event_kind,
 };
 use post_cortex_core::core::card::{Card, CardScope};
+use post_cortex_core::core::context_update::RelationType;
 use post_cortex_core::core::message::{MessageRole, NewMessage};
 use post_cortex_core::services::{AppendMessagesRequest, GetCardRequest};
 use serde::Deserialize;
@@ -19,7 +20,7 @@ use uuid::Uuid;
 
 use crate::Memory;
 use crate::capabilities::Target;
-use crate::graph_views::{FileView, RecordView, RenderedView, ViewRequest};
+use crate::graph_views::{FileView, ImpactItem, RecordView, RenderedView, ViewRequest};
 use crate::tools::Failure;
 
 /// Records per list in a file's memory.
@@ -113,8 +114,8 @@ fn render_cards(user: Option<&Card>, project: Option<&Card>, workspace_id: Uuid)
 }
 
 /// What memory knows about the file a tool is about to change: problems
-/// solved there, decisions about it, what depends on it. Nothing known, or
-/// a tool without a file, adds nothing.
+/// solved there, decisions about it, what depends on it and the code
+/// changed with it. Nothing known, or a tool without a file, adds nothing.
 async fn file(memory: &Memory, scope: &Scope, event: &Event) -> Result<Outcome, Failure> {
     let Some(path) = event
         .tool_input
@@ -157,15 +158,35 @@ fn render_file(view: &FileView, path: &str) -> Option<String> {
     .flatten()
     .collect();
     if !view.dependents.is_empty() {
-        let names: Vec<&str> = view
+        let lines: Vec<String> = view
             .dependents
             .iter()
             .take(DEPENDENTS)
-            .map(|d| d.entity.as_str())
+            .map(dependent_line)
             .collect();
-        parts.push(format!("Depends on it: {}", names.join(", ")));
+        parts.push(format!("Depends on it:\n{}", lines.join("\n")));
+    }
+    if !view.changed_with.is_empty() {
+        let names: Vec<&str> = view
+            .changed_with
+            .iter()
+            .take(PER_LIST)
+            .map(|n| n.name.as_str())
+            .collect();
+        parts.push(format!("Changed with it: {}", names.join(", ")));
     }
     (!parts.is_empty()).then(|| format!("post-cortex memory for {path}:\n\n{}", parts.join("\n\n")))
+}
+
+/// One dependent of a file's memory, with the relation that makes it one:
+/// `- B (depends on A)`; `A required_by B` reads `B (requires A)`.
+fn dependent_line(d: &ImpactItem) -> String {
+    let how = if d.relation_type == RelationType::RequiredBy.as_str() {
+        "requires".to_string()
+    } else {
+        d.relation_type.replace('_', " ")
+    };
+    format!("- {} ({how} {})", d.entity, d.via)
 }
 
 /// One record of a file's memory.

@@ -1152,14 +1152,36 @@ export interface ImpactItem {
   depth: number;
 }
 
+/** A record at risk in the impact view, with what it is about. */
+export interface ImpactRisk {
+  /** The record. */
+  record?:
+    | RecordView
+    | undefined;
+  /**
+   * The nearest entity of the view it names: the one asked for or a
+   * dependent.
+   */
+  about: string;
+  /** Hops of `about` from the entity asked for (0: that entity). */
+  depth: number;
+}
+
 /** The impact view. */
 export interface ImpactView {
   /** The entity asked for. */
   entity: string;
   /** Who depends on it, nearest first. */
   dependents: ImpactItem[];
-  /** Problems and decisions recorded about the dependents. */
-  risks: RecordView[];
+  /**
+   * Current decisions, requirements and problems about it and its
+   * dependents, most relevant first: about the entity itself, then by the
+   * dependent's depth, then by closeness to the relations' contexts, then
+   * newest (at most the limit).
+   */
+  risks: ImpactRisk[];
+  /** All such records. */
+  totalRisks: number;
 }
 
 /** A topic of the topics view. */
@@ -1226,10 +1248,15 @@ export interface FileView {
   problems: RecordView[];
   /** Valid decisions and requirements about it. */
   decisions: RecordView[];
-  /** Entities naming it (its path, file name or stem). */
+  /** Entities named after it (its path, file name or stem). */
   entities: GraphNode[];
-  /** What depends on those entities. */
+  /** What depends on those entities, hop by hop, code first in a hop. */
   dependents: ImpactItem[];
+  /**
+   * The code the records that name it changed with it (neither its own
+   * entities nor its dependents), the most often named first.
+   */
+  changedWith: GraphNode[];
 }
 
 /** The radar view. */
@@ -1483,7 +1510,15 @@ export interface SemanticSearchRequest {
    * Fill each result's signals (its ranks in the vector, BM25 and graph
    * rankings, the fused and reranker scores).
    */
-  trace?: boolean | undefined;
+  trace?:
+    | boolean
+    | undefined;
+  /**
+   * Set by the cloud's gateway, never by a client: "plan_limit" when the
+   * organisation's plan has no reranker calls left, so the search runs as
+   * fast and answers rerank_skipped "plan_limit".
+   */
+  rerankWithheld?: string | undefined;
 }
 
 /** One search hit. */
@@ -1584,6 +1619,13 @@ export interface SemanticSearchResponse {
    * one is configured (the remote one only in workspaces that allow it).
    */
   reranked: boolean;
+  /**
+   * Why a search that asked for a reranker got none: no_local_reranker
+   * (the server has no local one; the cloud never has: use accurate),
+   * no_reranker, remote_not_allowed (a workspace searched does not allow
+   * Voyage and there is no local one). Unset: fast, or reranked.
+   */
+  rerankSkipped?: string | undefined;
 }
 
 /** Content of other sessions related to a topic. */
@@ -2175,7 +2217,7 @@ export interface DeleteWorkspaceResponse {
 
 /** Same fields as REST POST /api/projects/resolve. */
 export interface ResolveProjectRequest {
-  /** normalised git remote or local:<hash>, 1 to 512 chars */
+  /** normalised git remote or `local:<hash>`, 1 to 512 chars */
   key: string;
   /** name of a new workspace and session */
   name: string;
@@ -7736,8 +7778,111 @@ export const ImpactItem: MessageFns<ImpactItem> = {
   },
 };
 
+function createBaseImpactRisk(): ImpactRisk {
+  return { record: undefined, about: "", depth: 0 };
+}
+
+export const ImpactRisk: MessageFns<ImpactRisk> = {
+  encode(message: ImpactRisk, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.record !== undefined) {
+      RecordView.encode(message.record, writer.uint32(10).fork()).join();
+    }
+    if (message.about !== "") {
+      writer.uint32(18).string(message.about);
+    }
+    if (message.depth !== 0) {
+      writer.uint32(24).uint64(message.depth);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ImpactRisk {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseImpactRisk();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.record = RecordView.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.about = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.depth = longToNumber(reader.uint64());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): ImpactRisk {
+    return {
+      record: isSet(object.record) ? RecordView.fromJSON(object.record) : undefined,
+      about: isSet(object.about) ? globalThis.String(object.about) : "",
+      depth: isSet(object.depth) ? globalThis.Number(object.depth) : 0,
+    };
+  },
+
+  toJSON(message: ImpactRisk): unknown {
+    const obj: any = {};
+    if (message.record !== undefined) {
+      obj.record = RecordView.toJSON(message.record);
+    }
+    if (message.about !== "") {
+      obj.about = message.about;
+    }
+    if (message.depth !== 0) {
+      obj.depth = Math.round(message.depth);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ImpactRisk>, I>>(base?: I): ImpactRisk {
+    return ImpactRisk.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ImpactRisk>, I>>(object: I): ImpactRisk {
+    const message = createBaseImpactRisk();
+    message.record = (object.record !== undefined && object.record !== null)
+      ? RecordView.fromPartial(object.record)
+      : undefined;
+    message.about = object.about ?? "";
+    message.depth = object.depth ?? 0;
+    return message;
+  },
+};
+
 function createBaseImpactView(): ImpactView {
-  return { entity: "", dependents: [], risks: [] };
+  return { entity: "", dependents: [], risks: [], totalRisks: 0 };
 }
 
 export const ImpactView: MessageFns<ImpactView> = {
@@ -7749,7 +7894,10 @@ export const ImpactView: MessageFns<ImpactView> = {
       ImpactItem.encode(v!, writer.uint32(18).fork()).join();
     }
     for (const v of message.risks) {
-      RecordView.encode(v!, writer.uint32(26).fork()).join();
+      ImpactRisk.encode(v!, writer.uint32(34).fork()).join();
+    }
+    if (message.totalRisks !== 0) {
+      writer.uint32(40).uint64(message.totalRisks);
     }
     return writer;
   },
@@ -7783,12 +7931,20 @@ export const ImpactView: MessageFns<ImpactView> = {
             message.dependents.push(ImpactItem.decode(reader, reader.uint32()));
             continue;
           }
-          case 3: {
-            if (tag !== 26) {
+          case 4: {
+            if (tag !== 34) {
               break;
             }
 
-            message.risks.push(RecordView.decode(reader, reader.uint32()));
+            message.risks.push(ImpactRisk.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.totalRisks = longToNumber(reader.uint64());
             continue;
           }
         }
@@ -7809,7 +7965,12 @@ export const ImpactView: MessageFns<ImpactView> = {
       dependents: globalThis.Array.isArray(object?.dependents)
         ? object.dependents.map((e: any) => ImpactItem.fromJSON(e))
         : [],
-      risks: globalThis.Array.isArray(object?.risks) ? object.risks.map((e: any) => RecordView.fromJSON(e)) : [],
+      risks: globalThis.Array.isArray(object?.risks) ? object.risks.map((e: any) => ImpactRisk.fromJSON(e)) : [],
+      totalRisks: isSet(object.totalRisks)
+        ? globalThis.Number(object.totalRisks)
+        : isSet(object.total_risks)
+        ? globalThis.Number(object.total_risks)
+        : 0,
     };
   },
 
@@ -7822,7 +7983,10 @@ export const ImpactView: MessageFns<ImpactView> = {
       obj.dependents = message.dependents.map((e) => ImpactItem.toJSON(e));
     }
     if (message.risks?.length) {
-      obj.risks = message.risks.map((e) => RecordView.toJSON(e));
+      obj.risks = message.risks.map((e) => ImpactRisk.toJSON(e));
+    }
+    if (message.totalRisks !== 0) {
+      obj.totalRisks = Math.round(message.totalRisks);
     }
     return obj;
   },
@@ -7834,7 +7998,8 @@ export const ImpactView: MessageFns<ImpactView> = {
     const message = createBaseImpactView();
     message.entity = object.entity ?? "";
     message.dependents = object.dependents?.map((e) => ImpactItem.fromPartial(e)) || [];
-    message.risks = object.risks?.map((e) => RecordView.fromPartial(e)) || [];
+    message.risks = object.risks?.map((e) => ImpactRisk.fromPartial(e)) || [];
+    message.totalRisks = object.totalRisks ?? 0;
     return message;
   },
 };
@@ -8284,7 +8449,7 @@ export const LineageView: MessageFns<LineageView> = {
 };
 
 function createBaseFileView(): FileView {
-  return { path: "", records: [], problems: [], decisions: [], entities: [], dependents: [] };
+  return { path: "", records: [], problems: [], decisions: [], entities: [], dependents: [], changedWith: [] };
 }
 
 export const FileView: MessageFns<FileView> = {
@@ -8306,6 +8471,9 @@ export const FileView: MessageFns<FileView> = {
     }
     for (const v of message.dependents) {
       ImpactItem.encode(v!, writer.uint32(50).fork()).join();
+    }
+    for (const v of message.changedWith) {
+      GraphNode.encode(v!, writer.uint32(58).fork()).join();
     }
     return writer;
   },
@@ -8371,6 +8539,14 @@ export const FileView: MessageFns<FileView> = {
             message.dependents.push(ImpactItem.decode(reader, reader.uint32()));
             continue;
           }
+          case 7: {
+            if (tag !== 58) {
+              break;
+            }
+
+            message.changedWith.push(GraphNode.decode(reader, reader.uint32()));
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -8399,6 +8575,11 @@ export const FileView: MessageFns<FileView> = {
       dependents: globalThis.Array.isArray(object?.dependents)
         ? object.dependents.map((e: any) => ImpactItem.fromJSON(e))
         : [],
+      changedWith: globalThis.Array.isArray(object?.changedWith)
+        ? object.changedWith.map((e: any) => GraphNode.fromJSON(e))
+        : globalThis.Array.isArray(object?.changed_with)
+        ? object.changed_with.map((e: any) => GraphNode.fromJSON(e))
+        : [],
     };
   },
 
@@ -8422,6 +8603,9 @@ export const FileView: MessageFns<FileView> = {
     if (message.dependents?.length) {
       obj.dependents = message.dependents.map((e) => ImpactItem.toJSON(e));
     }
+    if (message.changedWith?.length) {
+      obj.changedWith = message.changedWith.map((e) => GraphNode.toJSON(e));
+    }
     return obj;
   },
 
@@ -8436,6 +8620,7 @@ export const FileView: MessageFns<FileView> = {
     message.decisions = object.decisions?.map((e) => RecordView.fromPartial(e)) || [];
     message.entities = object.entities?.map((e) => GraphNode.fromPartial(e)) || [];
     message.dependents = object.dependents?.map((e) => ImpactItem.fromPartial(e)) || [];
+    message.changedWith = object.changedWith?.map((e) => GraphNode.fromPartial(e)) || [];
     return message;
   },
 };
@@ -10527,6 +10712,7 @@ function createBaseSemanticSearchRequest(): SemanticSearchRequest {
     author: undefined,
     preferAuthor: undefined,
     trace: undefined,
+    rerankWithheld: undefined,
   };
 }
 
@@ -10561,6 +10747,9 @@ export const SemanticSearchRequest: MessageFns<SemanticSearchRequest> = {
     }
     if (message.trace !== undefined) {
       writer.uint32(96).bool(message.trace);
+    }
+    if (message.rerankWithheld !== undefined) {
+      writer.uint32(106).string(message.rerankWithheld);
     }
     return writer;
   },
@@ -10658,6 +10847,14 @@ export const SemanticSearchRequest: MessageFns<SemanticSearchRequest> = {
             message.trace = reader.bool();
             continue;
           }
+          case 13: {
+            if (tag !== 106) {
+              break;
+            }
+
+            message.rerankWithheld = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -10702,6 +10899,11 @@ export const SemanticSearchRequest: MessageFns<SemanticSearchRequest> = {
         ? globalThis.String(object.prefer_author)
         : undefined,
       trace: isSet(object.trace) ? globalThis.Boolean(object.trace) : undefined,
+      rerankWithheld: isSet(object.rerankWithheld)
+        ? globalThis.String(object.rerankWithheld)
+        : isSet(object.rerank_withheld)
+        ? globalThis.String(object.rerank_withheld)
+        : undefined,
     };
   },
 
@@ -10737,6 +10939,9 @@ export const SemanticSearchRequest: MessageFns<SemanticSearchRequest> = {
     if (message.trace !== undefined) {
       obj.trace = message.trace;
     }
+    if (message.rerankWithheld !== undefined) {
+      obj.rerankWithheld = message.rerankWithheld;
+    }
     return obj;
   },
 
@@ -10755,6 +10960,7 @@ export const SemanticSearchRequest: MessageFns<SemanticSearchRequest> = {
     message.author = object.author ?? undefined;
     message.preferAuthor = object.preferAuthor ?? undefined;
     message.trace = object.trace ?? undefined;
+    message.rerankWithheld = object.rerankWithheld ?? undefined;
     return message;
   },
 };
@@ -11339,7 +11545,7 @@ export const DocumentHit: MessageFns<DocumentHit> = {
 };
 
 function createBaseSemanticSearchResponse(): SemanticSearchResponse {
-  return { results: [], totalMatches: 0, reranked: false };
+  return { results: [], totalMatches: 0, reranked: false, rerankSkipped: undefined };
 }
 
 export const SemanticSearchResponse: MessageFns<SemanticSearchResponse> = {
@@ -11352,6 +11558,9 @@ export const SemanticSearchResponse: MessageFns<SemanticSearchResponse> = {
     }
     if (message.reranked !== false) {
       writer.uint32(32).bool(message.reranked);
+    }
+    if (message.rerankSkipped !== undefined) {
+      writer.uint32(42).string(message.rerankSkipped);
     }
     return writer;
   },
@@ -11393,6 +11602,14 @@ export const SemanticSearchResponse: MessageFns<SemanticSearchResponse> = {
             message.reranked = reader.bool();
             continue;
           }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.rerankSkipped = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -11416,6 +11633,11 @@ export const SemanticSearchResponse: MessageFns<SemanticSearchResponse> = {
         ? globalThis.Number(object.total_matches)
         : 0,
       reranked: isSet(object.reranked) ? globalThis.Boolean(object.reranked) : false,
+      rerankSkipped: isSet(object.rerankSkipped)
+        ? globalThis.String(object.rerankSkipped)
+        : isSet(object.rerank_skipped)
+        ? globalThis.String(object.rerank_skipped)
+        : undefined,
     };
   },
 
@@ -11430,6 +11652,9 @@ export const SemanticSearchResponse: MessageFns<SemanticSearchResponse> = {
     if (message.reranked !== false) {
       obj.reranked = message.reranked;
     }
+    if (message.rerankSkipped !== undefined) {
+      obj.rerankSkipped = message.rerankSkipped;
+    }
     return obj;
   },
 
@@ -11441,6 +11666,7 @@ export const SemanticSearchResponse: MessageFns<SemanticSearchResponse> = {
     message.results = object.results?.map((e) => SearchResult.fromPartial(e)) || [];
     message.totalMatches = object.totalMatches ?? 0;
     message.reranked = object.reranked ?? false;
+    message.rerankSkipped = object.rerankSkipped ?? undefined;
     return message;
   },
 };

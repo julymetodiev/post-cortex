@@ -36,7 +36,7 @@ pub struct RunnerConfig {
     /// each also a `[[builtins]]` entry with its grants and roots.
     pub modules: Vec<Builtin>,
     /// The names (globs) of the files and directories no module of the
-    /// daemon reaches (default: [`DENY`]).
+    /// daemon reaches (default: `DENY`).
     #[serde(default = "default_deny")]
     pub deny: Vec<String>,
 }

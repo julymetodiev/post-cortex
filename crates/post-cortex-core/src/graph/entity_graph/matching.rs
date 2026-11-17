@@ -11,7 +11,7 @@ use std::collections::HashSet;
 /// Two strategies:
 /// 1. **Name in text**: the entity's name appears in the text
 ///    (case-insensitive). Ranked first, longer names first.
-/// 2. **Token overlap**: the name split into words ([`name_tokens`]:
+/// 2. **Token overlap**: the name split into words (`name_tokens`:
 ///    camelCase, PascalCase, acronyms, snake_case, kebab-case, paths) and
 ///    matched against the text's words, a word matching when one is a
 ///    prefix (three characters or more) of the other ("stream" matches
