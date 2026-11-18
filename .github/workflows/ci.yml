@@ -100,12 +100,17 @@ jobs:
         with:
           path: ~/.cache/huggingface
           key: hf-cross-encoder-ms-marco-MiniLM-L4-v2
+      # Microsoft's NuGet package of the release, checked by its SHA-256: the
+      # GitHub repository of ONNX Runtime and its release downloads answer 404
+      # since 2026-11-17.
       - name: Install ONNX Runtime
         if: matrix.features == 'all'
         run: |
-          curl -sSL https://github.com/microsoft/onnxruntime/releases/download/v1.32.0/onnxruntime-linux-x64-1.32.0.tgz \
-            | tar -xz -C "$RUNNER_TEMP"
-          echo "ORT_DYLIB_PATH=$RUNNER_TEMP/onnxruntime-linux-x64-1.32.0/lib/libonnxruntime.so" >> "$GITHUB_ENV"
+          curl -sSfL -o "$RUNNER_TEMP/ort.nupkg" \
+            https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.32.0/microsoft.ml.onnxruntime.1.32.0.nupkg
+          echo "a9150bc2992cbbb6722070da9910e1ffa989a8bfc67bdd5bb8e745ca755641db  $RUNNER_TEMP/ort.nupkg" | sha256sum -c -
+          unzip -j -d "$RUNNER_TEMP/onnxruntime" "$RUNNER_TEMP/ort.nupkg" runtimes/linux-x64/native/libonnxruntime.so
+          echo "ORT_DYLIB_PATH=$RUNNER_TEMP/onnxruntime/libonnxruntime.so" >> "$GITHUB_ENV"
       - run: cargo build --workspace ${{ matrix.flags }}
       - run: cargo test --workspace --lib ${{ matrix.flags }}
         # Lib tests only. Integration tests under crates/post-cortex/tests/
@@ -177,7 +182,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-edit
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -247,7 +252,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install system deps
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
       - uses: actions/setup-node@v7
         with:
           node-version: 22
