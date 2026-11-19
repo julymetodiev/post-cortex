@@ -63,7 +63,8 @@ dependency without gaining anything here.
 | Gemini event | `pcx hook gemini ...` | What it adds |
 |---|---|---|
 | `SessionStart` | `session-start` | The project's session and workspace ids, the user and project cards |
-| `AfterTool` (`read_file`) | `file-context` | What the memory knows about the file just read (`BeforeTool` cannot add context) |
+| `AfterTool` (`read_file`) | `file-context` | What the memory knows about the file just read, once a session |
+| `BeforeTool` (`write_file`, `replace`) | `pre-edit` | The first edit of a file the agent was not told about is denied once with the file's memory as the reason (`BeforeTool` cannot add context); the same edit sent again goes through |
 | `BeforeAgent` | `prompt` | The rules reminder |
 | `AfterAgent` | `capture` | Capture only: the prompt and the reply |
 

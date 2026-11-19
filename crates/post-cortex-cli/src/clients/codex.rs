@@ -11,7 +11,10 @@
 //! Hooks (`pcx hook codex <event>`):
 //! - `session-start` (SessionStart, also after compaction): the cards.
 //! - `pre-edit` (PreToolUse on `apply_patch`): what the memory knows about
-//!   each file the patch touches.
+//!   each file the patch touches, once a session: the first patch of a file
+//!   it knows is denied with that memory as the reason, and the same patch
+//!   sent again goes through. Codex reads files through the shell, so there
+//!   is no read to tell it on.
 //! - `prompt` (UserPromptSubmit): the rules reminder.
 //! - with capture, `capture-prompt` (UserPromptSubmit) stores the prompt and
 //!   `stop` (Stop) the assistant's last message.
@@ -20,9 +23,9 @@ use serde_json::{Value, json};
 
 use crate::clients::Client;
 use crate::clients::common::{
-    HookEnv, McpEntry, REMOTE_TOKEN_NOTE, SetupContext, Turn, context_output, hook_arrays,
-    install_skill, json_file, merge_json, patch_paths, project_relative, report, skipped, turn_id,
-    upsert_block, upsert_toml_section,
+    FileMoment, HookEnv, McpEntry, REMOTE_TOKEN_NOTE, SetupContext, Turn, context_output,
+    file_memory_output, hook_arrays, install_skill, json_file, merge_json, patch_paths,
+    project_relative, report, skipped, turn_id, upsert_block, upsert_toml_section,
 };
 
 const MCP_HEADER: &str = "[mcp_servers.post-cortex]";
@@ -233,9 +236,13 @@ pub async fn hook(event: &str, input: Value, env: &HookEnv) -> Result<Option<Str
             .await
             .map(|text| context_output("SessionStart", text))),
         "pre-edit" => Ok(env
-            .files_context_text(&edited_paths(&input))
+            .file_memory(
+                &edited_paths(&input),
+                FileMoment::Edit,
+                input["session_id"].as_str(),
+            )
             .await
-            .map(|text| context_output("PreToolUse", text))),
+            .map(|memory| file_memory_output("PreToolUse", memory))),
         "prompt" => Ok(Some(context_output(
             "UserPromptSubmit",
             env.rules_reminder().await,

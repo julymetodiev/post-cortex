@@ -5,8 +5,11 @@
 // - before_agent_start: the ids line and the user and project cards go into
 //   the `post-cortex` section of the structured system prompt, so Pi sends a
 //   delta only when they change.
-// - tool_result of `edit` and `write`: what the memory knows about the file
-//   is appended to the result the model reads.
+// - tool_result of `read`: what the memory knows about the file is appended
+//   to the result the model reads, once a session.
+// - tool_call of `edit` and `write` of a file the session was not told
+//   about: blocked once with that memory as the reason; the same call sent
+//   again goes through.
 // - agent_end: with capture on, the run's user and assistant turns go to the
 //   project's message stream.
 //
@@ -21,6 +24,13 @@ export const AUTHOR = "pi";
 /** The system prompt section the cards go into (an XML tag name). */
 export const SECTION = "post-cortex";
 const EDIT_TOOLS = new Set(["edit", "write"]);
+const READ_TOOLS = new Set(["read"]);
+
+/** The file a read, edit or write call names (`path`). */
+const pathOf = (input: unknown): string | undefined => {
+  const path = typeof input === "object" && input !== null ? (input as Record<string, unknown>).path : undefined;
+  return typeof path === "string" && path ? path : undefined;
+};
 
 /** Turns of the run's messages worth capturing: user and assistant text, harness and post-cortex text skipped. */
 export function turnsOf(messages: readonly unknown[], sessionId: string): Turn[] {
@@ -76,14 +86,23 @@ export function register(pi: ExtensionAPI, memory: PostCortex): void {
     if (text) event.systemPromptOptions.sections[SECTION] = text;
   });
 
+  // A file's memory once per Pi session: with its read, else the first edit
+  // or write of it is blocked once with the memory as the reason the model
+  // reads, and the same call sent again goes through.
+  pi.on("tool_call", async (event, ctx) => {
+    const path = EDIT_TOOLS.has(event.toolName) ? pathOf(event.input) : undefined;
+    if (!path) return;
+    const found = await memory.fileMemory(ctx.cwd, [path], "edit", ctx.sessionManager.getSessionId());
+    if (found?.held) return { block: true, reason: found.text };
+  });
+
   pi.on("tool_result", async (event, ctx) => {
-    if (!EDIT_TOOLS.has(event.toolName) || event.isError) return;
-    const path = event.input.path;
-    if (typeof path !== "string" || !path) return;
-    const text = await memory.fileContextText(ctx.cwd, [path]);
-    if (!text) return;
+    const path = READ_TOOLS.has(event.toolName) && !event.isError ? pathOf(event.input) : undefined;
+    if (!path) return;
+    const found = await memory.fileMemory(ctx.cwd, [path], "read", ctx.sessionManager.getSessionId());
+    if (!found) return;
     return {
-      content: [...event.content, { type: "text" as const, text }],
+      content: [...event.content, { type: "text" as const, text: found.text }],
       ...(event.structuredContent !== undefined ? { structuredContent: event.structuredContent } : {}),
     };
   });

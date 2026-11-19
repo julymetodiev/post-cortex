@@ -129,6 +129,119 @@ async fn a_tool_without_a_file_or_an_unknown_file_adds_nothing() {
     }
 }
 
+/// A workspace whose session solved a problem in `src/a.rs`.
+async fn workspace_knowing_a_file(memory: &Memory) -> Uuid {
+    let ws = memory
+        .workspaces
+        .create(CreateWorkspace {
+            name: "p".into(),
+            description: String::new(),
+        })
+        .await
+        .unwrap();
+    let sid = memory.sessions.create(None, None).await.unwrap();
+    memory
+        .workspaces
+        .add_session(
+            ws.id,
+            sid,
+            post_cortex_core::workspace::SessionRole::Primary,
+        )
+        .await
+        .unwrap();
+    let mut req = crate::capabilities::records::good_request();
+    req.interaction_type = post_cortex_core::core::context_update::UpdateType::ProblemSolved;
+    req.session_id = sid;
+    req.content.title = "Scope lost its tenant".into();
+    req.content.description = "own() must keep the tenant".into();
+    req.code_reference = Some(post_cortex_core::core::context_update::CodeReference {
+        file_path: "src/a.rs".into(),
+        start_line: 0,
+        end_line: 0,
+        code_snippet: String::new(),
+        commit_hash: None,
+        branch: None,
+        change_description: String::new(),
+    });
+    memory.records.write(req).await.unwrap();
+    ws.id
+}
+
+fn on_file(name: &str, session: &str) -> Event {
+    event(json!({
+        "hook_event_name": name, "session_id": session, "tool_name": "Edit",
+        "tool_input": {"file_path": "src/a.rs"}
+    }))
+}
+
+/// The first edit of a file the memory knows is held once with its memory
+/// as the reason; the same session's next edit goes through; another
+/// session is held again.
+#[tokio::test]
+async fn a_file_s_first_edit_is_held_once_per_session() {
+    let (memory, _dir) = crate::capabilities::test_support::rocksdb_memory().await;
+    let ws = workspace_knowing_a_file(&memory).await;
+    let scope = scope(Some(ws), None);
+
+    let held = answer(&memory, &scope, &on_file("PreToolUse", "agent-1"))
+        .await
+        .unwrap();
+    assert_eq!(held.decision, "block");
+    assert!(held.reason.starts_with("post-cortex memory for src/a.rs:"));
+    assert!(held.reason.contains("Scope lost its tenant"));
+    assert!(held.reason.ends_with(HELD));
+    assert!(held.hook_specific_output.is_none());
+
+    let again = answer(&memory, &scope, &on_file("PreToolUse", "agent-1"))
+        .await
+        .unwrap();
+    assert_eq!(again, Outcome::default());
+
+    let other = answer(&memory, &scope, &on_file("PreToolUse", "agent-2"))
+        .await
+        .unwrap();
+    assert_eq!(other.decision, "block");
+}
+
+/// A read tells the file's memory, and the edit after it goes through.
+#[tokio::test]
+async fn a_read_tells_the_file_and_its_edit_goes_through() {
+    let (memory, _dir) = crate::capabilities::test_support::rocksdb_memory().await;
+    let ws = workspace_knowing_a_file(&memory).await;
+    let scope = scope(Some(ws), None);
+
+    let read = answer(&memory, &scope, &on_file("PostToolUse", "agent-1"))
+        .await
+        .unwrap();
+    assert_eq!(read.decision, "");
+    assert!(added(&read).contains("Scope lost its tenant"));
+    assert_eq!(
+        read.hook_specific_output.unwrap().hook_event_name,
+        "PostToolUse"
+    );
+
+    for name in ["PreToolUse", "PostToolUse"] {
+        let after = answer(&memory, &scope, &on_file(name, "agent-1"))
+            .await
+            .unwrap();
+        assert_eq!(after, Outcome::default(), "{name}");
+    }
+}
+
+/// A client that names no session is told on every edit, never held.
+#[tokio::test]
+async fn without_a_session_the_memory_is_added_every_time() {
+    let (memory, _dir) = crate::capabilities::test_support::rocksdb_memory().await;
+    let ws = workspace_knowing_a_file(&memory).await;
+    for _ in 0..2 {
+        let outcome = answer(&memory, &scope(Some(ws), None), &on_file("PreToolUse", ""))
+            .await
+            .unwrap();
+        assert_eq!(outcome.decision, "");
+        assert!(added(&outcome).contains("Scope lost its tenant"));
+    }
+}
+
 #[tokio::test]
 async fn turn_end_captures_the_turns_once() {
     let (memory, _dir) = crate::capabilities::test_support::rocksdb_memory().await;

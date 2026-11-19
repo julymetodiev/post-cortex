@@ -50,8 +50,10 @@ pub trait Module: Send + Sync {
   the workflow module's `model` blocks).
 - **Events** (about 12 to start): session start/end, turn start/end, pre/post model call,
   pre/post tool, pre-compact, memory write, schedule fire, channel inbound/outbound. Outcomes can
-  add context, block (fail-closed modules only) or do nothing.
-- **Policy** per module and event: deadline, fail-open or fail-closed, concurrency limit.
+  add context, block or do nothing; any module may block by its answer (owner 2026-11-18: memory,
+  fail-open, holds a file's first edit once).
+- **Policy** per module and event: deadline, fail-open or fail-closed (what the module's failure
+  or missed deadline does: the turn goes on, or is blocked), concurrency limit.
   In-process calls run under `tokio::time::timeout` with panic capture; out-of-process modules run
   as child processes speaking `pcx.module.v1`, restarted with backoff. A load starts its new
   modules at once (owner 2026-11-01), once every configuration fits its schema: a host starts

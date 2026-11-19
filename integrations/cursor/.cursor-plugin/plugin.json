@@ -1,7 +1,7 @@
 {
   "name": "post-cortex",
   "displayName": "post-cortex",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Long-term project memory for Cursor: the post-cortex MCP server (post-cortex cloud by default, or your own daemon), an always-on rule, the post-cortex-memory skill, and hooks that bring the project's memory into every chat.",
   "author": {
     "name": "Julius ML"

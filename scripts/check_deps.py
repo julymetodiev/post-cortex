@@ -8,8 +8,12 @@ REPO is this repository by default (../post-cortex-cloud for the cloud). Every
 lock file git tracks there is checked:
 
 - Cargo.lock: `cargo update --dry-run` takes nothing (no newer compatible
-  release), and `cargo upgrade --dry-run --incompatible` (cargo-edit) finds no
-  direct dependency with a newer major release;
+  release), `cargo upgrade --dry-run --incompatible` (cargo-edit) finds no
+  direct dependency with a newer major release, and no package is wired to an
+  older copy of a dependency while a newer copy in the lock fits its
+  requirement (owner 2026-11-18: `cargo update -p X` re-resolved crates that
+  take a range, such as `windows-sys >=0.60.2, <0.62`, to the lowest copy;
+  `cargo update` alone does not undo it);
 - package-lock.json: `npm outdated --all` finds no package below the release
   its range wants, and no direct one below its latest release;
 - uv.lock: `uv lock --upgrade --dry-run` updates nothing;
@@ -88,6 +92,104 @@ def cargo(lock):
         if compatible != latest and newer(latest, compatible if re.match(r"^\d", compatible) else req):
             majors[name] = (req, latest)
     return updates, majors
+
+
+def parts(text):
+    """The numbers a requirement's version names (1 to 3 of them; `*` or `x`
+    ends it)."""
+    out = []
+    for p in text.split("-")[0].split("+")[0].split("."):
+        if p in ("*", "x", "X") or not p.isdigit():
+            break
+        out.append(int(p))
+    return out
+
+
+def bounds(op, nums):
+    """(lowest allowed or None, inclusive, highest or None, inclusive) of one
+    comparator of a Cargo requirement."""
+    pad = (nums + [0, 0, 0])[:3]
+    if not nums:
+        return None, True, None, False
+    if op in ("", "^"):
+        i = next((k for k, n in enumerate(nums) if n), len(nums) - 1)
+        top = nums[: i + 1]
+        top[-1] += 1
+        return pad, True, (top + [0, 0, 0])[:3], False
+    if op == "~":
+        top = nums[:2] if len(nums) >= 2 else nums[:1]
+        top[-1] += 1
+        return pad, True, (top + [0, 0, 0])[:3], False
+    if op == "=":
+        if len(nums) == 3:
+            return pad, True, pad, True
+        top = list(nums)
+        top[-1] += 1
+        return pad, True, (top + [0, 0, 0])[:3], False
+    if op == ">=":
+        return pad, True, None, False
+    if op == "<":
+        return None, True, pad, False
+    if op == ">":
+        if len(nums) == 3:
+            return pad, False, None, False
+        low = list(nums)
+        low[-1] += 1
+        return (low + [0, 0, 0])[:3], True, None, False
+    if op == "<=":
+        if len(nums) == 3:
+            return None, True, pad, True
+        top = list(nums)
+        top[-1] += 1
+        return None, True, (top + [0, 0, 0])[:3], False
+    sys.exit(f"check-deps: a requirement operator {op!r} this check does not know")
+
+
+def fits(version, req):
+    """Whether `version` (a release, not a pre-release) meets the Cargo
+    requirement `req` (comparators joined by commas)."""
+    have = version_key(version)[0][:3]
+    for comparator in req.split(","):
+        m = re.match(r"\s*(\^|~|=|>=|<=|>|<)?\s*(\S*)\s*$", comparator)
+        if not m:
+            sys.exit(f"check-deps: a requirement this check cannot read: {req!r}")
+        low, low_in, high, high_in = bounds(m.group(1) or "", parts(m.group(2)))
+        if low is not None and (have < low or (have == low and not low_in)):
+            return False
+        if high is not None and (have > high or (have == high and not high_in)):
+            return False
+    return True
+
+
+def cargo_edges(lock):
+    """Each package of `lock` wired to an older copy of a dependency while a
+    newer copy in the lock meets every requirement it has on it."""
+    done = subprocess.run(["cargo", "metadata", "--format-version", "1", "--locked"],
+                          cwd=lock.parent, capture_output=True, text=True, check=False)
+    if done.returncode != 0:
+        sys.exit(f"check-deps: cargo metadata in {lock.parent}:\n{done.stderr[-800:]}")
+    meta = json.loads(done.stdout)
+    packages = {p["id"]: p for p in meta["packages"]}
+    copies = {}
+    for node in meta["resolve"]["nodes"]:
+        p = packages[node["id"]]
+        copies.setdefault(p["name"], set()).add(p["version"])
+    found = []
+    for node in meta["resolve"]["nodes"]:
+        p = packages[node["id"]]
+        for d in node["deps"]:
+            dep = packages[d["pkg"]]
+            name, used = dep["name"], dep["version"]
+            higher = sorted((v for v in copies[name] if "-" not in v and newer(v, used)),
+                            key=version_key, reverse=True)
+            if not higher:
+                continue
+            reqs = [x["req"] for x in p["dependencies"] if x["name"] == name and x.get("source")]
+            best = next((v for v in higher if reqs and all(fits(v, r) for r in reqs)), None)
+            if best:
+                found.append(f"{p['name']} {p['version']} uses {name} {used}, but {best} in the lock "
+                             f"fits its requirement {' and '.join(sorted(set(reqs)))}")
+    return sorted(set(found))
 
 
 def newest_npm(name, cwd):
@@ -226,6 +328,10 @@ def main():
             updates, majors = check(lock)
             for u in updates:
                 problems.append(f"{rel}: {u} (a compatible release: update the lock file)")
+            if eco == "cargo":
+                for edge in cargo_edges(lock):
+                    problems.append(f"{rel}: {edge} (an older copy: restore the lock and run "
+                                    "`cargo update` for the whole graph, never `cargo update -p`)")
             for dep, (have, latest) in sorted(majors.items()):
                 if (eco, dep) in kept:
                     used.add((eco, dep))

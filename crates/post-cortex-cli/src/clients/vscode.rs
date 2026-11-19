@@ -17,9 +17,13 @@
 //!
 //! Hooks (`pcx hook vscode <event>`):
 //! - `session-start` (SessionStart): the cards.
-//! - `pre-edit` (PreToolUse): what the memory knows about each file an edit
-//!   tool is about to change. VS Code has no tool matchers in this format,
-//!   so the hook runs for every tool and ignores the ones that edit nothing.
+//! - `post-read` (PostToolUse): what the memory knows about the file a read
+//!   tool returned, once a session, with the read.
+//! - `pre-edit` (PreToolUse): the same for a file an edit tool is about to
+//!   change and the session was not told about: the edit is denied once with
+//!   it as the reason, and the same edit sent again goes through.
+//!   VS Code has no tool matchers in this format, so both hooks run for
+//!   every tool and ignore the ones that read or edit nothing.
 //! - with capture, `capture-prompt` (UserPromptSubmit) stores the prompt and
 //!   `stop` (Stop) the assistant's last reply, read from the transcript.
 //!
@@ -32,9 +36,9 @@ use serde_json::{Value, json};
 
 use crate::clients::Client;
 use crate::clients::common::{
-    HookEnv, McpEntry, REMOTE_TOKEN_NOTE, SetupContext, Turn, context_output, install_skill,
-    json_file, merge_json_report, patch_paths, project_relative, report, transport_patch, turn_id,
-    upsert_block, write_owned,
+    FileMoment, HookEnv, McpEntry, REMOTE_TOKEN_NOTE, SetupContext, Turn, context_output,
+    file_memory_output, install_skill, json_file, merge_json_report, patch_paths, project_relative,
+    report, transport_patch, turn_id, upsert_block, write_owned,
 };
 
 const MCP: &str = ".vscode/mcp.json";
@@ -105,6 +109,7 @@ fn hooks_file(ctx: &SetupContext) -> String {
     let mut hooks = json!({
         "SessionStart": entry("session-start"),
         "PreToolUse": entry("pre-edit"),
+        "PostToolUse": entry("post-read"),
     });
     if ctx.capture {
         hooks["UserPromptSubmit"] = entry("capture-prompt");
@@ -176,10 +181,28 @@ fn is_edit_tool(tool: &str) -> bool {
     .any(|k| t.contains(k))
 }
 
+/// Whether `tool` reads a file: VS Code's `read_file` (`copilot_readFile`)
+/// and the Claude Code name `Read` its hooks may report.
+fn is_read_tool(tool: &str) -> bool {
+    let t = tool.to_ascii_lowercase();
+    t == "read" || t.contains("read_file") || t.contains("readfile")
+}
+
 /// The files a PreToolUse payload is about to edit (none for tools that do
 /// not edit), relative to the session's `cwd` when given absolute.
 fn edited_paths(input: &Value) -> Vec<String> {
-    if !input["tool_name"].as_str().is_some_and(is_edit_tool) {
+    paths_of(input, is_edit_tool)
+}
+
+/// The files a PostToolUse payload read (none for tools that do not read).
+fn read_paths(input: &Value) -> Vec<String> {
+    paths_of(input, is_read_tool)
+}
+
+/// The files a tool call names when its tool passes `kind`, relative to the
+/// session's `cwd` when given absolute, at most [`MAX_FILES`].
+fn paths_of(input: &Value, kind: fn(&str) -> bool) -> Vec<String> {
+    if !input["tool_name"].as_str().is_some_and(kind) {
         return Vec::new();
     }
     let args = &input["tool_input"];
@@ -316,9 +339,21 @@ pub async fn hook(event: &str, input: Value, env: &HookEnv) -> Result<Option<Str
             .await
             .map(|text| context_output("SessionStart", text))),
         "pre-edit" => Ok(env
-            .files_context_text(&edited_paths(&input))
+            .file_memory(
+                &edited_paths(&input),
+                FileMoment::Edit,
+                input["session_id"].as_str(),
+            )
             .await
-            .map(|text| context_output("PreToolUse", text))),
+            .map(|memory| file_memory_output("PreToolUse", memory))),
+        "post-read" => Ok(env
+            .file_memory(
+                &read_paths(&input),
+                FileMoment::Read,
+                input["session_id"].as_str(),
+            )
+            .await
+            .map(|memory| file_memory_output("PostToolUse", memory))),
         "capture-prompt" | "stop" => {
             let role = if event == "stop" { "assistant" } else { "user" };
             if let Some(turn) = captured_turn(&input, role) {

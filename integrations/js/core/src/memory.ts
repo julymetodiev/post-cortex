@@ -3,7 +3,7 @@
 // and fail-open.
 
 import { type Backend, type Env, clean, configDir, hostSettings, resolveBackend } from "./config.js";
-import { DEFAULT_TIMEOUT_MS, PcxClient, type Turn } from "./client.js";
+import { DEFAULT_TIMEOUT_MS, type FileMemory, type FileMoment, PcxClient, type Turn } from "./client.js";
 import { idsLine, joinTexts, recallText } from "./format.js";
 import {
   type Ids,
@@ -170,17 +170,32 @@ export class PostCortex {
     return hits === null ? null : recallText(hits.slice(0, RECALL_LIMIT));
   }
 
-  /** What the memory knows about `paths` (absolute, or relative to `dir`), or null. */
-  async fileContextText(dir: string, paths: readonly string[]): Promise<string | null> {
+  /**
+   * What the memory says about `paths` (absolute, or relative to `dir`) to
+   * the agent session `session` at `moment`, once per session and file:
+   * held when any file's first edit is held (the held files' texts), else
+   * the texts to add; null when nothing is to be said or on any failure.
+   */
+  async fileMemory(
+    dir: string,
+    paths: readonly string[],
+    moment: FileMoment,
+    session: string,
+  ): Promise<FileMemory | null> {
     if (!paths.length) return null;
     const project = await this.project(dir);
     const client = this.client;
     if (!project || !client) return null;
     const relative = [...new Set(paths.map((p) => projectRelative(p, project.root, dir)))];
-    const texts = await Promise.all(
-      relative.map((path) => client.fileContext(project.workspace_id, path, this.refused(dir, project))),
+    const answers = await Promise.all(
+      relative.map((path) =>
+        client.fileMemory(project.workspace_id, path, moment, session, this.refused(dir, project)),
+      ),
     );
-    return joinTexts(texts);
+    const held = answers.filter((a): a is FileMemory => a?.held === true);
+    const chosen = held.length ? held : answers.filter((a): a is FileMemory => a !== null);
+    const text = joinTexts(chosen.map((a) => a.text));
+    return text === null ? null : { held: held.length > 0, text };
   }
 
   /** Capture `turns` into the project's session when capture is on; true when stored. */

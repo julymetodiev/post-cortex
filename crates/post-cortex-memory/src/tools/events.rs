@@ -2,8 +2,9 @@
 // Licensed under the MIT License. See LICENSE at the workspace root.
 
 //! The events the memory module answers (ARCHITECTURE section 7): a session
-//! starts with the user and project cards in front of it, a file edit gets
-//! what memory knows about the file, and a finished turn is captured into
+//! starts with the user and project cards in front of it, an agent is told
+//! what memory knows about a file once, on its first read of it or else
+//! before its first edit, and a finished turn is captured into
 //! the session's message stream. Every one fails open: memory never gets in
 //! the way of the session.
 
@@ -19,8 +20,8 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::Memory;
-use crate::capabilities::Target;
-use crate::graph_views::{FileView, ImpactItem, RecordView, RenderedView, ViewRequest};
+use crate::capabilities::{Moment, Telling};
+use crate::graph_views::{FileView, ImpactItem, RecordView, ViewRequest};
 use crate::tools::Failure;
 
 /// Records per list in a file's memory.
@@ -38,6 +39,7 @@ pub fn subscriptions() -> Vec<Subscription> {
     [
         (EventKind::SessionStart, 5_000),
         (EventKind::PreTool, 3_000),
+        (EventKind::PostTool, 3_000),
         (EventKind::TurnEnd, 30_000),
     ]
     .into_iter()
@@ -58,7 +60,8 @@ pub fn subscriptions() -> Vec<Subscription> {
 pub async fn answer(memory: &Memory, scope: &Scope, event: &Event) -> Result<Outcome, Failure> {
     match event_kind(&event.hook_event_name) {
         Some(EventKind::SessionStart) => cards(memory, scope, event).await,
-        Some(EventKind::PreTool) => file(memory, scope, event).await,
+        Some(EventKind::PreTool) => file(memory, scope, event, Moment::Edit).await,
+        Some(EventKind::PostTool) => file(memory, scope, event, Moment::Read).await,
         Some(EventKind::TurnEnd) => capture(memory, scope, event).await,
         _ => Err(Failure::invalid(format!(
             "the memory module does not answer {}",
@@ -113,10 +116,19 @@ fn render_cards(user: Option<&Card>, project: Option<&Card>, workspace_id: Uuid)
     format!("## post-cortex cards\n\n{}", parts.join("\n\n"))
 }
 
-/// What memory knows about the file a tool is about to change: problems
-/// solved there, decisions about it, what depends on it and the code
-/// changed with it. Nothing known, or a tool without a file, adds nothing.
-async fn file(memory: &Memory, scope: &Scope, event: &Event) -> Result<Outcome, Failure> {
+/// What memory knows about the file a tool read (PostToolUse) or is about
+/// to change (PreToolUse): problems solved there, decisions about it, what
+/// depends on it and the code changed with it, told once per agent session
+/// (the event's `session_id`) and file. A read adds it to what the agent
+/// reads; an edit of a file not told yet is blocked once with it as the
+/// reason, so the agent reads it before anything is written. Nothing known,
+/// a file told already, or a tool without a file adds nothing.
+async fn file(
+    memory: &Memory,
+    scope: &Scope,
+    event: &Event,
+    moment: Moment,
+) -> Result<Outcome, Failure> {
     let Some(path) = event
         .tool_input
         .clone()
@@ -131,16 +143,31 @@ async fn file(memory: &Memory, scope: &Scope, event: &Event) -> Result<Outcome, 
         depth: FILE_DEPTH,
         limit: PER_LIST,
     };
-    let target = Target::of(None, Some(workspace_id)).map_err(Failure::from)?;
-    let view = match memory.views.view(target, request).await? {
-        RenderedView::File(view) => view,
-        _ => return Err(Failure::internal("the file view rendered another view")),
-    };
-    Ok(match render_file(&view, &path) {
-        Some(text) => context(event, text),
-        None => Outcome::default(),
+    let telling = memory
+        .telling
+        .tell(workspace_id, &event.session_id, request, moment)
+        .await?;
+    Ok(match telling {
+        Telling::Nothing => Outcome::default(),
+        Telling::Add(view) => {
+            render_file(&view, &path).map_or_else(Outcome::default, |text| context(event, text))
+        }
+        Telling::Hold(view) => {
+            render_file(&view, &path).map_or_else(Outcome::default, |text| Outcome {
+                decision: BLOCK.to_string(),
+                reason: format!("{text}\n\n{HELD}"),
+                hook_specific_output: None,
+            })
+        }
     })
 }
+
+/// The decision that blocks a tool call.
+const BLOCK: &str = "block";
+
+/// What a held edit says after the file's memory.
+const HELD: &str = "This is said once a session for this file, before its first edit: \
+     check your change against it, then send the edit again (or a better one) and it goes through.";
 
 /// A file's memory as the agent reads it; none when nothing is known.
 fn render_file(view: &FileView, path: &str) -> Option<String> {

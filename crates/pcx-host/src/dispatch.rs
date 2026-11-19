@@ -36,8 +36,8 @@ pub struct Failure {
 /// The merged answer of every subscribed module.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Dispatched {
-    /// The merged outcome: blocked if any fail-closed module blocked or
-    /// failed; reasons and added context joined in load order.
+    /// The merged outcome: blocked if any module blocked or a fail-closed
+    /// one failed; reasons and added context joined in load order.
     pub outcome: Outcome,
     /// The modules that failed.
     pub failures: Vec<Failure>,
@@ -98,8 +98,9 @@ fn fail_closed(subscription: &Subscription) -> bool {
     FailurePolicy::try_from(subscription.policy) == Ok(FailurePolicy::FailClosed)
 }
 
-/// Merge the answers, in load order. Only a fail-closed module may block;
-/// a fail-open one's block is dropped and logged.
+/// Merge the answers, in load order. Any module may block by its answer;
+/// the failure policy decides only what a failure does (owner 2026-11-18:
+/// memory, fail-open, holds a file's first edit once).
 fn merge(
     hook_event_name: &str,
     answers: Vec<(&str, bool, Result<Outcome, ModuleError>)>,
@@ -112,12 +113,8 @@ fn merge(
         match answer {
             Ok(outcome) => {
                 if outcome.decision == BLOCK {
-                    if closed {
-                        blocked = true;
-                        reasons.push(outcome.reason);
-                    } else {
-                        tracing::warn!(module, "a fail-open module may not block; ignored");
-                    }
+                    blocked = true;
+                    reasons.push(outcome.reason);
                 }
                 if let Some(added) = outcome.hook_specific_output
                     && !added.additional_context.is_empty()

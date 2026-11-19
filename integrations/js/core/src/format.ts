@@ -1,6 +1,6 @@
 // Text the plugins put in front of the agent beside what the memory module
 // words itself (the cards and a file's memory, `PcxClient.cards` and
-// `PcxClient.fileContext`, the same for every client): the ids line, as the
+// `PcxClient.fileMemory`, the same for every client): the ids line, as the
 // Claude Code plugin prints it before the cards, the recall section and the
 // `apply_patch` path parser.
 

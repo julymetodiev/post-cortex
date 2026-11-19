@@ -48,7 +48,7 @@ The plugin's hooks enforce the memory rules:
 | **Banner** | `UserPromptSubmit` | Injects the session and workspace ids and the rules before every prompt |
 | **Cards** | `SessionStart` | Prints the user card and the project card |
 | **Compact Reinject** | `SessionStart` (compact) | Re-injects the PCX context after compaction |
-| **File memory** | `PreToolUse` (edits) | What memory knows of a file before it is edited |
+| **File memory** | `PostToolUse` (reads), `PreToolUse` (edits) | What memory knows of a file, once a session: with its first read, else its first edit is held once with it as the reason and goes through when sent again |
 | **Record reminder** | `PostToolUse` (edits) | Past 8 files edited and not recorded, each new one reminds to record them |
 | **Stop Check** | `Stop` | Blocks a turn that edited a file no later record names, or ran a command or was opened by a task ending with nothing recorded after |
 

@@ -207,7 +207,8 @@ enum FailurePolicy {
   FAILURE_POLICY_UNSPECIFIED = 0;
   // The turn goes on without the module's outcome.
   FAILURE_POLICY_FAIL_OPEN = 1;
-  // The turn is blocked (only modules that may block).
+  // The turn is blocked. The policy is about failures only: any module may
+  // block by its answer.
   FAILURE_POLICY_FAIL_CLOSED = 2;
 }
 
@@ -702,7 +703,8 @@ message Event {
 // What a module wants done after an event, in the JSON form of a Claude
 // Code hook answer.
 message Outcome {
-  // `block` to block (fail-closed modules only); empty: go on.
+  // `block` to block (any module; for PRE_TOOL the tool call is refused
+  // and the reason goes to the agent, which may send it again); empty: go on.
   string decision = 1;
   // Why it blocks, for the agent.
   string reason = 2;

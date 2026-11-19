@@ -4692,7 +4692,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-agent"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "parking_lot 0.13.0",
@@ -4709,7 +4709,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-approval"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "pbjson-types",
  "post-cortex-proto",
@@ -4719,7 +4719,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-bindings-tests"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "nix 0.32.0",
@@ -4741,7 +4741,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-board"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "parking_lot 0.13.0",
@@ -4764,7 +4764,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-chief"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4786,7 +4786,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-context"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "parking_lot 0.13.0",
@@ -4801,7 +4801,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-discord"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -4826,7 +4826,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-documents"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4842,7 +4842,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-dynamic"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "parking_lot 0.13.0",
@@ -4869,7 +4869,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-expr"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64 0.23.1",
  "cel-core",
@@ -4886,7 +4886,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-greet"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "pcx-module-api",
@@ -4900,7 +4900,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-host"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -4930,7 +4930,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-http"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -4957,7 +4957,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-kube"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "parking_lot 0.13.0",
  "pcx-module-api",
@@ -4967,7 +4967,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-mail"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4991,7 +4991,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-models"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "parking_lot 0.13.0",
@@ -5009,7 +5009,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-module-api"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "parking_lot 0.13.0",
@@ -5031,7 +5031,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-module-core"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -5057,7 +5057,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-module-launcher"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "hyper-util",
@@ -5083,7 +5083,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-module-node"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "napi",
  "napi-build",
@@ -5093,7 +5093,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-module-py"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "pcx-module-core",
  "pyo3",
@@ -5101,14 +5101,14 @@ dependencies = [
 
 [[package]]
 name = "pcx-nomad"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "pcx-kube",
 ]
 
 [[package]]
 name = "pcx-observe"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -5133,7 +5133,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-openai-compat"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "parking_lot 0.13.0",
@@ -5145,7 +5145,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-ops"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5167,7 +5167,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-provider-anthropic"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "parking_lot 0.13.0",
@@ -5180,7 +5180,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-provider-openai"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "pcx-module-api",
  "pcx-openai-compat",
@@ -5189,7 +5189,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-provider-openrouter"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "pcx-module-api",
  "pcx-openai-compat",
@@ -5199,7 +5199,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-provider-zai"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "pcx-module-api",
  "pcx-openai-compat",
@@ -5210,7 +5210,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-sandbox"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "cap-std",
@@ -5231,7 +5231,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-scheduler"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5253,7 +5253,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-skills"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "parking_lot 0.13.0",
@@ -5274,7 +5274,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-team"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "futures",
@@ -5296,7 +5296,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-telegram"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -5316,7 +5316,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-tools-fs"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "globset",
@@ -5338,7 +5338,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-tools-git"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "globset",
@@ -5359,7 +5359,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-tools-shell"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "parking_lot 0.13.0",
@@ -5379,7 +5379,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-tunnel"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "axum",
  "bytes",
@@ -5403,7 +5403,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-webhooks"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "parking_lot 0.13.0",
@@ -5420,7 +5420,7 @@ dependencies = [
 
 [[package]]
 name = "pcx-workflow"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5676,7 +5676,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5702,7 +5702,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-blobs"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5717,7 +5717,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-cli"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "axum",
  "clap",
@@ -5744,7 +5744,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-core"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -5762,7 +5762,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-daemon"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -5848,7 +5848,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-embeddings"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -5877,7 +5877,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-memory"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -5920,7 +5920,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-ports"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5934,7 +5934,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-proto"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "pbjson",
  "pbjson-build",
@@ -5950,7 +5950,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-storage"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -5982,7 +5982,7 @@ dependencies = [
 
 [[package]]
 name = "post-cortex-transport"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -6659,9 +6659,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.13.1"
+version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d"
+checksum = "9807af0e638c12e753aa1b4e601791bf2a8f71274023c8bbeec12fc149950857"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -6671,9 +6671,9 @@ dependencies = [
 
 [[package]]
 name = "regex-automata"
-version = "0.4.18"
+version = "0.4.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
+checksum = "41d60ef07df457506a0a1a2073112eb4aae5733dbd2813c3da77d1b0fd441158"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -6688,9 +6688,9 @@ checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
 
 [[package]]
 name = "regex-syntax"
-version = "0.8.11"
+version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+checksum = "d902046e6a28a1e4c3cab97258a0ce11e994903f01c2d97a9447a0b3df85f4f6"
 
 [[package]]
 name = "rend"
@@ -8566,9 +8566,9 @@ dependencies = [
 
 [[package]]
 name = "surrealmx"
-version = "1.3.0"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e855d179c1f516651bbf2d35e59dba24c36b8910a8d0c2f7541b71252e9ceb23"
+checksum = "14822388695c0e5d04ea595ec23d6197a9a5e96389f82d37b25210f44d8b6c82"
 dependencies = [
  "artmap",
  "bincode",
@@ -10588,9 +10588,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.6.1"
+version = "9.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "953a376f4930ed5af88e1e65948385f76866b45e7f75b21ac275327d0eeb9b46"
+checksum = "08687262e7c0f1284b259686f322805a8adaa8ef4d7210e76448950b3f083bf7"
 dependencies = [
  "constant_time_eq 0.6.1",
  "crc32fast",

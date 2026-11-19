@@ -17,10 +17,18 @@ test("resolves once per directory, caches in projects.json, then serves cards an
     const pc = new PostCortex("opencode", {}, { env: t.env, origin: noGit });
     const cards = await pc.cardsText(t.projectDir);
     assert.equal(cards, `[PCX] Session: ${TEST_SESSION} | Workspace: ${TEST_WORKSPACE}\n\n${DEFAULT_CARDS}`);
-    const file = await pc.fileContextText(t.projectDir, [join(t.projectDir, "src", "a.rs"), "src/a.rs"]);
-    assert.ok(file?.startsWith("post-cortex memory for src/a.rs:"), file ?? "null");
+    const file = await pc.fileMemory(t.projectDir, [join(t.projectDir, "src", "a.rs"), "src/a.rs"], "read", "agent-1");
+    assert.equal(file?.held, false);
+    assert.ok(file?.text.startsWith("post-cortex memory for src/a.rs:"), file?.text ?? "null");
     assert.equal(daemon.requests.filter((r) => r.path === "/api/projects/resolve").length, 1);
-    assert.equal(daemon.events("PreToolUse").length, 1);
+    assert.equal(daemon.events("PostToolUse").length, 1);
+    // read already: its edit goes through
+    assert.equal(await pc.fileMemory(t.projectDir, ["src/a.rs"], "edit", "agent-1"), null);
+    // another file, never read: the edit is held, with the held files' text only
+    const held = await pc.fileMemory(t.projectDir, ["src/b.rs", "src/a.rs"], "edit", "agent-1");
+    assert.equal(held?.held, true);
+    assert.ok(held?.text.startsWith("post-cortex memory for src/b.rs:"), held?.text ?? "null");
+    assert.ok(!held?.text.includes("src/a.rs"), held?.text);
     const cache = JSON.parse(readFileSync(join(t.configDir, "projects.json"), "utf8"));
     const [entry] = Object.values(cache) as Array<Record<string, string>>;
     assert.deepEqual(entry, { workspace_id: TEST_WORKSPACE, session_id: TEST_SESSION, url: daemon.url });
@@ -137,7 +145,7 @@ test("unreachable backend: null, and the failure is retried after retryMs", asyn
   try {
     const pc = new PostCortex("pi", {}, { env: t.env, origin: noGit, retryMs: 10 });
     assert.equal(await pc.cardsText(t.projectDir), null);
-    assert.equal(await pc.fileContextText(t.projectDir, ["a"]), null);
+    assert.equal(await pc.fileMemory(t.projectDir, ["a"], "edit", "s"), null);
     await new Promise((r) => setTimeout(r, 30));
     assert.equal(await pc.project(t.projectDir), null);
   } finally {

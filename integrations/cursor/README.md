@@ -57,7 +57,8 @@ log, and every hook exits silently.
 | Cursor event | `pcx hook cursor ...` | What it adds |
 |---|---|---|
 | `sessionStart` | `sessionStart` | The project's session and workspace ids, the user and project cards |
-| `postToolUse` (`Read`) | `postToolUse` | What the memory knows about the file just read, before the edit (`preToolUse` cannot add context) |
+| `postToolUse` (`Read`) | `postToolUse` | What the memory knows about the file just read, once a conversation, before the edit |
+| `preToolUse` (`Write`, `Edit`, `MultiEdit`, `StrReplace`) | `preToolUse` | The first edit of a file the agent was not told about is denied once with the file's memory as the message to the agent (`preToolUse` cannot add context); the same edit sent again goes through |
 | `beforeSubmitPrompt` | `beforeSubmitPrompt` | Capture only: the prompt |
 | `afterAgentResponse` | `afterAgentResponse` | Capture only: the reply |
 

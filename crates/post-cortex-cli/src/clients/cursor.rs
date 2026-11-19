@@ -8,9 +8,12 @@
 //! - `.cursor/rules/post-cortex.mdc`: the shared instructions as an
 //!   always-applied rule. Cursor also reads AGENTS.md; it is not written so
 //!   the rules are not in front of the agent twice.
-//! - `.cursor/hooks.json`: `sessionStart` (the cards) and `postToolUse` on
-//!   `Read` (what the memory knows about the file just read, so it is in
-//!   context before the edit; `preToolUse` cannot add context). With
+//! - `.cursor/hooks.json`: `sessionStart` (the cards), `postToolUse` on
+//!   `Read` (what the memory knows about the file just read, once a
+//!   conversation, so it is in context before the edit) and `preToolUse` on
+//!   the edit tools (`preToolUse` cannot add context: the first edit of a
+//!   file the conversation was not told about is denied once with the
+//!   memory as `agent_message`, and the same edit sent again goes through). With
 //!   capture, `beforeSubmitPrompt` (the prompt) and `afterAgentResponse`
 //!   (the reply). The user's own hooks for the same events are kept.
 //! - `.agents/skills/post-cortex-memory`: the skill, unless a copy is
@@ -20,9 +23,9 @@ use serde_json::{Value, json};
 
 use crate::clients::Client;
 use crate::clients::common::{
-    Change, HookEnv, McpEntry, REMOTE_TOKEN_NOTE, SetupContext, Turn, hook_arrays, install_skill,
-    json_file, merge_json_report, project_relative, report, transport_patch, turn_id, urlencode,
-    write_owned,
+    Change, FileMemory, FileMoment, HookEnv, McpEntry, REMOTE_TOKEN_NOTE, SetupContext, Turn,
+    hook_arrays, install_skill, json_file, merge_json_report, project_relative, report,
+    transport_patch, turn_id, urlencode, write_owned,
 };
 
 const MCP_JSON: &str = ".cursor/mcp.json";
@@ -34,9 +37,10 @@ const SKILL_DIRS: [&str; 3] = [".agents/skills", ".cursor/skills", ".claude/skil
 
 /// The hook events post-cortex manages, with the tool matcher (if any) and
 /// whether the event is a capture hook.
-const HOOK_EVENTS: [(&str, Option<&str>, bool); 4] = [
+const HOOK_EVENTS: [(&str, Option<&str>, bool); 5] = [
     ("sessionStart", None, false),
     ("postToolUse", Some("Read"), false),
+    ("preToolUse", Some(EDIT_TOOLS), false),
     ("beforeSubmitPrompt", None, true),
     ("afterAgentResponse", None, true),
 ];
@@ -117,7 +121,34 @@ pub async fn hook(event: &str, input: Value, env: &HookEnv) -> Result<Option<Str
             let Some(path) = read_path(&input) else {
                 return Ok(None);
             };
-            Ok(env.file_context_text(&path).await.map(additional_context))
+            Ok(env
+                .file_memory(&[path], FileMoment::Read, conversation(&input))
+                .await
+                .map(|memory| match memory {
+                    FileMemory::Added(text) | FileMemory::Held(text) => additional_context(text),
+                }))
+        }
+        "preToolUse" => {
+            let Some(path) = edit_path(&input) else {
+                return Ok(None);
+            };
+            // preToolUse cannot add context: only a held edit says anything.
+            Ok(
+                match env
+                    .file_memory(&[path], FileMoment::Edit, conversation(&input))
+                    .await
+                {
+                    Some(FileMemory::Held(reason)) => Some(
+                        json!({
+                            "permission": "deny",
+                            "agent_message": reason,
+                            "user_message": "post-cortex: the agent reads this file's memory before its first edit; it sends the edit again.",
+                        })
+                        .to_string(),
+                    ),
+                    _ => None,
+                },
+            )
         }
         "beforeSubmitPrompt" => {
             if let Some(turn) = prompt_turn(&input)
@@ -221,13 +252,31 @@ fn additional_context(text: String) -> String {
     json!({ "additional_context": text }).to_string()
 }
 
+/// The agent's conversation, the session a file's memory is told once in.
+fn conversation(input: &Value) -> Option<&str> {
+    input["conversation_id"].as_str().filter(|c| !c.is_empty())
+}
+
+/// The tools whose `preToolUse` gets the file's memory.
+const EDIT_TOOLS: &str = "Write|Edit|MultiEdit|StrReplace";
+
 /// The file a `postToolUse` payload read, relative to the workspace root
 /// when absolute; `None` for other tools.
 fn read_path(input: &Value) -> Option<String> {
-    if !input["tool_name"]
-        .as_str()
-        .is_some_and(|t| t.eq_ignore_ascii_case("read"))
-    {
+    tool_path(input, &["Read"])
+}
+
+/// The file a `preToolUse` payload is about to change; `None` for tools
+/// that change no file.
+fn edit_path(input: &Value) -> Option<String> {
+    tool_path(input, &EDIT_TOOLS.split('|').collect::<Vec<_>>())
+}
+
+/// The file the call of one of `tools` names, relative to the workspace
+/// root when absolute.
+fn tool_path(input: &Value, tools: &[&str]) -> Option<String> {
+    let tool = input["tool_name"].as_str()?;
+    if !tools.iter().any(|t| t.eq_ignore_ascii_case(tool)) {
         return None;
     }
     let args = &input["tool_input"];

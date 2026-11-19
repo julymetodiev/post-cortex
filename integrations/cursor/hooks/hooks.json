@@ -14,6 +14,13 @@
         "timeout": 10
       }
     ],
+    "preToolUse": [
+      {
+        "command": "sh \"${CURSOR_PLUGIN_ROOT}/scripts/pcx.sh\" hook cursor preToolUse",
+        "matcher": "Write|Edit|MultiEdit|StrReplace",
+        "timeout": 10
+      }
+    ],
     "beforeSubmitPrompt": [
       {
         "command": "sh \"${CURSOR_PLUGIN_ROOT}/scripts/pcx.sh\" hook cursor beforeSubmitPrompt",

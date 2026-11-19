@@ -2,6 +2,8 @@
 // MIT License
 
 use super::*;
+
+mod file_memory;
 use serde_json::{Value, json};
 
 fn ctx(dir: &Path) -> SetupContext {

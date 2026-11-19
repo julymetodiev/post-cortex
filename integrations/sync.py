@@ -178,8 +178,8 @@ def hooks_json():
                 hook["command"] = plugin_command(hook["command"])
     body = {
         "description": "post-cortex memory hooks: rules on every prompt, cards on "
-        "session start, context re-injected after compaction, file memory before "
-        "edits, a Stop check for unlogged changes, and conversation capture when "
+        "session start, context re-injected after compaction, a file's memory "
+        "once a session (on its first read, else holding its first edit once), a Stop check for unlogged changes, and conversation capture when "
         "it is on in ~/.post-cortex/config.json",
         "hooks": hooks,
     }

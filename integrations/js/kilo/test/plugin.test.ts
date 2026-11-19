@@ -41,7 +41,7 @@ test("edited files: edit, write, apply_patch", () => {
   assert.deepEqual(editedFiles("edit", null), []);
 });
 
-test("cards go into the system prompt once per session; file memory is appended after edits", async () => {
+test("cards go into the system prompt once per session; a file's memory once, with its read or before its first edit", async () => {
   const daemon = await startFakeDaemon();
   const t = tempEnv(daemon.url);
   try {
@@ -53,12 +53,28 @@ test("cards go into the system prompt once per session; file memory is appended 
     assert.ok(system[0]?.startsWith(`[PCX] Session: ${TEST_SESSION}`));
     assert.equal(daemon.events("SessionStart").length, 1);
 
-    const call = { tool: "edit", sessionID: "s1", callID: "c1" };
-    await h["tool.execute.before"]?.(call, { args: { filePath: join(t.projectDir, "src", "a.rs") } });
-    const output = { title: "", output: "Edit applied.", metadata: {} };
-    await h["tool.execute.after"]?.({ ...call, args: {} }, output);
-    assert.match(output.output, /^Edit applied\.\n\npost-cortex memory for src\/a\.rs:\n\nProblems solved here before:/);
+    // a read: the file's memory comes with what it returns
+    const read = { tool: "read", sessionID: "s1", callID: "c1" };
+    await h["tool.execute.before"]?.(read, { args: { filePath: join(t.projectDir, "src", "a.rs") } });
+    const output = { title: "", output: "fn a() {}", metadata: {} };
+    await h["tool.execute.after"]?.({ ...read, args: {} }, output);
+    assert.match(output.output, /^fn a\(\) \{\}\n\npost-cortex memory for src\/a\.rs:\n\nProblems solved here before:/);
     assert.ok(daemon.requests.every((r) => r.headers["x-pcx-author"] === "kilo"));
+
+    // read already: its edit goes through, nothing added
+    const edit = { tool: "edit", sessionID: "s1", callID: "c3" };
+    await h["tool.execute.before"]?.(edit, { args: { filePath: "src/a.rs" } });
+    const edited = { title: "", output: "Edit applied.", metadata: {} };
+    await h["tool.execute.after"]?.({ ...edit, args: {} }, edited);
+    assert.equal(edited.output, "Edit applied.");
+
+    // never read: its first write is refused with its memory, the same call again goes through
+    const write = { tool: "write", sessionID: "s1", callID: "c4" };
+    const args = { args: { filePath: "src/b.rs", content: "" } };
+    await assert.rejects(async () => {
+      await h["tool.execute.before"]?.(write, args);
+    }, /post-cortex memory for src\/b\.rs:/);
+    await h["tool.execute.before"]?.(write, args);
 
     // other tools are left alone
     const bash = { title: "", output: "ok", metadata: {} };

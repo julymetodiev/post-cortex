@@ -364,10 +364,12 @@ curl -s -X POST localhost:3737/api/events -H 'Content-Type: application/json' -d
 # {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"## post-cortex cards ..."}}
 ```
 
-The memory module answers SessionStart (the cards), PreToolUse (the file's
-memory) and Stop (it appends `event.payload.messages`, the turns a hook
-captured). Every module that fails or runs late is skipped (fail-open) unless
-it is fail-closed, which blocks the turn.
+The memory module answers SessionStart (the cards), PostToolUse and
+PreToolUse (a file's memory, once per agent session: see below) and Stop (it
+appends `event.payload.messages`, the turns a hook captured). Any module may
+block by its answer (`decision: "block"` with a `reason`). Every module that
+fails or runs late is skipped (fail-open) unless it is fail-closed, whose
+failure blocks the turn.
 
 The daemon also runs your own hook scripts as modules, with Claude Code's
 contract: the event as JSON on stdin (and `PCX_SESSION_ID`,
@@ -392,8 +394,9 @@ A script or module sees the conversation (the prompt, the tool's input and
 result, the answer, the transcript) only with `read_conversation`; without
 it, its events say what happened and to which tool, nothing more.
 
-`policy` is `fail-open` (the default) or `fail-closed`; only a fail-closed
-script may block. `deadline_ms` 0 takes the host's default (5 s).
+`policy` is `fail-open` (the default) or `fail-closed`: what the script's
+failure or missed deadline does (the turn goes on, or is blocked); any script
+blocks by exiting 2. `deadline_ms` 0 takes the host's default (5 s).
 
 A long-lived module in any language runs in its own process: the daemon
 starts it with `PCX_MODULE_SOCKET` set, and it serves `pcx.module.v1` (gRPC)
@@ -855,13 +858,30 @@ a later one asserts `conflicts_with` between entities it related, or when it is
 forgotten (`manage_entity` `forget`). Ended records stay in the history and search ranks
 them lower.
 
-The Claude Code plugin's PreToolUse hook, `pcx-file-context.py`, gives
-the agent what the memory says about a file before it edits it: past problems, decisions,
-what depends on it (each with the relation that makes it a dependent) and the code it was
-changed with. It sends the `PreToolUse` event to `POST /api/events`, and the memory module
-answers with that text from the `file` view; every other client (`pcx hook`, the JS
-plugins) asks the same way, so all of them get the same words. The view itself is served
-over REST, with the same auth and allowed hosts as the rest of `/api/*`:
+The agent is told what the memory says about a file before anything it writes
+there lands: past problems, decisions, what depends on it (each with the relation that
+makes it a dependent) and the code it was changed with. It is told once per agent
+session (the event's `session_id`, the client's own) and file, as early as it can be
+heard (owner 2026-11-18):
+
+- on its first read of the file (`PostToolUse` of a read tool), with what the read
+  returned;
+- else on its first edit (`PreToolUse` of an edit tool): the memory module answers
+  `decision: "block"` with the file's memory as the `reason`, the client refuses that one
+  call with it as the message the agent reads, and the agent sends the edit again (or a
+  better one), which goes through.
+
+A file the memory knows nothing about is never held. A client that names no session is
+told on every edit, as context. Which files a session was told is kept by the memory
+instance (a restart tells each file once more; sessions idle for 12 hours are
+forgotten). The Claude Code plugin's `pcx-file-context.py` sends these events to `POST
+/api/events`; every other client (`pcx hook` for Codex, VS Code, Cursor, Gemini CLI and
+Cline, the JS plugins) asks the same way and maps the answer to its own host's format,
+so all of them get the same words. Cline cannot refuse one call (its `cancel` ends the
+task), so there a file the agent did not read gets its memory with the next request,
+after the edit; Codex reads files through its shell, so it is told on the edit only. The
+view itself is served over REST, with the same auth and allowed hosts as the rest of
+`/api/*`:
 
 ```bash
 curl "http://127.0.0.1:3737/api/file?workspace_id=<uuid>&path=src/lib.rs"

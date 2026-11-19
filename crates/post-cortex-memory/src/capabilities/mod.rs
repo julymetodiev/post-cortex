@@ -36,6 +36,7 @@ pub(crate) mod records;
 mod scope;
 mod search;
 mod sessions;
+mod telling;
 mod transfer;
 mod views;
 mod workspaces;
@@ -58,6 +59,7 @@ pub use records::{ListRecords, RecordError, RecordPage, Records};
 pub use scope::{ScopeError, Target};
 pub use search::{Found, Search, SearchError, SearchScope};
 pub use sessions::{SessionError, Sessions};
+pub use telling::{FileTelling, Moment, Telling};
 pub use transfer::{
     ArchiveFile, ArchivePorts, ArchiveSpool, CardHead, CardHeads, ConflictResolution, ExportPlan,
     ImportConflict, ImportPreview, Transfer, TransferError,
@@ -127,6 +129,8 @@ pub struct Memory {
     pub assembly: Assembly,
     /// Graph views, summaries, radar dismissals.
     pub views: Views,
+    /// A file's memory told to an agent once per session.
+    pub telling: FileTelling,
     /// The views the app shows (`pcx.views.v1`).
     pub detail_views: DetailViews,
     /// Entity delete and merge.
@@ -251,6 +255,7 @@ impl Memory {
                 search.clone(),
             ),
             search,
+            telling: FileTelling::new(views.clone()),
             views,
             entities: Entities::new(Arc::clone(&rt)),
             projects: Projects::new(Arc::clone(&rt), workspaces.clone(), sessions.clone()),

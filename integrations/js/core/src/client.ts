@@ -65,6 +65,26 @@ export interface SearchHit {
   session_id: string;
 }
 
+/** What the agent is doing with a file whose memory is asked for. */
+export type FileMoment = "read" | "edit";
+
+/**
+ * A file's memory as the memory module answered: text added to what the
+ * agent reads, or (`held`) the edit refused once with the text as the reason
+ * the agent reads; the same edit sent again goes through.
+ */
+export interface FileMemory {
+  held: boolean;
+  text: string;
+}
+
+/** The context an answer of POST /api/events adds for the agent, or null. */
+const addedContext = (answer: Record<string, unknown> | null): string | null => {
+  const output = answer?.hookSpecificOutput;
+  const text = typeof output === "object" && output !== null ? (output as Record<string, unknown>).additionalContext : undefined;
+  return typeof text === "string" && text ? text : null;
+};
+
 const isHit = (value: unknown): value is SearchHit => {
   if (typeof value !== "object" || value === null) return false;
   const hit = value as Record<string, unknown>;
@@ -155,11 +175,15 @@ export class PcxClient {
   }
 
   /**
-   * The text the memory module adds for `event` in the workspace (POST
+   * The modules' merged answer to `event` in the workspace (POST
    * /api/events: the hook event, as Claude Code's JSON, with its scope);
-   * null when it adds nothing or on any failure.
+   * null on any failure.
    */
-  private async event(workspaceId: string, event: Record<string, unknown>, refused?: Refused): Promise<string | null> {
+  private async event(
+    workspaceId: string,
+    event: Record<string, unknown>,
+    refused?: Refused,
+  ): Promise<Record<string, unknown> | null> {
     const answer = await this.request(
       "POST",
       "/api/events",
@@ -167,19 +191,43 @@ export class PcxClient {
       false,
       refused,
     );
-    const output = typeof answer === "object" && answer !== null ? (answer as Record<string, unknown>).hookSpecificOutput : undefined;
-    const text = typeof output === "object" && output !== null ? (output as Record<string, unknown>).additionalContext : undefined;
-    return typeof text === "string" && text ? text : null;
+    return typeof answer === "object" && answer !== null ? (answer as Record<string, unknown>) : null;
   }
 
   /** The user card and the project card (or how to write the project card), as a session start gets them; null on any failure. */
-  cards(workspaceId: string, refused?: Refused): Promise<string | null> {
-    return this.event(workspaceId, { hook_event_name: "SessionStart" }, refused);
+  async cards(workspaceId: string, refused?: Refused): Promise<string | null> {
+    return addedContext(await this.event(workspaceId, { hook_event_name: "SessionStart" }, refused));
   }
 
-  /** What the memory knows about `path` (project-relative) before it is edited; null when nothing is known or on any failure. */
-  fileContext(workspaceId: string, path: string, refused?: Refused): Promise<string | null> {
-    return this.event(workspaceId, { hook_event_name: "PreToolUse", tool_input: { file_path: path } }, refused);
+  /**
+   * What the memory says about `path` (project-relative) to the agent
+   * session `session` (the client's own id; empty: a client that names none,
+   * told on every edit) at `moment`: once per session and file, with a read,
+   * or holding the first edit of a file it was not told about (docs/memory.md,
+   * a file's memory). Null when nothing is to be said or on any failure.
+   */
+  async fileMemory(
+    workspaceId: string,
+    path: string,
+    moment: FileMoment,
+    session: string,
+    refused?: Refused,
+  ): Promise<FileMemory | null> {
+    const answer = await this.event(
+      workspaceId,
+      {
+        hook_event_name: moment === "read" ? "PostToolUse" : "PreToolUse",
+        session_id: session,
+        tool_input: { file_path: path },
+      },
+      refused,
+    );
+    if (answer?.decision === "block") {
+      const reason = answer.reason;
+      return { held: true, text: typeof reason === "string" && reason ? reason : "blocked by a post-cortex module" };
+    }
+    const text = addedContext(answer);
+    return text ? { held: false, text } : null;
   }
 
   /** Hits for `query` (malformed ones dropped), or null on any failure. */

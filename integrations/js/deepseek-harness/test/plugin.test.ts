@@ -147,24 +147,38 @@ test("cards fetch failed: retried on the next step", async () => {
   }
 });
 
-test("file memory appended after edit and write; others, errors and values untouched", async () => {
+test("file memory once a session: with a read, else the first edit denied; others, errors and values untouched", async () => {
   const daemon = await startFakeDaemon();
   const t = tempEnv(daemon.url);
   try {
     const f = fakeContext();
     applyWith(f.ctx, new PostCortex(AUTHOR, {}, { env: t.env, origin: noGit }));
-    const content = [{ type: "text", text: "Wrote 3 lines." }];
-    const exec = { name: "write", arguments: { file_path: join(t.projectDir, "src", "a.rs") }, agent: agentIn(t.projectDir) };
-    const decision = await f.emit("tools/post-execute", exec, { isError: false, content, value: null }, async () => ({ kind: "accept" }));
+    const content = [{ type: "text", text: "fn a() {}" }];
+    const read = { name: "read", arguments: { file_path: join(t.projectDir, "src", "a.rs") }, agent: agentIn(t.projectDir) };
+    const decision = await f.emit("tools/post-execute", read, { isError: false, content, value: null }, async () => ({ kind: "accept" }));
     assert.equal(decision.kind, "accept");
     assert.equal(decision.content.length, 2);
     assert.match(decision.content[1].text, /^post-cortex memory for src\/a\.rs:/);
 
+    // read already: its write goes on
+    const allow = async () => ({ kind: "allow" as const });
+    const write = { ...read, name: "write" };
+    assert.deepEqual(await f.emit("tools/pre-execute", write, allow), { kind: "allow" });
+
+    // a file never read: its first edit is denied with its memory, the second goes on
+    const edit = { ...read, name: "edit", arguments: { file_path: join(t.projectDir, "src", "b.rs") } };
+    const denied = await f.emit("tools/pre-execute", edit, allow);
+    assert.equal(denied.kind, "deny");
+    assert.match(denied.reason, /^post-cortex memory for src\/b\.rs:/);
+    assert.deepEqual(await f.emit("tools/pre-execute", edit, allow), { kind: "allow" });
+    assert.deepEqual(await f.emit("tools/pre-execute", { ...edit, name: "bash" }, allow), { kind: "allow" });
+
     const accept = async () => ({ kind: "accept" as const });
-    assert.deepEqual(await f.emit("tools/post-execute", { ...exec, name: "bash" }, { isError: false, content }, accept), { kind: "accept" });
-    assert.deepEqual(await f.emit("tools/post-execute", exec, { isError: true, content }, accept), { kind: "accept" });
-    assert.deepEqual(await f.emit("tools/post-execute", exec, { isError: false, content }, async () => ({ kind: "accept", value: 1 })), { kind: "accept", value: 1 });
-    assert.deepEqual(await f.emit("tools/post-execute", exec, { isError: false, content }, async () => ({ kind: "block", feedback: [] })), { kind: "block", feedback: [] });
+    const fresh = { ...read, agent: agentIn(t.projectDir, "session-9") };
+    assert.deepEqual(await f.emit("tools/post-execute", { ...fresh, name: "bash" }, { isError: false, content }, accept), { kind: "accept" });
+    assert.deepEqual(await f.emit("tools/post-execute", fresh, { isError: true, content }, accept), { kind: "accept" });
+    assert.deepEqual(await f.emit("tools/post-execute", fresh, { isError: false, content }, async () => ({ kind: "accept", value: 1 })), { kind: "accept", value: 1 });
+    assert.deepEqual(await f.emit("tools/post-execute", fresh, { isError: false, content }, async () => ({ kind: "block", feedback: [] })), { kind: "block", feedback: [] });
   } finally {
     t.cleanup();
     await daemon.close();

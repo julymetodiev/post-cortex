@@ -17,12 +17,14 @@
 //!   Each runs `pcx hook cline <event>` with the payload on stdin and prints
 //!   its JSON reply (`{"cancel":false}` when pcx has nothing to say).
 //!   `TaskStart` / `TaskResume` inject the cards, `UserPromptSubmit` the
-//!   rules reminder, `PreToolUse` the file memory (up to three files) before
-//!   `write_to_file`,
-//!   `replace_in_file`, `editor` and `apply_patch` (Cline shows it to the
-//!   model on the next request). With `--capture`, `UserPromptSubmit` also
-//!   stores the prompt and `PostToolUse` the answer of `attempt_completion` /
-//!   `submit_and_exit`. Cline runs hooks only on macOS and Linux, once
+//!   rules reminder, `PostToolUse` the file memory (up to three files, once a
+//!   task) of what `read_files` / `read_file` read, and `PreToolUse` that of
+//!   a file not told yet before `write_to_file`, `replace_in_file`, `editor`
+//!   and `apply_patch`. Cline shows hook context to the model on the next
+//!   request, and a hook cannot refuse one call (`cancel` ends the task), so
+//!   an edit of a file the agent did not read gets its memory after it is
+//!   written. With `--capture`, `UserPromptSubmit` also stores the prompt and
+//!   `PostToolUse` the answer of `attempt_completion` / `submit_and_exit`. Cline runs hooks only on macOS and Linux, once
 //!   "Enable Hooks" is on in its settings. A script with the same name that
 //!   post-cortex did not write is left alone.
 
@@ -32,8 +34,9 @@ use serde_json::{Value, json};
 
 use crate::clients::Client;
 use crate::clients::common::{
-    Change, HookEnv, McpEntry, REMOTE_TOKEN_NOTE, SetupContext, Turn, install_skill, patch_paths,
-    project_relative, report, report_path, skipped, turn_id, upsert_block, write_owned,
+    Change, FileMemory, FileMoment, HookEnv, McpEntry, REMOTE_TOKEN_NOTE, SetupContext, Turn,
+    install_skill, patch_paths, project_relative, report, report_path, skipped, turn_id,
+    upsert_block, write_owned,
 };
 
 /// The line marking a hook script as post-cortex's own.
@@ -44,6 +47,9 @@ const PROMPT_CAPTURE: &str = "UserPromptSubmit-capture";
 
 /// Tools that change a file, whose path gets the file memory first.
 const EDIT_TOOLS: [&str; 4] = ["write_to_file", "replace_in_file", "editor", "apply_patch"];
+
+/// Tools that read files, whose paths get the file memory with the read.
+const READ_TOOLS: [&str; 2] = ["read_files", "read_file"];
 
 /// Files a single edit gets memory for, at most.
 const MAX_FILES: usize = 3;
@@ -66,15 +72,13 @@ pub fn install(ctx: &SetupContext) -> Result<Vec<String>, String> {
     } else {
         "UserPromptSubmit"
     };
-    let mut hooks = vec![
+    let hooks = [
         ("TaskStart", "TaskStart"),
         ("TaskResume", "TaskResume"),
         ("UserPromptSubmit", prompt_event),
         ("PreToolUse", "PreToolUse"),
+        ("PostToolUse", "PostToolUse"),
     ];
-    if ctx.capture {
-        hooks.push(("PostToolUse", "PostToolUse"));
-    }
     for (name, event) in hooks {
         let path = ctx.project(&format!(".clinerules/hooks/{name}"));
         lines.push(write_hook(&path, &hook_script(ctx, event), ctx)?);
@@ -124,12 +128,20 @@ pub async fn hook(event: &str, input: Value, env: &HookEnv) -> Result<Option<Str
             }
             Some(env.rules_reminder().await)
         }
-        "PreToolUse" => env.files_context_text(&edited_files(&input)).await,
+        // Cline cannot refuse one tool call (`cancel` ends the task), so a
+        // held edit's memory comes as context, with the next request.
+        "PreToolUse" => env
+            .file_memory(&edited_files(&input), FileMoment::Edit, task(&input))
+            .await
+            .map(FileMemory::into_text),
         "PostToolUse" => {
             if let Some(turn) = answer_turn(&input) {
+                // Stored only with capture on.
                 env.record(vec![turn]).await;
             }
-            None
+            env.file_memory(&read_files(&input), FileMoment::Read, task(&input))
+                .await
+                .map(FileMemory::into_text)
         }
         _ => None,
     };
@@ -196,6 +208,54 @@ fn edited_files(input: &Value) -> Vec<String> {
         .collect()
 }
 
+/// The files a `PostToolUse` of a read tool read: `read_files`'s `files`
+/// (each a `{path}`, the list itself possibly a JSON string) or
+/// `read_file`'s `path`, relative to the workspace root; at most
+/// [`MAX_FILES`]. Empty for other tools.
+fn read_files(input: &Value) -> Vec<String> {
+    let tool = &input["postToolUse"];
+    if !tool["toolName"]
+        .as_str()
+        .is_some_and(|t| READ_TOOLS.contains(&t))
+    {
+        return Vec::new();
+    }
+    let params = &tool["parameters"];
+    let files = match &params["files"] {
+        Value::String(text) => match serde_json::from_str(text) {
+            Ok(files) => files,
+            Err(e) => {
+                eprintln!("pcx hook cline: read_files `files` is not JSON: {e}");
+                Value::Null
+            }
+        },
+        other => other.clone(),
+    };
+    let mut paths: Vec<String> = files
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|f| f["path"].as_str().or_else(|| f.as_str()))
+        .map(str::to_string)
+        .collect();
+    if let Some(path) = params["path"].as_str() {
+        paths.push(path.to_string());
+    }
+    let root = input["workspaceRoots"][0].as_str();
+    paths
+        .iter()
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .map(|p| project_relative(p, root))
+        .take(MAX_FILES)
+        .collect()
+}
+
+/// The task, the session a file's memory is told once in.
+fn task(input: &Value) -> Option<&str> {
+    input["taskId"].as_str().filter(|t| !t.is_empty())
+}
+
 fn prompt_turn(input: &Value) -> Option<Turn> {
     let text = input["userPromptSubmit"]["prompt"].as_str()?.trim();
     turn(input, "user", text, Vec::new())
@@ -231,215 +291,4 @@ fn turn(input: &Value, role: &'static str, text: &str, tools: Vec<String>) -> Op
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::clients::common::{cloud_args, remote};
-
-    fn ctx(dir: &Path, capture: bool) -> SetupContext {
-        SetupContext {
-            project_dir: dir.to_path_buf(),
-            session_id: "S1".into(),
-            workspace_id: "W1".into(),
-            daemon_url: "http://127.0.0.1:3737".into(),
-            capture,
-            profile: "self".into(),
-            remote: false,
-            global: false,
-        }
-    }
-
-    #[test]
-    fn install_writes_agents_md_skill_and_hooks_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let ctx = ctx(dir.path(), false);
-        let lines = install(&ctx).unwrap();
-        assert!(lines.iter().any(|l| l.contains("Created: AGENTS.md")));
-        assert!(lines.last().unwrap().contains("pcx mcp-config cline"));
-        assert!(
-            dir.path()
-                .join(".agents/skills/post-cortex-memory/SKILL.md")
-                .exists()
-        );
-        let hooks = dir.path().join(".clinerules/hooks");
-        for name in ["TaskStart", "TaskResume", "UserPromptSubmit", "PreToolUse"] {
-            let script = std::fs::read_to_string(hooks.join(name)).unwrap();
-            assert!(script.starts_with("#!/bin/sh\n"));
-            assert!(
-                script.contains(&ctx.hook_command(Client::Cline, name)),
-                "{script}"
-            );
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mode = std::fs::metadata(hooks.join(name))
-                    .unwrap()
-                    .permissions()
-                    .mode();
-                assert_eq!(mode & 0o111, 0o111);
-            }
-        }
-        assert!(!hooks.join("PostToolUse").exists());
-
-        let before = std::fs::read(hooks.join("PreToolUse")).unwrap();
-        let again = install(&ctx).unwrap();
-        let (files, mcp) = again.split_at(again.len() - 1);
-        assert!(
-            files.iter().all(|l| l.contains("already set up")),
-            "{again:?}"
-        );
-        assert!(mcp[0].contains("pcx mcp-config cline"));
-        assert_eq!(std::fs::read(hooks.join("PreToolUse")).unwrap(), before);
-    }
-
-    #[test]
-    fn remote_profile_prints_stdio_and_hooks_name_the_profile() {
-        let dir = tempfile::tempdir().unwrap();
-        let cloud = remote(ctx(dir.path(), false));
-        install(&cloud).unwrap();
-        let script =
-            std::fs::read_to_string(dir.path().join(".clinerules/hooks/TaskStart")).unwrap();
-        assert!(
-            script.contains("--profile cloud") && !script.contains("--url"),
-            "{script}"
-        );
-        let text = mcp_config(&cloud);
-        let v: Value = serde_json::from_str(&text[text.find("\n{").unwrap()..]).unwrap();
-        assert_eq!(
-            v["mcpServers"]["post-cortex"],
-            json!({ "type": "stdio", "command": "pcx", "args": cloud_args(Client::Cline), "disabled": false })
-        );
-        assert!(!text.contains("Bearer <token>"), "{text}");
-    }
-
-    #[test]
-    fn capture_adds_post_tool_use_and_prompt_capture() {
-        let dir = tempfile::tempdir().unwrap();
-        let ctx = ctx(dir.path(), true);
-        install(&ctx).unwrap();
-        let hooks = dir.path().join(".clinerules/hooks");
-        let prompt = std::fs::read_to_string(hooks.join("UserPromptSubmit")).unwrap();
-        assert!(prompt.contains(&ctx.hook_command(Client::Cline, PROMPT_CAPTURE)));
-        assert!(hooks.join("PostToolUse").exists());
-    }
-
-    #[test]
-    fn user_hook_scripts_and_agents_md_are_kept() {
-        let dir = tempfile::tempdir().unwrap();
-        let hooks = dir.path().join(".clinerules/hooks");
-        std::fs::create_dir_all(&hooks).unwrap();
-        std::fs::write(hooks.join("PreToolUse"), "#!/bin/sh\necho mine\n").unwrap();
-        std::fs::write(dir.path().join("AGENTS.md"), "# Mine\n").unwrap();
-        let lines = install(&ctx(dir.path(), false)).unwrap();
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.contains("Skipped: .clinerules/hooks/PreToolUse"))
-        );
-        assert_eq!(
-            std::fs::read_to_string(hooks.join("PreToolUse")).unwrap(),
-            "#!/bin/sh\necho mine\n"
-        );
-        assert!(
-            std::fs::read_to_string(dir.path().join("AGENTS.md"))
-                .unwrap()
-                .starts_with("# Mine\n")
-        );
-    }
-
-    #[test]
-    fn edited_file_is_relative_to_the_workspace() {
-        let input = json!({
-            "hookName": "PreToolUse",
-            "workspaceRoots": ["/repo"],
-            "preToolUse": { "toolName": "replace_in_file", "parameters": { "path": "/repo/src/a.rs" } }
-        });
-        assert_eq!(edited_files(&input), vec!["src/a.rs"]);
-        let relative = json!({
-            "preToolUse": { "toolName": "write_to_file", "parameters": { "path": "src/b.rs" } }
-        });
-        assert_eq!(edited_files(&relative), vec!["src/b.rs"]);
-        let patch = json!({
-            "workspaceRoots": ["/repo"],
-            "preToolUse": { "toolName": "apply_patch", "parameters": {
-                "input": "*** Begin Patch\n*** Update File: /repo/src/c.rs\n@@\n-a\n+b\n*** Add File: src/e.rs\n*** End Patch" } }
-        });
-        assert_eq!(edited_files(&patch), vec!["src/c.rs", "src/e.rs"]);
-        let read = json!({
-            "preToolUse": { "toolName": "read_file", "parameters": { "path": "src/a.rs" } }
-        });
-        assert!(edited_files(&read).is_empty());
-    }
-
-    #[test]
-    fn capture_turns_parse_payloads() {
-        let prompt = json!({ "taskId": "T1", "userPromptSubmit": { "prompt": " add tests " } });
-        let turn = prompt_turn(&prompt).unwrap();
-        assert_eq!((turn.role, turn.text.as_str()), ("user", "add tests"));
-        assert_eq!(turn.turn_id, turn_id("T1", "user", "add tests"));
-        assert_eq!(turn.source_session.as_deref(), Some("T1"));
-
-        let done = json!({ "taskId": "T1", "postToolUse": {
-            "toolName": "attempt_completion", "parameters": { "result": "All green." } } });
-        let turn = answer_turn(&done).unwrap();
-        assert_eq!((turn.role, turn.text.as_str()), ("assistant", "All green."));
-        assert_eq!(turn.tools, vec!["attempt_completion".to_string()]);
-
-        let other =
-            json!({ "postToolUse": { "toolName": "read_file", "parameters": { "result": "x" } } });
-        assert!(answer_turn(&other).is_none());
-        assert!(prompt_turn(&json!({})).is_none());
-    }
-
-    #[tokio::test]
-    async fn hook_replies_and_fails_open() {
-        let env = HookEnv::new(
-            "http://127.0.0.1:9",
-            reqwest::Client::new(),
-            "S1",
-            "W1",
-            "cline",
-        );
-        let prompt = json!({ "taskId": "T1", "userPromptSubmit": { "prompt": "hi" } });
-        for event in ["UserPromptSubmit", PROMPT_CAPTURE] {
-            let out = hook(event, prompt.clone(), &env).await.unwrap().unwrap();
-            let v: Value = serde_json::from_str(&out).unwrap();
-            assert_eq!(v["cancel"], false);
-            assert!(
-                v["contextModification"]
-                    .as_str()
-                    .unwrap()
-                    .contains("Session: S1")
-            );
-        }
-        let edit = json!({ "preToolUse": { "toolName": "write_to_file", "parameters": { "path": "a.rs" } } });
-        for (event, input) in [
-            ("TaskStart", json!({})),
-            ("TaskResume", json!({})),
-            ("PreToolUse", edit),
-            (
-                "PostToolUse",
-                json!({ "postToolUse": { "toolName": "attempt_completion", "parameters": { "result": "ok" } } }),
-            ),
-            ("TaskCancel", json!({})),
-        ] {
-            assert_eq!(hook(event, input, &env).await, Ok(None), "{event}");
-        }
-    }
-
-    #[test]
-    fn mcp_config_is_streamable_http() {
-        let dir = tempfile::tempdir().unwrap();
-        let text = mcp_config(&ctx(dir.path(), false));
-        assert!(text.starts_with("// Merge into cline_mcp_settings.json"));
-        let json_part: String = text
-            .lines()
-            .filter(|l| !l.starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let v: Value = serde_json::from_str(&json_part).unwrap();
-        let entry = &v["mcpServers"]["post-cortex"];
-        assert_eq!(entry["type"], "streamableHttp");
-        assert_eq!(entry["url"], "http://127.0.0.1:3737/mcp");
-        assert_eq!(entry["headers"]["X-PCX-Author"], "cline");
-    }
-}
+mod tests;

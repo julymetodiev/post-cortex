@@ -27,6 +27,62 @@ pub struct HookEnv {
     capture: bool,
 }
 
+/// What the agent is doing with a file whose memory a hook asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileMoment {
+    /// It read the file (a post-tool event).
+    Read,
+    /// It is about to change the file (a pre-tool event).
+    Edit,
+}
+
+impl FileMoment {
+    fn event_name(self) -> &'static str {
+        match self {
+            Self::Read => "PostToolUse",
+            Self::Edit => "PreToolUse",
+        }
+    }
+}
+
+/// A file's memory as the memory module answered a hook.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileMemory {
+    /// Add it to what the agent reads.
+    Added(String),
+    /// Hold the edit once with it as the reason the agent reads; the same
+    /// edit sent again goes through.
+    Held(String),
+}
+
+impl FileMemory {
+    /// The text, for a client that can only add context.
+    pub fn into_text(self) -> String {
+        match self {
+            Self::Added(text) | Self::Held(text) => text,
+        }
+    }
+}
+
+/// The context an answer of `/api/events` adds for the agent.
+fn added_context(answer: &Value) -> Option<String> {
+    answer["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+/// Why an answer of `/api/events` blocks the call, when it does.
+fn block_reason(answer: &Value) -> Option<String> {
+    (answer["decision"].as_str() == Some("block")).then(|| {
+        answer["reason"]
+            .as_str()
+            .filter(|reason| !reason.is_empty())
+            .unwrap_or("blocked by a post-cortex module")
+            .to_string()
+    })
+}
+
 /// Where a hook's session and workspace come from.
 enum IdSource {
     Fixed(Ids),
@@ -170,9 +226,9 @@ impl HookEnv {
     }
 
     /// Send a hook `event` (Claude Code's hook JSON) with `scope` to the
-    /// backend's module host (`POST /api/events`); the context its modules
-    /// add for the agent, if any.
-    async fn event(&self, scope: Value, event: Value) -> Result<Option<String>, String> {
+    /// backend's module host (`POST /api/events`); the merged answer of its
+    /// modules (`decision`, `reason`, `hookSpecificOutput`).
+    async fn event(&self, scope: Value, event: Value) -> Result<Value, String> {
         let mut scope = scope;
         scope["author"] = Value::String(self.author.clone());
         let response = self
@@ -192,11 +248,7 @@ impl HookEnv {
             }
             return Err(http_error("/api/events", response).await);
         }
-        let answer: Value = response.json().await.map_err(|e| e.to_string())?;
-        Ok(answer["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .filter(|text| !text.is_empty())
-            .map(str::to_string))
+        response.json().await.map_err(|e| e.to_string())
     }
 
     /// The user card and the project card, as the memory module answers a
@@ -206,10 +258,11 @@ impl HookEnv {
     pub async fn cards_text(&self) -> Option<String> {
         let ids = self.ids().await?;
         let scope = json!({ "workspace_id": ids.workspace_id });
-        let cards = self
+        let answer = self
             .event(scope, json!({ "hook_event_name": "SessionStart" }))
             .await
-            .ok()??;
+            .ok()?;
+        let cards = added_context(&answer)?;
         Some(if self.resolving() {
             format!("{}\n\n{cards}", reminder(Some(ids)))
         } else {
@@ -217,30 +270,44 @@ impl HookEnv {
         })
     }
 
-    /// What the memory says about `path` (past problems, decisions,
-    /// dependents), as the memory module answers a pre-edit event; `None`
-    /// when nothing is known or the backend cannot be reached.
-    pub async fn file_context_text(&self, path: &str) -> Option<String> {
+    /// What the memory says about `paths` (past problems, decisions,
+    /// dependents) to the agent session `session` (the client's own id;
+    /// `None`: a client that names none, told on every edit) at `moment`, as
+    /// the memory module answers it: once per session and file (docs/memory.md,
+    /// a file's memory). `None` when nothing is to be said or the backend
+    /// cannot be reached.
+    pub async fn file_memory(
+        &self,
+        paths: &[String],
+        moment: FileMoment,
+        session: Option<&str>,
+    ) -> Option<FileMemory> {
         let workspace_id = &self.ids().await?.workspace_id;
-        let event = json!({
-            "hook_event_name": "PreToolUse",
-            "tool_input": { "file_path": path },
-        });
-        self.event(json!({ "workspace_id": workspace_id }), event)
-            .await
-            .ok()?
-    }
-
-    /// [`Self::file_context_text`] for each of `paths`, joined by a blank
-    /// line; `None` when nothing is known about any of them.
-    pub async fn files_context_text(&self, paths: &[String]) -> Option<String> {
-        let mut parts = Vec::new();
+        let mut held = Vec::new();
+        let mut added = Vec::new();
         for path in paths {
-            if let Some(text) = self.file_context_text(path).await {
-                parts.push(text);
+            let event = json!({
+                "hook_event_name": moment.event_name(),
+                "session_id": session.unwrap_or_default(),
+                "tool_input": { "file_path": path },
+            });
+            let Ok(answer) = self
+                .event(json!({ "workspace_id": workspace_id }), event)
+                .await
+            else {
+                continue;
+            };
+            if let Some(reason) = block_reason(&answer) {
+                held.push(reason);
+            } else if let Some(text) = added_context(&answer) {
+                added.push(text);
             }
         }
-        (!parts.is_empty()).then(|| parts.join("\n\n"))
+        match (held.is_empty(), added.is_empty()) {
+            (false, _) => Some(FileMemory::Held(held.join("\n\n"))),
+            (true, false) => Some(FileMemory::Added(added.join("\n\n"))),
+            (true, true) => None,
+        }
     }
 
     /// [`Self::capture`] for a hook, which fails open: a failure is
@@ -332,6 +399,23 @@ pub fn context_output(event: &str, text: String) -> String {
         "hookSpecificOutput": { "hookEventName": event, "additionalContext": text }
     })
     .to_string()
+}
+
+/// A file's memory in the Claude-style hook formats (Codex, VS Code): a held
+/// edit as a denied `PreToolUse` whose reason the agent reads, else the text
+/// as context for `event`.
+pub fn file_memory_output(event: &str, memory: FileMemory) -> String {
+    match memory {
+        FileMemory::Added(text) => context_output(event, text),
+        FileMemory::Held(reason) => json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        })
+        .to_string(),
+    }
 }
 
 /// Percent-encode a query value.

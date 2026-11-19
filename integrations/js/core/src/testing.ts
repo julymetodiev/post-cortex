@@ -26,8 +26,12 @@ export interface FakeDaemonOptions {
    */
   cards?: string;
   /**
-   * What memory knows about a file, by the path of a `PreToolUse` event
-   * (`POST /api/events`); null: nothing (default: {@link defaultFileContext}).
+   * What memory knows about a file, by the path of a `PostToolUse` (a read)
+   * or `PreToolUse` (an edit) event (`POST /api/events`); null: nothing
+   * (default: {@link defaultFileContext}). Told as the memory module tells
+   * it: once per event `session_id` and file, a read's as context, an edit's
+   * as a block ({@link HELD} after the text); without a session, an edit's
+   * as context every time.
    */
   fileContext?: (path: string) => string | null;
   /** `POST /api/search` answer by request body (default: {@link DEFAULT_SEARCH} for every query). */
@@ -82,25 +86,37 @@ export const defaultFileContext = (path: string): string =>
   `- 2026-10-01 Fixed a bug in ${path}: The cache was not invalidated. [entry e1]\n\n` +
   "Depends on it:\n- server.rs (depends on Cache)";
 
-type PostedEvent = { hook_event_name?: unknown; tool_input?: { file_path?: unknown } };
+/** What a held edit's reason says after the file's memory (the memory module's words). */
+export const HELD =
+  "This is said once a session for this file, before its first edit: check your change against it, " +
+  "then send the edit again (or a better one) and it goes through.";
+
+type PostedEvent = { hook_event_name?: unknown; session_id?: unknown; tool_input?: { file_path?: unknown } };
 
 /** The event a `POST /api/events` body carries. */
 function eventOf(body: unknown): PostedEvent | undefined {
   return (body as { event?: PostedEvent } | undefined)?.event;
 }
 
-/** The answer of `POST /api/events` to `body`: the cards for a session start, a file's memory before an edit. */
-function eventAnswer(body: unknown, options: FakeDaemonOptions): unknown {
+/**
+ * The answer of `POST /api/events` to `body`: the cards for a session start,
+ * a file's memory once per session (`told` holds `session\0path`).
+ */
+function eventAnswer(body: unknown, options: FakeDaemonOptions, told: Set<string>): unknown {
   const event = eventOf(body);
-  const path = event?.tool_input?.file_path;
   const name = event?.hook_event_name;
-  const text =
-    name === "SessionStart"
-      ? (options.cards ?? DEFAULT_CARDS)
-      : name === "PreToolUse" && typeof path === "string"
-        ? (options.fileContext ?? defaultFileContext)(path)
-        : null;
-  return text === null ? {} : { hookSpecificOutput: { hookEventName: name, additionalContext: text } };
+  const context = (text: string): unknown => ({ hookSpecificOutput: { hookEventName: name, additionalContext: text } });
+  if (name === "SessionStart") return context(options.cards ?? DEFAULT_CARDS);
+  const path = event?.tool_input?.file_path;
+  if ((name !== "PreToolUse" && name !== "PostToolUse") || typeof path !== "string") return {};
+  const session = typeof event?.session_id === "string" ? event.session_id : "";
+  const key = `${session}\0${path}`;
+  if (session && told.has(key)) return {};
+  const text = (options.fileContext ?? defaultFileContext)(path);
+  if (text === null) return {};
+  if (!session) return context(text);
+  told.add(key);
+  return name === "PreToolUse" ? { decision: "block", reason: `${text}\n\n${HELD}` } : context(text);
 }
 
 async function readBody(req: IncomingMessage): Promise<unknown> {
@@ -118,6 +134,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 /** A daemon on 127.0.0.1 with a random port. */
 export async function startFakeDaemon(options: FakeDaemonOptions = {}): Promise<FakeDaemon> {
   const requests: RecordedRequest[] = [];
+  const told = new Set<string>();
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
@@ -142,7 +159,7 @@ export async function startFakeDaemon(options: FakeDaemonOptions = {}): Promise<
         case "POST /api/projects/resolve":
           return send(200, { workspace_id: TEST_WORKSPACE, session_id: TEST_SESSION, created: true });
         case "POST /api/events":
-          return send(200, eventAnswer(body, options));
+          return send(200, eventAnswer(body, options, told));
         case "POST /api/messages":
           return send(200, { appended: 1 });
         case "POST /api/search":

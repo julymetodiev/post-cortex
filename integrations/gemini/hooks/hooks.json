@@ -27,6 +27,20 @@
         ]
       }
     ],
+    "BeforeTool": [
+      {
+        "matcher": "write_file|replace",
+        "hooks": [
+          {
+            "type": "command",
+            "name": "post-cortex-file-before-edit",
+            "description": "The file's memory before its first edit, once a session",
+            "command": "sh \"${extensionPath}/scripts/pcx.sh\" hook gemini pre-edit",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
     "BeforeAgent": [
       {
         "hooks": [

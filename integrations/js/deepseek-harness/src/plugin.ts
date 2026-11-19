@@ -16,8 +16,11 @@
 //   agent/pre-step        first request of each dsh session: fetch the cards
 //                         (3 s bound; the waterfall is awaited); retried on the
 //                         next step after a failure
-//   tools/post-execute    after `edit` and `write`: append what the memory
-//                         knows about the file to the result content
+//   tools/post-execute    after `read`: append what the memory knows about
+//                         the file to the result content, once a session
+//   tools/pre-execute     before `edit` and `write` of a file the session
+//                         was not told about: deny once with that memory as
+//                         the reason; the same call sent again goes through
 //   session/event         with capture on: collect user and assistant turns
 //   agent/turn-stopping   flush them (serial, awaited at the turn boundary)
 //   ctx.effect disposer   final flush
@@ -49,6 +52,7 @@ export const RULES_NAME = "post-cortex:rules";
 export const RULES_ORDER = 509;
 export const RULES_TEXT = "[PCX] Rules: 1) Search PCX before answering code/arch questions 2) Log discoveries to PCX after";
 const EDIT_TOOLS = new Set(["edit", "write"]);
+const READ_TOOLS = new Set(["read"]);
 /** The skill every host ships, in the package next to dist/ (integrations/sync.py copies it). */
 export const SKILL_DIR = fileURLToPath(new URL("../skills/post-cortex-memory/", import.meta.url));
 
@@ -135,16 +139,32 @@ export function applyWith(ctx: Context, memory: PostCortex, skillDir: string = S
   );
 
   // ── file memory ──────────────────────────────────────────────────────
+  // Once per dsh session and file: with its read, else the first edit or
+  // write of it is denied with the memory as the reason the model reads, and
+  // the same call sent again goes through.
+  const pathOf = (exec: { arguments: unknown }): string | undefined => {
+    const args = exec.arguments as Record<string, unknown> | null;
+    return typeof args?.file_path === "string" && args.file_path ? args.file_path : undefined;
+  };
+
+  ctx.on("tools/pre-execute", async (exec, next) => {
+    const path = EDIT_TOOLS.has(exec.name) ? pathOf(exec) : undefined;
+    if (!path) return next();
+    const session = exec.agent?.session;
+    const found = await memory.fileMemory(cwdOf(session), [path], "edit", session?.id ?? "");
+    if (found?.held) return { kind: "deny", reason: found.text };
+    return next();
+  });
+
   ctx.on("tools/post-execute", async (exec, result, next) => {
     const decision = await next();
     if (result.isError || decision.kind !== "accept" || decision.value !== undefined) return decision;
-    if (!EDIT_TOOLS.has(exec.name)) return decision;
-    const args = exec.arguments as Record<string, unknown> | null;
-    const path = typeof args?.file_path === "string" ? args.file_path : undefined;
+    const path = READ_TOOLS.has(exec.name) ? pathOf(exec) : undefined;
     if (!path) return decision;
-    const text = await memory.fileContextText(cwdOf(exec.agent?.session), [path]);
-    if (!text) return decision;
-    return { ...decision, content: [...(decision.content ?? result.content), { type: "text", text }] };
+    const session = exec.agent?.session;
+    const found = await memory.fileMemory(cwdOf(session), [path], "read", session?.id ?? "");
+    if (!found) return decision;
+    return { ...decision, content: [...(decision.content ?? result.content), { type: "text", text: found.text }] };
   });
 
   // ── capture ──────────────────────────────────────────────────────────

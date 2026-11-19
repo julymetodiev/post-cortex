@@ -54,6 +54,7 @@ class FakeDaemon:
         self.requests = []
         self.refuse = None  # (status, text) to answer POSTs with
         self.refuse_workspace = None  # (workspace_id, status, text) for events naming it
+        self.event_answer = None  # body -> answer of /api/events, in place of the cards
         daemon = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -84,6 +85,9 @@ class FakeDaemon:
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     self.wfile.write(data)
+                    return
+                if self.path == "/api/events" and daemon.event_answer:
+                    self.reply(daemon.event_answer(body))
                     return
                 if self.path == "/api/events":
                     workspace = body["scope"]["workspace_id"]
@@ -486,6 +490,7 @@ class Hooks(Isolated):
     def test_file_context_asks_for_each_file_an_mcp_edit_names(self):
         payload = {
             "cwd": str(self.repo),
+            "hook_event_name": "PreToolUse",
             "tool_name": "mcp__plugin_latt_latt__replace_text",
             "tool_input": {"edits": [{"file": "src/a.rs"}, {"file": "src/b.rs"}, {"file": "src/a.rs"}]},
         }
@@ -500,8 +505,80 @@ class Hooks(Isolated):
         self.assertEqual(answer["hookEventName"], "PreToolUse")
         self.assertEqual(answer["additionalContext"].count("## post-cortex cards"), 2)
 
+    def test_a_held_edit_is_denied_with_the_file_s_memory(self):
+        """The memory holds a file's first edit once: the hook denies the
+        call with the memory as the reason the agent reads."""
+
+        def answer(body):
+            path = body["event"]["tool_input"]["file_path"]
+            if path.endswith("a.rs"):
+                return {"decision": "block", "reason": "post-cortex memory for %s" % path}
+            return {}
+
+        self.daemon.event_answer = answer
+        payload = {
+            "cwd": str(self.repo),
+            "session_id": "agent-1",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "MultiEdit",
+            "tool_input": {"file_path": "src/a.rs", "edits": [{"file": "src/b.rs"}]},
+        }
+        out = json.loads(
+            self.run_hook("pcx-file-context.py", payload, extra_env={"PC_URL": self.daemon.url})
+        )["hookSpecificOutput"]
+        self.assertEqual(out["hookEventName"], "PreToolUse")
+        self.assertEqual(out["permissionDecision"], "deny")
+        self.assertEqual(
+            out["permissionDecisionReason"], "post-cortex memory for %s" % (self.repo / "src/a.rs")
+        )
+        self.assertNotIn("additionalContext", out)
+        events = [b["event"] for m, p, b, _ in self.daemon.requests if p == "/api/events"]
+        self.assertEqual({e["session_id"] for e in events}, {"agent-1"})
+
+        # Nothing held and nothing known: the edit goes on, nothing printed.
+        self.daemon.event_answer = lambda body: {}
+        self.assertEqual(
+            self.run_hook("pcx-file-context.py", payload, extra_env={"PC_URL": self.daemon.url}), ""
+        )
+
+    def test_a_read_adds_the_file_s_memory_without_sending_the_file(self):
+        self.daemon.event_answer = lambda body: {
+            "hookSpecificOutput": {
+                "hookEventName": body["event"]["hook_event_name"],
+                "additionalContext": "post-cortex memory for a.rs",
+            }
+        }
+        payload = {
+            "cwd": str(self.repo),
+            "session_id": "agent-1",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "a.rs"},
+            "tool_response": {"file": {"content": "secret source"}},
+        }
+        out = json.loads(
+            self.run_hook("pcx-file-context.py", payload, extra_env={"PC_URL": self.daemon.url})
+        )["hookSpecificOutput"]
+        self.assertEqual(out, {
+            "hookEventName": "PostToolUse",
+            "additionalContext": "post-cortex memory for a.rs",
+        })
+        (event,) = [b["event"] for m, p, b, _ in self.daemon.requests if p == "/api/events"]
+        self.assertEqual(event["hook_event_name"], "PostToolUse")
+        self.assertNotIn("tool_response", event)
+
+        # A read's block is not an edit's: never a deny.
+        self.daemon.event_answer = lambda body: {"decision": "block", "reason": "no"}
+        self.assertEqual(
+            self.run_hook("pcx-file-context.py", payload, extra_env={"PC_URL": self.daemon.url}), ""
+        )
+
     def test_file_context_and_stop_check_fail_open(self):
-        payload = {"cwd": str(self.repo), "tool_input": {"file_path": "a.rs"}}
+        payload = {
+            "cwd": str(self.repo),
+            "hook_event_name": "PreToolUse",
+            "tool_input": {"file_path": "a.rs"},
+        }
         env = {"PC_URL": "http://127.0.0.1:9"}
         self.assertEqual(self.run_hook("pcx-file-context.py", payload, extra_env=env), "")
         self.assertEqual(

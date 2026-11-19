@@ -66,6 +66,10 @@ fn install_writes_mcp_rule_hooks_and_skill() {
         "pcx hook cursor sessionStart --session S1 --workspace W1 --profile self --url http://127.0.0.1:3737"
     );
     assert_eq!(hooks["hooks"]["postToolUse"][0]["matcher"], "Read");
+    assert_eq!(
+        hooks["hooks"]["preToolUse"][0]["matcher"],
+        "Write|Edit|MultiEdit|StrReplace"
+    );
     assert!(hooks["hooks"].get("beforeSubmitPrompt").is_none());
     assert!(hooks["hooks"].get("afterAgentResponse").is_none());
 
@@ -284,6 +288,8 @@ async fn hooks_fail_open_when_the_daemon_is_down() {
     assert_eq!(hook("sessionStart", start, &env).await.unwrap(), None);
     let read = json!({ "tool_name": "Read", "tool_input": { "file_path": "a.rs" } });
     assert_eq!(hook("postToolUse", read, &env).await.unwrap(), None);
+    let edit = json!({ "conversation_id": "c", "tool_name": "Write", "tool_input": { "file_path": "a.rs" } });
+    assert_eq!(hook("preToolUse", edit, &env).await.unwrap(), None);
     let prompt = json!({ "conversation_id": "c", "generation_id": "g", "prompt": "hi" });
     let out = hook("beforeSubmitPrompt", prompt, &env)
         .await

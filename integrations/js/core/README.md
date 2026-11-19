@@ -31,9 +31,10 @@ You do not install this package yourself: the plugins depend on it.
   `POST /api/projects/resolve`, `POST /api/search`, each with a 3 s timeout,
   `X-PCX-Author` set to the client's name and the bearer token when there is
   one. Every failure (offline daemon, HTTP error, timeout) is `null`: memory
-  never blocks the agent.
+  never blocks the agent because it failed; it holds a file's first edit only
+  when it has something to tell about it.
 - **Text.** The cards and a file's memory are the memory module's own text
-  (its answers to a `SessionStart` and a `PreToolUse` event), the same for
+  (its answers to a `SessionStart`, a `PostToolUse` and a `PreToolUse` event), the same for
   every client; the cards come after the `[PCX] Session: ... | Workspace: ...`
   line, as the Claude Code plugin prints them. Also the recall section and the
   `apply_patch` path parser.
@@ -45,7 +46,9 @@ import { PostCortex } from "@post-cortex/plugin-core";
 
 const pc = new PostCortex("opencode", { capture: true });
 await pc.cardsText(directory);              // string | null: the ids line, then the cards
-await pc.fileContextText(directory, paths); // string | null: the memory module's text
+// A file's memory once per agent session: with a read ("read"), or the first
+// edit of a file not told yet held ({ held: true }) with it as the reason.
+await pc.fileMemory(directory, paths, "edit", sessionId); // { held, text } | null
 await pc.capture(directory, turns);         // boolean
 ```
 

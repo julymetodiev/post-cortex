@@ -2,19 +2,24 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { PcxClient } from "../src/client.js";
-import { DEFAULT_CARDS, TEST_SESSION, TEST_WORKSPACE, startFakeDaemon } from "../src/testing.js";
+import { DEFAULT_CARDS, HELD, TEST_SESSION, TEST_WORKSPACE, startFakeDaemon } from "../src/testing.js";
 
 test("the cards and a file's memory are the memory module's answers to their events, with the author and the token", async () => {
   const daemon = await startFakeDaemon();
   try {
     const client = new PcxClient({ url: `${daemon.url}/`, token: " t0k ", author: "pi" });
     assert.equal(await client.cards("w 1"), DEFAULT_CARDS);
-    assert.equal(
-      await client.fileContext("w", "src/a b.rs"),
+    const memory =
       "post-cortex memory for src/a b.rs:\n\nProblems solved here before:\n" +
-        "- 2026-10-01 Fixed a bug in src/a b.rs: The cache was not invalidated. [entry e1]\n\n" +
-        "Depends on it:\n- server.rs (depends on Cache)",
-    );
+      "- 2026-10-01 Fixed a bug in src/a b.rs: The cache was not invalidated. [entry e1]\n\n" +
+      "Depends on it:\n- server.rs (depends on Cache)";
+    assert.deepEqual(await client.fileMemory("w", "src/a b.rs", "edit", "agent-1"), {
+      held: true,
+      text: `${memory}\n\n${HELD}`,
+    });
+    // told once: the same session's next edit goes through
+    assert.equal(await client.fileMemory("w", "src/a b.rs", "edit", "agent-1"), null);
+    assert.deepEqual(await client.fileMemory("w", "src/a b.rs", "read", "agent-2"), { held: false, text: memory });
     const [cards, file] = daemon.requests;
     assert.equal(cards?.path, "/api/events");
     assert.deepEqual(cards?.body, { scope: { workspace_id: "w 1", author: "pi" }, event: { hook_event_name: "SessionStart" } });
@@ -23,8 +28,9 @@ test("the cards and a file's memory are the memory module's answers to their eve
     assert.equal(file?.path, "/api/events");
     assert.deepEqual(file?.body, {
       scope: { workspace_id: "w", author: "pi" },
-      event: { hook_event_name: "PreToolUse", tool_input: { file_path: "src/a b.rs" } },
+      event: { hook_event_name: "PreToolUse", session_id: "agent-1", tool_input: { file_path: "src/a b.rs" } },
     });
+    assert.equal(daemon.events("PostToolUse").length, 1);
   } finally {
     await daemon.close();
   }
@@ -33,7 +39,7 @@ test("the cards and a file's memory are the memory module's answers to their eve
 test("a file the memory knows nothing about is null", async () => {
   const daemon = await startFakeDaemon({ fileContext: () => null });
   try {
-    assert.equal(await new PcxClient({ url: daemon.url, author: "pi" }).fileContext("w", "a.rs"), null);
+    assert.equal(await new PcxClient({ url: daemon.url, author: "pi" }).fileMemory("w", "a.rs", "edit", "s"), null);
   } finally {
     await daemon.close();
   }

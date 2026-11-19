@@ -32,6 +32,15 @@
     ],
     "PostToolUse": [
       {
+        "matcher": "Read|mcp__.*__(read_file|read)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pcx-file-context.py <WORKSPACE_ID> <BACKEND>"
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write|MultiEdit|NotebookEdit|mcp__.*__(edit_symbols|insert_after|edit_lines|replace_text|write_file|edit|write)",
         "hooks": [
           {

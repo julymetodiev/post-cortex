@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-18
+
+### Fixed
+
+- **The agent reads a file's memory before its edit lands, not after.** A hook's context
+  for an allowed edit reaches the agent with the edit's result, when the edit is already
+  written. Now the agent is told once per session and file, as early as it can be heard:
+  with its first read of the file, else by its first edit being refused once with the
+  file's memory as the reason; the same edit sent again goes through. This holds for the
+  Claude Code plugin, `pcx hook` (Codex, VS Code, Cursor, Gemini CLI), the OpenCode, Kilo,
+  Pi and DeepSeek Harness plugins and the OpenCode setup template. Cline cannot refuse one
+  call, so there a file the agent did not read gets its memory with the next request.
+  A file the memory knows nothing about is never held.
+
+### Changed
+
+- **Any module may block an event by its answer.** The failure policy (`fail-open`,
+  `fail-closed`) now decides only what a module's failure or missed deadline does; a
+  fail-open module's `decision: "block"` was dropped before. A hook script blocks by
+  exiting 2 whatever its policy.
+
 ## [0.7.0] - 2026-11-18
 
 ### Fixed

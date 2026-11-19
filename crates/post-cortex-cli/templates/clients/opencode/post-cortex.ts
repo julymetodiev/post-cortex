@@ -3,8 +3,11 @@
 //
 // - The user and project cards go into the system prompt of every turn
 //   (fetched once per OpenCode session).
-// - After edit, write and apply_patch, what the memory knows about the file
-//   (problems solved, decisions, dependents) is appended to the tool output.
+// - What the memory knows about a file (problems solved, decisions,
+//   dependents), once per OpenCode session: appended to what `read` returns,
+//   else the first edit, write or apply_patch of the file is refused once
+//   with it as the error the agent reads, and the same call sent again goes
+//   through.
 // - With capture on, finished turns go to the session's message stream when
 //   the OpenCode session goes idle.
 //
@@ -64,22 +67,44 @@ async function call(path: string, body?: unknown): Promise<Json | null> {
   }
 }
 
-// The text the memory module adds for a hook `event` in the workspace, the
-// same for every client: the cards for a session start, a file's memory
-// before an edit.
-async function memoryText(event: Json): Promise<string | null> {
-  const answer = await call("/api/events", {
-    scope: { workspace_id: WORKSPACE, author: AUTHOR },
-    event,
-  });
+// The memory module's answer to a hook `event` in the workspace, the same
+// for every client: the cards for a session start, a file's memory once per
+// session (with its read, else holding its first edit with `decision: block`).
+const memoryAnswer = (event: Json): Promise<Json | null> =>
+  call("/api/events", { scope: { workspace_id: WORKSPACE, author: AUTHOR }, event });
+
+const contextOf = (answer: Json | null): string | null => {
   const text = answer?.hookSpecificOutput?.additionalContext;
   return typeof text === "string" && text ? text : null;
+};
+
+const cardsText = async (): Promise<string | null> =>
+  contextOf(await memoryAnswer({ hook_event_name: "SessionStart" }));
+
+// A file's memory for `session`: `held` when the edit is held once.
+async function fileMemory(
+  path: string,
+  read: boolean,
+  session: string,
+): Promise<{ held: boolean; text: string } | null> {
+  const answer = await memoryAnswer({
+    hook_event_name: read ? "PostToolUse" : "PreToolUse",
+    session_id: session,
+    tool_input: { file_path: path },
+  });
+  if (answer?.decision === "block" && typeof answer.reason === "string" && answer.reason) {
+    return { held: true, text: answer.reason };
+  }
+  const text = contextOf(answer);
+  return text ? { held: false, text } : null;
 }
 
-const cardsText = (): Promise<string | null> => memoryText({ hook_event_name: "SessionStart" });
-
-const fileText = (path: string): Promise<string | null> =>
-  memoryText({ hook_event_name: "PreToolUse", tool_input: { file_path: path } });
+// The file a `read` call reads, relative to the project.
+function readFiles(tool: string, args: Json, directory: string): string[] {
+  if (tool !== "read" || typeof args?.filePath !== "string") return [];
+  const p = args.filePath;
+  return [isAbsolute(p) ? relative(directory, p) : p];
+}
 
 // The files an edit tool call touches, relative to the project.
 function editedFiles(tool: string, args: Json, directory: string): string[] {
@@ -97,7 +122,8 @@ function editedFiles(tool: string, args: Json, directory: string): string[] {
 
 export const PostCortex: Plugin = async ({ client, directory }) => {
   const cards = new Map<string, Promise<string | null>>();
-  const pending = new Map<string, Promise<string[]>>();
+  const reads = new Map<string, string[]>();
+  const added = new Map<string, string>();
   const sent = new Set<string>();
 
   return {
@@ -113,23 +139,34 @@ export const PostCortex: Plugin = async ({ client, directory }) => {
       else cards.delete(key);
     },
 
+    // A file's memory once per session: with its read, else holding its
+    // first edit (a thrown error refuses the call; the agent reads it and
+    // sends the edit again).
     "tool.execute.before": async (input, output) => {
+      const read = readFiles(input.tool, output.args, directory);
+      if (read.length) {
+        reads.set(input.callID, read);
+        return;
+      }
       const files = editedFiles(input.tool, output.args, directory);
       if (!files.length) return;
-      pending.set(
-        input.callID,
-        Promise.all(files.map(fileText)).then((texts) =>
-          texts.filter((t): t is string => t !== null),
-        ),
-      );
+      const found = await Promise.all(files.map((f) => fileMemory(f, false, input.sessionID)));
+      const held = found.flatMap((m) => (m?.held ? [m.text] : []));
+      if (held.length) throw new Error(held.join("\n\n"));
+      const texts = found.flatMap((m) => (m ? [m.text] : []));
+      if (texts.length) added.set(input.callID, texts.join("\n\n"));
     },
 
     "tool.execute.after": async (input, output) => {
-      const texts = pending.get(input.callID);
-      if (!texts) return;
-      pending.delete(input.callID);
-      const found = await texts;
-      if (found.length) output.output += `\n\n${found.join("\n\n")}`;
+      const read = reads.get(input.callID);
+      reads.delete(input.callID);
+      const text = read
+        ? (await Promise.all(read.map((f) => fileMemory(f, true, input.sessionID))))
+            .flatMap((m) => (m ? [m.text] : []))
+            .join("\n\n")
+        : added.get(input.callID);
+      added.delete(input.callID);
+      if (text) output.output += `\n\n${text}`;
     },
 
     event: async ({ event }) => {

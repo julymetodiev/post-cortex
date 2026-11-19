@@ -2,6 +2,7 @@
 // Licensed under the MIT License. See LICENSE at the workspace root.
 
 //! Events: fail-open failures skipped, fail-closed ones blocking the turn,
+//! any module's block answer blocking,
 //! context merged in load order, and no event to a module that did not
 //! subscribe.
 
@@ -60,7 +61,7 @@ async fn a_fail_closed_failure_blocks_the_turn() {
 }
 
 #[tokio::test]
-async fn only_a_fail_closed_module_may_block() {
+async fn any_module_may_block_by_its_answer() {
     let host = host(vec![
         fake(
             "loud",
@@ -85,8 +86,12 @@ async fn only_a_fail_closed_module_may_block() {
         )
         .await;
     assert_eq!(dispatched.outcome.decision, "block");
-    assert_eq!(dispatched.outcome.reason, "guard says no");
+    let reasons: Vec<&str> = dispatched.outcome.reason.lines().collect();
+    assert_eq!(reasons.len(), 2, "{reasons:?}");
+    assert!(reasons[0].contains("loud") && reasons[1].contains("guard"));
 
+    // The failure policy is about failures: a fail-open module's answer
+    // blocks as well (memory holds a file's first edit once).
     let open_only = host_with_one_open_blocker().await;
     let dispatched = open_only
         .dispatch(
@@ -95,7 +100,8 @@ async fn only_a_fail_closed_module_may_block() {
             &prompt(),
         )
         .await;
-    assert_eq!(dispatched.outcome.decision, "");
+    assert_eq!(dispatched.outcome.decision, "block");
+    assert!(dispatched.failures.is_empty());
 }
 
 async fn host_with_one_open_blocker() -> Host {

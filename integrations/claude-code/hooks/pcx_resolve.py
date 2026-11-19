@@ -374,6 +374,15 @@ def added_context(answer):
     return ((answer or {}).get("hookSpecificOutput") or {}).get("additionalContext") or ""
 
 
+def block_reason(answer):
+    """Why an answer blocks the call (the memory holding a file's first
+    edit once, with its memory), or "" when it does not block."""
+    answer = answer or {}
+    if answer.get("decision") != "block":
+        return ""
+    return answer.get("reason") or "blocked by a post-cortex module"
+
+
 def project_dir(payload=None):
     payload = payload if isinstance(payload, dict) else {}
     return (

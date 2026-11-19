@@ -3,8 +3,11 @@
 //
 // - The ids line and the user and project cards go into the system prompt
 //   of every turn (fetched once per Kilo session).
-// - After edit, write and apply_patch, what the memory knows about the file
-//   (problems solved, decisions, dependents) is appended to the tool output.
+// - What the memory knows about a file (problems solved, decisions,
+//   dependents), once per Kilo session: appended to what `read` returns,
+//   else the first edit, write or apply_patch of the file is refused once
+//   with it as the error the agent reads, and the same call sent again goes
+//   through.
 // - With capture on, finished turns go to the project's message stream when
 //   the Kilo session goes idle.
 //
@@ -25,12 +28,19 @@ export function editedFiles(tool: string, args: unknown): string[] {
   return [];
 }
 
-type MessagesClient = Pick<PluginInput["client"], "session">;
+/** The file a `read` call reads. */
+export function readFiles(tool: string, args: unknown): string[] {
+  const record = typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
+  return tool === "read" && typeof record.filePath === "string" ? [record.filePath] : [];
+}
+
+type MessagesClient =Pick<PluginInput["client"], "session">;
 
 /** The hooks for one directory; `memory` and `client` are injectable for tests. */
 export function hooks(memory: PostCortex, directory: string, client: MessagesClient): Hooks {
   const cards = new Map<string, Promise<string | null>>();
-  const pending = new Map<string, Promise<string | null>>();
+  const reads = new Map<string, string[]>();
+  const added = new Map<string, string>();
   const sent = new Set<string>();
 
   return {
@@ -46,17 +56,30 @@ export function hooks(memory: PostCortex, directory: string, client: MessagesCli
       else cards.delete(key);
     },
 
+    // A file's memory once per session: with its read, else holding its
+    // first edit (a thrown error refuses the call; the agent reads it and
+    // sends the edit again).
     "tool.execute.before": async (input, output) => {
+      const read = readFiles(input.tool, output.args);
+      if (read.length) {
+        reads.set(input.callID, read);
+        return;
+      }
       const files = editedFiles(input.tool, output.args);
-      if (files.length) pending.set(input.callID, memory.fileContextText(directory, files));
+      if (!files.length) return;
+      const found = await memory.fileMemory(directory, files, "edit", input.sessionID);
+      if (found?.held) throw new Error(found.text);
+      if (found) added.set(input.callID, found.text);
     },
 
     "tool.execute.after": async (input, output) => {
-      const text = pending.get(input.callID);
-      if (!text) return;
-      pending.delete(input.callID);
-      const found = await text;
-      if (found) output.output += `\n\n${found}`;
+      const read = reads.get(input.callID);
+      reads.delete(input.callID);
+      const text = read
+        ? (await memory.fileMemory(directory, read, "read", input.sessionID))?.text
+        : added.get(input.callID);
+      added.delete(input.callID);
+      if (text) output.output += `\n\n${text}`;
     },
 
     event: async ({ event }) => {
