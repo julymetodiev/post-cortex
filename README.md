@@ -7,6 +7,7 @@
 <p align="center"><strong>The harness your AI agents work in, with a memory that lasts.</strong></p>
 
 <p align="center">
+  <a href="https://www.youtube.com/watch?v=B85tZUmGbi8">Video (2 min)</a> ·
   <a href="https://pcx.is">Website</a> ·
   <a href="https://docs.pcx.is">Documentation</a> ·
   <a href="https://docs.pcx.is/start/quickstart/">Quickstart</a> ·
@@ -18,6 +19,14 @@
 > built a harness that we use every day: one binary that hosts the memory and the other
 > modules. With 0.6.0 we open that harness, with its modules and tools. Post-Cortex is still
 > here, as the memory module, and still works on its own.
+
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=B85tZUmGbi8">
+    <img src="docs/images/video.jpg" width="720" alt="Watch the two minute video: Stop paying your agent to re-read.">
+  </a>
+  <br>
+  <a href="https://www.youtube.com/watch?v=B85tZUmGbi8">▶ Watch the two minute video</a>
+</p>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/overview-dark.png">
