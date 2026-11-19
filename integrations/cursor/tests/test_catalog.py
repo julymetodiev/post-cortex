@@ -31,10 +31,17 @@ echo '{"additional_context": "from pcx"}'
 # Events each client documents (Cursor: cursor.com/docs/reference/plugins;
 # Gemini CLI: geminicli.com/docs/hooks/reference) and the `pcx hook` events
 # pcx implements for it (pcx/clients/{cursor,gemini}.rs).
-CURSOR_EVENTS = {"sessionStart", "postToolUse", "beforeSubmitPrompt", "afterAgentResponse"}
+CURSOR_EVENTS = {
+    "sessionStart",
+    "postToolUse",
+    "preToolUse",
+    "beforeSubmitPrompt",
+    "afterAgentResponse",
+}
 GEMINI_EVENTS = {
     "SessionStart": "session-start",
     "AfterTool": "file-context",
+    "BeforeTool": "pre-edit",
     "BeforeAgent": "prompt",
     "AfterAgent": "capture",
 }
@@ -205,6 +212,8 @@ class CursorPlugin(unittest.TestCase):
                 f'sh "${{CURSOR_PLUGIN_ROOT}}/scripts/pcx.sh" hook cursor {event}',
             )
         self.assertEqual(hooks["postToolUse"][0]["matcher"], "Read")
+        # The file's memory before its first edit (pcx/clients/cursor.rs EDIT_TOOLS).
+        self.assertEqual(hooks["preToolUse"][0]["matcher"], "Write|Edit|MultiEdit|StrReplace")
 
     def test_rule_is_always_applied(self):
         rule = (CURSOR / "rules/post-cortex.mdc").read_text(encoding="utf-8")
@@ -238,6 +247,8 @@ class GeminiExtension(unittest.TestCase):
                 f'sh "${{extensionPath}}/scripts/pcx.sh" hook gemini {GEMINI_EVENTS[event]}',
             )
         self.assertEqual(hooks["AfterTool"][0]["matcher"], "read_file")
+        # The file's memory before its first edit (pcx/clients/gemini.rs EDIT_TOOLS).
+        self.assertEqual(hooks["BeforeTool"][0]["matcher"], "write_file|replace")
         self.assertTrue(os.access(GEMINI / "scripts/pcx.sh", os.X_OK))
 
 

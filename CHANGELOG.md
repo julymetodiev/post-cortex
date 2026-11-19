@@ -17,10 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Every dependency at its latest release again: `bstr` 1.14.0, `rand_pcg` 0.10.3,
-  `smallvec` 1.16.6, `zip` 9.7.3; the TypeScript SDK's `ts-proto` 2.23.1; the Python
+- Every dependency at its latest release again: `bstr` 1.14.0, `pin-project` 1.2.0,
+  `pin-project-lite` 0.2.18, `rand_pcg` 0.10.3, `smallvec` 1.16.6, `zip` 9.7.3; the
+  TypeScript SDK's `ts-proto` 2.23.2; the Python
   SDK's `librt` 0.17.0; the DeepSeek Harness plugin is built and tested against
   `dsh` 0.2.2-rc.5.
+
+### Fixed
+
+- The catalog tests of the Cursor plugin and the Gemini CLI extension know the
+  before-edit hooks of 0.7.1 (`preToolUse`, `BeforeTool`) and check their matchers.
 
 ## [0.7.1] - 2026-11-18
 
