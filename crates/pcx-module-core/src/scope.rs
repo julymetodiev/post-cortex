@@ -239,22 +239,13 @@ impl Scope {
         deadline: Duration,
         cancel: CancellationToken,
     ) -> Self {
-        Self {
-            tenant: String::new(),
-            profile: String::new(),
-            session_id: None,
-            workspace_id: Some(workspace.to_string()),
-            author: Some(module.to_string()),
-            caller_module: None,
-            call_depth: 0,
-            turn: None,
-            reach: None,
-            role: None,
-            read_only: false,
-            person: None,
-            deadline: Instant::now() + deadline,
-            cancel,
-        }
+        // The wire scope's defaults are a call made for no one; its deadline
+        // of none is `deadline`. The workspace and the author are named even
+        // when empty, as the caller gave them.
+        let mut scope = Self::from_wire(wire::Scope::default(), cancel, deadline);
+        scope.workspace_id = Some(workspace.to_string());
+        scope.author = Some(module.to_string());
+        scope
     }
 
     /// What is left of the deadline (zero once it passed).

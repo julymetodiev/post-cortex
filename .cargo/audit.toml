@@ -16,6 +16,21 @@ ignore = [
     # crypto-bigint 0.5 timing: fixed only in 0.7; p256/p384 of jsonwebtoken
     # 10.4 (surrealdb 4.0.1) pin 0.5.
     "RUSTSEC-2026-0387",
+    # heapless 0.8.0, 0.7.17, 0.6.1: nine advisories of 2026-11-18, fixed only in
+    # 0.9.4. The compiled copy 0.8.0 comes through rstar 0.12.2, which geo 0.32
+    # (surrealdb-idx and surrealdb-expr 4.0.1) requires; no geo release takes
+    # rstar 0.14, the first on heapless 0.9. rstar uses only heapless's
+    # BinaryHeap, which none of them names. 0.7.17 and 0.6.1 are optional rstar
+    # versions of geo-types and are not compiled. Documented in SECURITY.md.
+    "RUSTSEC-2026-0574", # FindMutView::pop use after free
+    "RUSTSEC-2026-0575", # Spsc::peek ordering
+    "RUSTSEC-2026-0576", # IndexMap::truncate
+    "RUSTSEC-2026-0577", # panicking Drop (Deque, HistoryBuf, IndexMap, vec::IntoIter)
+    "RUSTSEC-2026-0578", # SortedLinkedList::zeroize
+    "RUSTSEC-2026-0579", # Deque from TryFrom when full
+    "RUSTSEC-2026-0580", # treiber stack race
+    "RUSTSEC-2026-0581", # Deque::make_contiguous
+    "RUSTSEC-2026-0582", # IndexMap::insert at u16::MAX elements
 
     # Unmaintained crates: informational, not vulnerabilities.
     "RUSTSEC-2023-0089", # atomic-polyfill, a target-specific transitive with no replacement release

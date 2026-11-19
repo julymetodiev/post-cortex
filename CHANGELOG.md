@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **heapless advisories RUSTSEC-2026-0574 to RUSTSEC-2026-0582 are accepted with their
+  reason.** heapless is fixed only in 0.9.4, and the copy pcx builds comes through
+  SurrealDB's `geo` and `rstar 0.12`, which do not take it yet; `rstar` uses only
+  heapless's `BinaryHeap`, which none of them names. `SECURITY.md` lists every accepted
+  advisory with its reason.
+
+### Changed
+
+- Every dependency at its latest release again: `bstr` 1.14.0, `rand_pcg` 0.10.3,
+  `smallvec` 1.16.6, `zip` 9.7.3; the TypeScript SDK's `ts-proto` 2.23.1; the Python
+  SDK's `librt` 0.17.0; the DeepSeek Harness plugin is built and tested against
+  `dsh` 0.2.2-rc.5.
+
 ## [0.7.1] - 2026-11-18
 
 ### Fixed

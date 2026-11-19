@@ -22,6 +22,17 @@ db-urls = ["https://github.com/RustSec/advisory-db"]
 ignore = [
     "RUSTSEC-2023-0071", # rsa Marvin attack: no fixed rsa; jsonwebtoken of surrealdb-core 4.0.1 (see SECURITY.md)
     "RUSTSEC-2026-0387", # crypto-bigint 0.5 timing: fixed only in 0.7; p256/p384 of jsonwebtoken 10.4 pin 0.5
+    # heapless before 0.9.4 (2026-11-18): rstar 0.12.2 of geo 0.32 (surrealdb 4.0.1) uses only its
+    # BinaryHeap, which none of the nine names; see .cargo/audit.toml and SECURITY.md.
+    "RUSTSEC-2026-0574",
+    "RUSTSEC-2026-0575",
+    "RUSTSEC-2026-0576",
+    "RUSTSEC-2026-0577",
+    "RUSTSEC-2026-0578",
+    "RUSTSEC-2026-0579",
+    "RUSTSEC-2026-0580",
+    "RUSTSEC-2026-0581",
+    "RUSTSEC-2026-0582",
     "RUSTSEC-2025-0141", # bincode 2.0.1 unmaintained: 3.0.0 is only a compile_error! (scripts/deps-exceptions.txt)
     "RUSTSEC-2025-0119", # number_prefix unmaintained: indicatif of tokenizers 0.21 of model2vec-rs 0.4
     "RUSTSEC-2024-0436", # paste unmaintained: gemm of candle-core 0.11

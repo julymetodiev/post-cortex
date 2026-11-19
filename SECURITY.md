@@ -2,13 +2,16 @@
 
 ## Supported versions
 
-Active development happens on `main`. Released crates on crates.io carry semver — patches go to the latest minor of every published 0.x line; older 0.x lines are end-of-life.
+Active development happens on `main`. Security fixes go into the latest release only:
+the `pcx` binaries of the [latest GitHub release](https://github.com/julymetodiev/post-cortex/releases/latest),
+the Homebrew formula `julymetodiev/tap/post-cortex` and the hosted service at
+[pcx.is](https://pcx.is). The crates on crates.io stop at 0.5.0 and get no fixes; build
+from a release tag instead.
 
-| Crate | Latest | Security patches |
-|-------|--------|------------------|
-| `post-cortex*` (all 8 workspace members) | 0.4.x | Yes |
-| `post-cortex*` | 0.3.x and older | No — upgrade to 0.4 |
-| `post-cortex` 0.1.x (legacy single-crate) | 0.1.23 | No — superseded by the 8-crate workspace |
+| Version | Security fixes |
+|---------|----------------|
+| The latest release | Yes |
+| Every earlier release | No, upgrade |
 
 ## Reporting a vulnerability
 
@@ -20,12 +23,29 @@ Please **do not** open public GitHub issues for security vulnerabilities. Report
 
 ## Known transitive findings
 
-`cargo audit` reports several findings in the transitive dependency graph, primarily via `surrealdb 3.0` → `tonic 0.10` → `rustls-webpki` / `aws-lc-rs` / `quinn-proto`. These are tracked at [docs/audit-baseline-0.1.23.md](docs/audit-baseline-0.1.23.md) and whitelisted in [deny.toml](deny.toml) with explicit rationales:
+`cargo audit` and `cargo deny` run on every push to `main` and every pull request and fail on any advisory not listed in
+[.cargo/audit.toml](.cargo/audit.toml) and [deny.toml](deny.toml), which give each
+listed one its reason. Every listed advisory is in a dependency of a dependency, and no
+release of the chain that pulls it in fixes it yet:
 
-- `rsa 0.9.10` — Marvin timing attack (RUSTSEC-2023-0071). No upstream fix; affects only JWT signing inside SurrealDB's auth layer, which post-cortex does not expose externally. Documented accepted risk.
-- The rest (aws-lc-sys, rustls-webpki, quinn-proto, time, atomic-polyfill, bincode unmaintained warning) are unblocked once `surrealdb` ships a 3.x update with refreshed transitive pins.
+- `rsa 0.9` (RUSTSEC-2023-0071, Marvin timing attack). No fixed release of `rsa`. It
+  comes through `jsonwebtoken` of `surrealdb-core 4.0.1` and is used only for JWT
+  signing inside SurrealDB's auth layer, which pcx does not expose.
+- `crypto-bigint 0.5` (RUSTSEC-2026-0387, timing). Fixed only in 0.7; `p256` and `p384`
+  of `jsonwebtoken 10.4` (of `surrealdb 4.0.1`) require 0.5. The same JWT path as `rsa`.
+- `heapless 0.8.0` (RUSTSEC-2026-0574 to RUSTSEC-2026-0582, published 2026-11-18). Fixed
+  only in 0.9.4. It comes through `rstar 0.12`, which `geo 0.32` of `surrealdb 4.0.1`
+  requires, and no `geo` release moves to `rstar 0.14`, the first on `heapless 0.9`.
+  `rstar` uses only `heapless`'s `BinaryHeap`, which none of the advisories names. The
+  copies 0.7.17 and 0.6.1 are in `Cargo.lock` as optional dependencies of `geo-types`
+  and are not compiled. Accepted until an `rstar 0.12` release on `heapless 0.9`.
+- Unmaintained crates, which are notices, not vulnerabilities: `bincode 2.0.1` (3.0.0 is
+  only a `compile_error!`; replacing it migrates stored data), `chrono`, `chrono-tz` and
+  `humantime` (the time type of the workspace and of `surrealdb`, `cel-core` and
+  `object_store`), `number_prefix` (through `tokenizers`), `paste` (through
+  `candle-core`) and `atomic-polyfill` (only on targets pcx is not built for).
 
-We re-evaluate the whitelist on every quarterly review cycle.
+An entry leaves the lists as soon as a release of its chain fixes it.
 
 ## Threat model
 
@@ -42,8 +62,7 @@ Operators who change `PC_HOST` to a non-loopback interface must set `auth_token`
 ## Build-time integrity
 
 - `cargo-deny` enforces a license allow-list (MIT, Apache-2.0, BSD, ISC, Unicode, CC0, Zlib, MPL-2.0) and bans `openssl-sys` in favour of `rustls`.
-- `cargo-audit` runs on every push to `main` via [CI](.github/workflows/ci.yml).
-- `cargo-vet` adoption is on the roadmap for the 0.3.x line.
+- `cargo-audit` and `cargo-deny`'s advisory check run on every push to `main` and every pull request via [CI](.github/workflows/ci.yml), and so does a check that every dependency is at its latest release.
 
 ## License
 
